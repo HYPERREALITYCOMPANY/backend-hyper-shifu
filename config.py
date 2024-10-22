@@ -1,0 +1,33 @@
+import os
+from dotenv import load_dotenv
+os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+
+load_dotenv()
+
+class Config:
+    SECRET_KEY = os.getenv('SECRET_KEY', 'mysecretkey')
+    SLACK_CLIENT_ID = os.getenv('SLACK_CLIENT_ID')
+    SLACK_CLIENT_SECRET = os.getenv('SLACK_CLIENT_SECRET')
+    
+    GMAIL_CLIENT_ID = os.getenv('GMAIL_CLIENT_ID')
+    GMAIL_CLIENT_SECRET = os.getenv('GMAIL_CLIENT_SECRET')
+
+    NOTION_CLIENT_ID = os.getenv('NOTION_CLIENT_ID')
+    print(f"Client ID: {NOTION_CLIENT_ID}")
+    NOTION_CLIENT_SECRET = os.getenv('NOTION_CLIENT_SECRET')
+    print(f"Client Secret: {NOTION_CLIENT_SECRET}")
+    
+    ASANA_CLIENT_ID = os.getenv('ASANA_CLIENT_ID')
+    ASANA_CLIENT_SECRET = os.getenv('ASANA_CLIENT_SECRET')
+
+    DROPBOX_CLIENT_ID = os.getenv('DROPBOX_CLIENT_ID')
+    DROPBOX_CLIENT_SECRET = os.getenv('DROPBOX_CLIENT_SECRET')
+
+    OUTLOOK_CLIENT_ID = os.getenv('OUTLOOK_CLIENT_ID')
+    OUTLOOK_CLIENT_SECRET = os.getenv('OUTLOOK_CLIENT_SECRET')
+
+    HUBSPOT_CLIENT_ID = os.getenv('HUBSPOT_CLIENT_ID')
+    HUBSPOT_CLIENT_SECRET = os.getenv('HUBSPOT_CLIENT_SECRET')
+
+    SALESFORCE_CLIENT_ID = os.getenv('SALESFORCE_CLIENT_ID')
+    SALESFORCE_CLIENT_SECRET = os.getenv('SALESFORCE_CLIENT_SECRET')

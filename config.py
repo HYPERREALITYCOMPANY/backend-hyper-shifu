@@ -8,6 +8,10 @@ class Config:
     SECRET_KEY = os.getenv('SECRET_KEY', 'mysecretkey')
     SLACK_CLIENT_ID = os.getenv('SLACK_CLIENT_ID')
     SLACK_CLIENT_SECRET = os.getenv('SLACK_CLIENT_SECRET')
+    SLACK_BOT_TOKEN = os.getenv('SLACK_BOT_TOKEN')
+    SLACK_USER_TOKEN = os.getenv('SLACK_USER_TOKEN')
+    CHAT_API_KEY = os.getenv('CHAT_API_KEY')
+    LLAMA_API_KEY = os.getenv('LLAMA_API_KEY')
     
     GMAIL_CLIENT_ID = os.getenv('GMAIL_CLIENT_ID')
     GMAIL_CLIENT_SECRET = os.getenv('GMAIL_CLIENT_SECRET')

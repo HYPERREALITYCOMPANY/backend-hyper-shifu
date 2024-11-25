@@ -78,6 +78,7 @@ def setup_routes(app, mongo):
 
         session['user_id'] = str(usuario['_id'])
         idUser = str(usuario['_id'])
+        print(idUser)
         return jsonify({"message": "Inicio de sesión exitoso", "user_id": session['user_id']}), 200
         
     @app.route('/check_integrations', methods=['GET'])

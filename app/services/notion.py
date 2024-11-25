@@ -19,10 +19,6 @@ def notion_auth():
         return redirect(f"{notion_auth_url}?{urlencode(query_params)}")
 
 def notion_callback(mongo, idUser):
-    if  not idUser:
-        return jsonify({"error": "Usuario no autenticado"}), 401
-    print("hola")
-
     try:
         error = request.args.get('error')
         if error:

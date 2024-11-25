@@ -80,7 +80,6 @@ def setup_routes(app, mongo):
         
     @app.route('/check_integrations', methods=['GET'])
     def check_integrations():
-        # Obtenemos el correo electrónico desde la query string
         email = request.args.get('email')
 
         if not email:

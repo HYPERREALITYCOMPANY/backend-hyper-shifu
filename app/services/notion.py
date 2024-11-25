@@ -6,6 +6,7 @@ from urllib.parse import urlencode
 import base64 
 from flask_pymongo import PyMongo, ObjectId
 import os
+import traceback
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 def notion_auth():
@@ -20,36 +21,37 @@ def notion_auth():
 def notion_callback(mongo):
     if 'user_id' not in session:
         return jsonify({"error": "Usuario no autenticado"}), 401
-
-    error = request.args.get('error')
-    if error:
-        return jsonify({"error": f"Notion devolvió un error: {error}"}), 400
-
-    code = request.args.get('code')
-    if not code:
-        return jsonify({"error": "El parámetro 'code' falta en la respuesta"}), 400
-
-    print(f"Código recibido: {code}")
-
-    token_url = "https://api.notion.com/v1/oauth/token"
-    token_data = {
-        'grant_type': 'authorization_code',
-        'code': code,
-        'redirect_uri': "https://neuron-hyper.vercel.app/auth/notion/callback",
-    }
-
-    client_credentials = f"{Config.NOTION_CLIENT_ID}:{Config.NOTION_CLIENT_SECRET}"
-    encoded_credentials = base64.b64encode(client_credentials.encode()).decode()
-
-    headers = {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Authorization': f'Basic {encoded_credentials}',
-        "Notion-Version": "2022-06-28",
-    }
-
-    encoded_data = urlencode(token_data)
+    print("hola")
 
     try:
+        error = request.args.get('error')
+        if error:
+            return jsonify({"error": f"Notion devolvió un error: {error}"}), 400
+
+        code = request.args.get('code')
+        if not code:
+            return jsonify({"error": "El parámetro 'code' falta en la respuesta"}), 400
+
+        print(f"Código recibido: {code}")
+
+        token_url = "https://api.notion.com/v1/oauth/token"
+        token_data = {
+            'grant_type': 'authorization_code',
+            'code': code,
+            'redirect_uri': "https://neuron-hyper.vercel.app/notion/callback",
+        }
+
+        client_credentials = f"{Config.NOTION_CLIENT_ID}:{Config.NOTION_CLIENT_SECRET}"
+        encoded_credentials = base64.b64encode(client_credentials.encode()).decode()
+
+        headers = {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Authorization': f'Basic {encoded_credentials}',
+            "Notion-Version": "2022-06-28",
+        }
+
+        encoded_data = urlencode(token_data)
+
         response = requests.post(token_url, data=encoded_data, headers=headers)
         print(f"Status code: {response.status_code}")
         print(f"Response: {response.json()}")
@@ -71,4 +73,6 @@ def notion_callback(mongo):
         return jsonify({"message": "Integración de Notion guardada exitosamente", "integration": access_token_data}), 200
 
     except Exception as e:
+        print(f"Error: {str(e)}")
+        traceback.print_exc()
         return jsonify({"error": f"Error al procesar el token de Notion: {str(e)}"}), 500

@@ -93,7 +93,7 @@ def setup_routes(app, mongo):
             return jsonify({"error": "Usuario no encontrado"}), 404
 
         if not usuario.get('integrations') or len(usuario['integrations']) == 0:
-            return jsonify({"message": "Usuario sin integraciones", "usuario": usuario}), 200
+            return jsonify({"message": "Usuario sin integraciones"}), 200
         
         return jsonify({"message": "Usuario con integraciones", "integrations": usuario['integrations']}), 200
 

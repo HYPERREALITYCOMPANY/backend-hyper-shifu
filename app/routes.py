@@ -80,7 +80,7 @@ def setup_routes(app, mongo):
     
     @app.route('/check_integrations', methods=['GET'])
     def check_integrations():
-        user_id = session.get('user_id')
+        user_id = session["user_id"]
         
         if not user_id:
             return jsonify({"error": "No hay usuario autenticado"}), 401

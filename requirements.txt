@@ -7,3 +7,6 @@ notion-client==2.2.1
 pyngrok==5.2.2 
 beautifulsoup4==4.12.3
 openai
+Flask-CORS==4.0.0
+Flask-PyMongo==2.3.0
+pymongo==4.6.3

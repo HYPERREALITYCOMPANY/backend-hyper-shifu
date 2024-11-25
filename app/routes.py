@@ -9,8 +9,10 @@ from datetime import datetime, timedelta
 import unicodedata
 import re
 import json
+from werkzeug.security import generate_password_hash, check_password_hash
 import os
 import quopri
+from flask_pymongo import PyMongo, ObjectId
 import openai
 from app.services.gmail import auth_gmail as service_auth_gmail
 from app.services.gmail import auth_gmail_callback as service_auth_callback
@@ -20,12 +22,64 @@ from app.services.notion import notion_callback as service_auth_notion_callback
 openai.api_key=Config.CHAT_API_KEY
 
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
-def setup_routes(app):
+def setup_routes(app, mongo):
     stateSlack = ""
     notion_bp = Blueprint('notion', __name__)
     @app.route('/')
     def home():
         return ("Este es el backend del proyecto!!")
+
+    @app.route('/register', methods=['POST'])
+    def register_user():
+        request_data = request.get_json()  # Esto contiene los headers y el body
+        if not request_data or "body" not in request_data:
+            return jsonify({"error": "El cuerpo de la solicitud es inválido"}), 400
+
+        # Decodificar el 'body'
+        try:
+            data = json.loads(request_data["body"])
+        except json.JSONDecodeError:
+            return jsonify({"error": "El cuerpo JSON es inválido"}), 400
+
+        if not data or not all(k in data for k in ("nombre", "apellido", "correo", "password")):
+            return jsonify({"error": "Faltan campos obligatorios"}), 400
+
+        # Verificar si el correo ya existe en la base de datos
+        if mongo.db.usuarios.find_one({"correo": data["correo"]}):
+            return jsonify({"error": "El correo ya está registrado"}), 400
+
+        # Si el correo no existe, proceder con el registro
+        hashed_password = generate_password_hash(data['password'])
+        usuario = {
+            "img": data.get("img", ""),  # Opcional
+            "nombre": data["nombre"],
+            "apellido": data["apellido"],
+            "correo": data["correo"],
+            "password": hashed_password,
+            "integrations": []  # Inicialmente vacío
+        }
+
+        # Verificar si la colección 'usuarios' existe y crearla si no
+        if 'usuarios' not in mongo.db.list_collection_names():
+            mongo.db.create_collection('usuarios')
+
+        if 'usuarios' in mongo.db.list_collection_names():
+            result = mongo.db.usuarios.insert_one(usuario)
+        
+        return jsonify({"message": "Usuario registrado exitosamente", "id": str(result.inserted_id)}), 201
+
+    @app.route('/login', methods=['POST'])
+    def login_user():
+        data = request.get_json()
+        if not data or not all(k in data for k in ("correo", "password")):
+            return jsonify({"error": "Faltan campos obligatorios"}), 400
+        
+        usuario = mongo.db.usuarios.find_one({"correo": data["correo"]})
+        if not usuario or not check_password_hash(usuario["password"], data["password"]):
+            return jsonify({"error": "Credenciales incorrectas"}), 401
+        
+        session['user_id'] = str(usuario['_id'])
+        return jsonify({"message": "Inicio de sesión exitoso", "user_id": session['user_id']}), 200
 
     @app.route('/auth/gmail')
     def auth_gmail():
@@ -35,6 +89,132 @@ def setup_routes(app):
     def auth_gmail_callback():
        return service_auth_callback()
     
+    @app.route('/auth/hubspot')
+    def auth_hubspot():
+        scope = [
+            "crm.objects.appointments.read",
+            "crm.objects.appointments.write",
+            "crm.objects.carts.read",
+            "crm.objects.carts.write",
+            "crm.objects.companies.read",
+            "crm.objects.companies.write",
+            "crm.objects.contacts.read",
+            "crm.objects.contacts.write",
+            "crm.objects.courses.read",
+            "crm.objects.courses.write",
+            "crm.objects.custom.read",
+            "crm.objects.custom.write",
+            "crm.objects.deals.read",
+            "crm.objects.deals.write",
+            "crm.objects.feedback_submissions.read",
+            "crm.objects.goals.read",
+            "crm.objects.invoices.read",
+            "crm.objects.leads.read",
+            "crm.objects.leads.write",
+            "crm.objects.line_items.read",
+            "crm.objects.line_items.write",
+            "crm.objects.listings.read",
+            "crm.objects.listings.write",
+            "crm.objects.marketing_events.read",
+            "crm.objects.marketing_events.write",
+            "crm.objects.orders.read",
+            "crm.objects.orders.write",
+            "crm.objects.owners.read",
+            "crm.objects.partner-clients.read",
+            "crm.objects.partner-clients.write",
+            "crm.objects.quotes.read",
+            "crm.objects.quotes.write",
+            "crm.objects.services.read",
+            "crm.objects.services.write",
+            "crm.objects.subscriptions.read",
+            "crm.objects.users.read",
+            "crm.objects.users.write",
+            "crm.schemas.deals.read",
+            "crm.schemas.deals.write",
+            "crm.schemas.invoices.read",
+            "oauth",
+            "tickets"
+        ]
+        hubspot = OAuth2Session(Config.HUBSPOT_CLIENT_ID, 
+                                redirect_uri='https://jk6rq3rx-5000.use2.devtunnels.ms/auth/hubspot/callback', 
+                                scope=scope)
+        authorization_url, state = hubspot.authorization_url('https://app.hubspot.com/oauth/authorize')
+        session['hubspot_state'] = state
+        return redirect(authorization_url)
+
+    @app.route('/auth/hubspot/callback')
+    def auth_hubspot_callback():
+        # Validar que el parámetro 'code' está presente
+        code = request.args.get('code')
+        if not code:
+            return jsonify({"error": "El parámetro 'code' falta en la respuesta"}), 400
+
+        # Validar que el estado recibido coincide
+        if 'hubspot_state' not in session or session['hubspot_state'] != request.args.get('state'):
+            return jsonify({"error": "El estado recibido no coincide con el enviado"}), 400
+
+        # Solicitar el token
+        try:
+            token_url = 'https://api.hubapi.com/oauth/v1/token'
+            payload = {
+                'grant_type': 'authorization_code',
+                'client_id': Config.HUBSPOT_CLIENT_ID,
+                'client_secret': Config.HUBSPOT_CLIENT_SECRET,
+                'redirect_uri': 'https://jk6rq3rx-5000.use2.devtunnels.ms/auth/hubspot/callback',
+                'code': code
+            }
+            headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+
+            # Enviar solicitud para obtener el token
+            response = requests.post(token_url, data=payload, headers=headers)
+            token_data = response.json()
+
+            # Verificar si hay errores en la respuesta
+            if response.status_code != 200:
+                return jsonify({"error": "Error al obtener el token", "details": token_data}), response.status_code
+
+            # Guardar el token en la sesión
+            session['hubspot_token'] = token_data
+            return jsonify(token_data)
+
+        except Exception as e:
+            return jsonify({"error": f"Excepción durante el proceso: {str(e)}"}), 500
+
+    @app.route('/auth/outlook')
+    def auth_outlook():
+        MICROSOFT_OUTLOOK_SCOPE = [
+            "https://graph.microsoft.com/Mail.Read",
+            "https://graph.microsoft.com/Mail.Send",
+            "https://graph.microsoft.com/User.Read",
+            "https://graph.microsoft.com/Files.ReadWrite"  # Este es el scope para acceder a OneDrive
+        ]
+        
+        outlook = OAuth2Session(Config.OUTLOOK_CLIENT_ID, 
+                                redirect_uri="https://jk6rq3rx-5000.use2.devtunnels.ms/auth/outlook/callback", 
+                                scope=MICROSOFT_OUTLOOK_SCOPE)
+        
+        authorization_url, state = outlook.authorization_url("https://login.microsoftonline.com/common/oauth2/v2.0/authorize", access_type="online", prompt="consent")
+        session['outlook_state'] = state
+        return redirect(authorization_url)
+
+
+    @app.route('/auth/outlook/callback')
+    def auth_outlook_callback():
+        outlook = OAuth2Session(Config.OUTLOOK_CLIENT_ID, 
+                                state=session.get('outlook_state'), 
+                                redirect_uri="https://jk6rq3rx-5000.use2.devtunnels.ms/auth/outlook/callback")
+        try:
+            token = outlook.fetch_token("https://login.microsoftonline.com/common/oauth2/v2.0/token",
+                                        client_secret=Config.OUTLOOK_CLIENT_SECRET,
+                                        authorization_response=request.url)
+            
+            session['outlook_token'] = token
+            
+            # Puedes guardar el token o hacer alguna llamada a la API para obtener información del usuario
+            return jsonify(token)
+        except Exception as e:
+            return jsonify({"error": f"Error al obtener el token: {str(e)}"}), 500
+        
     @app.route('/auth/notion')
     def auth_notion():
         return service_auth_notion()
@@ -261,12 +441,258 @@ def setup_routes(app):
             })
 
         return jsonify(slack_results)
+    
+    @app.route('/search/outlook', methods=['GET'])
+    def search_outlook():
+        # Obtener el token de acceso de la sesión
+        access_token = session.get('outlook_token')
+        
+        if not access_token:
+            return jsonify({"error": "Usuario no autenticado en Outlook"}), 401
+        
+        # Verificar si el token ha expirado
+        expires_at = session.get('expires_at')
+        if expires_at and datetime.now().timestamp() > expires_at:
+            return jsonify({"error": "El token de acceso ha expirado, por favor vuelve a iniciar sesión."}), 401
+
+        # Obtener la consulta de búsqueda desde los parámetros de la URL
+        query = request.args.get('query')
+        if not query:
+            return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
+        
+        # Definir la URL y los encabezados para la solicitud
+        url = 'https://graph.microsoft.com/v1.0/me/messages'
+        headers = {
+            'Authorization': f"Bearer {access_token['access_token']}",
+            'Content-Type': 'application/json'
+        }
+        
+        # Realizar la solicitud GET para obtener los correos electrónicos
+        try:
+            response = requests.get(url, headers=headers, params={'$search': query})
+            response.raise_for_status()  # Lanzar error si la respuesta no es exitosa
+        except requests.exceptions.RequestException as e:
+            return jsonify({"error": "Error al buscar en Outlook", "details": str(e)}), 500
+
+        # Procesar la respuesta exitosa
+        results = response.json().get('value', [])
+        search_results = []
+
+        # Filtrar los resultados y extraer solo la información relevante
+        for result in results:
+            body = to_ascii(result.get("bodyPreview"))
+            result_info = {
+                "subject": result.get("subject"),
+                "receivedDateTime": result.get("receivedDateTime"),
+                "sender": result.get("sender", {}).get("emailAddress", {}).get("address"),
+                "bodyPreview": body
+            }
+            search_results.append(result_info)
+
+        return jsonify(search_results)
+
+
+    def get_owner_name(owner_id, token, field):
+        """Obtiene el nombre del propietario a partir de su ID."""
+        if not owner_id:
+            return "N/A"
+        url = f"https://api.hubapi.com/crm/v3/owners/{owner_id}"
+        headers = {'Authorization': f"Bearer {token}"}
+        try:
+            response = requests.get(url, headers=headers)
+            if response.status_code == 200:
+                owner_data = response.json()
+                if field == "name":
+                    return f"{owner_data.get('firstName', 'N/A')} {owner_data.get('lastName', 'N/A')}"
+                elif field == "email":
+                    return owner_data.get('email', 'N/A')
+        except requests.RequestException:
+            pass
+        return "N/A"
+
+    def get_associations(object_type, object_id, associated_type, token):
+        """Obtiene asociaciones de un objeto."""
+        url = f"https://api.hubapi.com/crm/v3/objects/{object_type}/{object_id}/associations/{associated_type}"
+        headers = {'Authorization': f"Bearer {token}"}
+        try:
+            response = requests.get(url, headers=headers)
+            print(response.json())
+            if response.status_code == 200:
+                return [assoc.get("id") for assoc in response.json().get("results", [])]
+        except requests.RequestException:
+            pass
+        return []
+    
+    def fetch_associated_details(associated_ids, object_type, token):
+        """Obtiene los detalles de las asociaciones por ID."""
+        print(associated_ids)
+        results = []
+        for assoc_id in associated_ids:
+            url = f"https://api.hubapi.com/crm/v3/objects/{object_type}/{assoc_id}"
+            headers = {'Authorization': f"Bearer {token}"}
+            try:
+                response = requests.get(url, headers=headers)
+                print(response)
+                if response.status_code == 200:
+                    properties = response.json().get("properties", {})
+                    print(properties)
+                    if object_type == "contacts":
+                        # Para los contactos, se concatena 'firstname' y 'lastname'
+                        name = f"{properties.get('firstname', 'N/A')} {properties.get('lastname', 'N/A')}"
+                        results.append({
+                            "id": assoc_id,
+                            "name": name,
+                            "email": properties.get("email", "N/A")  # Asegurando que se obtenga el teléfono
+                        })
+                    elif object_type == "companies":
+                        # Para las compañías, solo se usa 'name'
+                        results.append({
+                            "id": assoc_id,
+                            "domain": properties.get("domain", "N/A")
+                        })
+            except requests.RequestException:
+                continue
+        return results
+
+
+    @app.route('/search/hubspot', methods=['GET'])
+    def search_hubspot():
+        access_token = session.get('hubspot_token')
+
+        if not access_token or "access_token" not in access_token:
+            return jsonify({"error": "Usuario no autenticado en HubSpot"}), 401
+
+        query = request.args.get('query')
+        stopwords = ["mandame", "del", "que", "link", "pasame", "enviame", "brindame", "dame", "me", "paso", "envio", "dijo","dame","toda","la","información", "del","en", "que","esta", "empresa"]
+        keywords = ' '.join([word for word in query.split() if word.lower() not in stopwords])
+        if not query:
+            return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
+
+        # Endpoints de búsqueda en HubSpot
+        endpoints = {
+            "contacts": {
+                "url": "https://api.hubapi.com/crm/v3/objects/contacts/search",
+                "propertyName": "firstname"  # Campo usado para buscar en contactos
+            },
+            "companies": {
+                "url": "https://api.hubapi.com/crm/v3/objects/companies/search",
+                "propertyName": "name"  # Campo usado para buscar en empresas
+            },
+            "deals": {
+                "url": "https://api.hubapi.com/crm/v3/objects/deals/search",
+                "propertyName": "dealname"  # Campo usado para buscar en acuerdos
+            }
+        }
+
+        headers = {
+            'Authorization': f"Bearer {access_token['access_token']}",
+            'Content-Type': 'application/json'
+        }
+
+        search_results = {}
+        for object_type, config in endpoints.items():
+            url = config["url"]
+            property_name = config["propertyName"]
+
+            # Configurar el cuerpo de la solicitud
+            data = {
+                "filters": [
+                    {
+                        "propertyName": property_name,
+                        "operator": "CONTAINS_TOKEN",
+                        "value": keywords
+                    }
+                ],
+                "properties": ["firstname", "lastname","name", "dealname","cost", "email", "phone", "company", "createdate", "hubspot_owner_id", "dealstage", "price"]
+            }
+
+            try:
+                response = requests.post(url, headers=headers, json=data)
+                if response.status_code == 200:
+                    results = response.json().get("results", [])
+                    print("RESULTS", results)
+
+                    if not results:
+                        search_results[object_type] = {"message": f"No se encontraron {object_type} con '{query}'"}
+                    else:
+                        formatted_results = []
+
+                        for result in results:
+                            properties = result.get("properties", {})
+                            created_date = properties.get("createdate", "")
+                            try:
+                                formatted_date = datetime.strptime(
+                                    created_date, "%Y-%m-%dT%H:%M:%S.%fZ"
+                                ).strftime("%Y-%m-%d")
+                            except ValueError:
+                                formatted_date = created_date
+
+                            result_info = {
+                                "id": result.get("id"),
+                                "email": properties.get("email", "N/A"),
+                                "phone": properties.get("phone", "N/A"),
+                                "createdate": formatted_date
+                            }
+
+                            if object_type == "deals":
+                                result_info["owner"] = get_owner_name(properties.get("hubspot_owner_id"), access_token['access_token'], "name")
+                                result_info["stage"] = properties.get("dealstage", "N/A")
+                                result_info["name"] = properties.get("dealname", "N/A")
+                                
+                                # Obtener el precio de la empresa asociada al negocio (si aplica)
+                                price = properties.get("price", "N/A")  # Asegúrate de que 'price' sea un campo válido
+                                result_info["price"] = price
+
+                                # Obtener asociaciones con contactos y compañías
+                                contacts_assoc = get_associations("deals", result_info["id"], "contacts", access_token['access_token'])
+                                companies_assoc = get_associations("deals", result_info["id"], "companies", access_token['access_token'])
+                                result_info["associations"] = {
+                                    "contacts": fetch_associated_details(contacts_assoc, "contacts", access_token['access_token']),
+                                    "companies": fetch_associated_details(companies_assoc, "companies", access_token['access_token'])
+                                }
+
+                            elif object_type == "contacts":
+                                if properties.get("firstname"):
+                                    result_info["name"] = f"{properties['firstname']} {properties['lastname']}"
+                                else:
+                                    result_info["name"] = "N/A"
+                                
+                                # Obtener la empresa asociada al contacto
+                                company_assoc = get_associations("contacts", result_info["id"], "companies", access_token['access_token'])
+                                company_info = fetch_associated_details(company_assoc, "companies", access_token['access_token'])
+                                
+                                # Actualizar el campo 'company' con el nombre de la empresa
+                                if company_info:
+                                    result_info["company"] = company_info[0].get("name", "N/A")
+                                else:
+                                    result_info["company"] = "N/A"
+
+                            elif object_type == "companies":
+                                # Mostrar el nombre de la compañía en el campo 'company'
+                                result_info["company"] = properties.get("name", "N/A")
+                                # Si existe un campo 'price' en las compañías, agregarlo
+                                result_info["price"] = properties.get("price", "N/A")  # Asegúrate de que 'price' sea válido
+
+                            formatted_results.append(result_info)
+
+                        search_results[object_type] = formatted_results
+                else:
+                    search_results[object_type] = {
+                        "error": f"Error al buscar en {object_type}",
+                        "details": response.json()
+                    }
+
+            except requests.RequestException as e:
+                search_results[object_type] = {
+                    "error": f"Error al procesar la solicitud en {object_type}",
+                    "details": str(e)
+                }
+        return search_results
 
     @app.route('/askIa', methods=['GET'])
     def ask():
         query = request.args.get('query')
         search_results = search_all()
-        print(search_results.response)
         if not query:
             return jsonify({"error": "No se proporcionó una consulta de búsqueda"}), 400
         if not search_results:
@@ -285,9 +711,9 @@ def setup_routes(app):
 
 
         response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "Eres un asistente útil."},
+                {"role": "system", "content": "Eres un asistente útil el cual esta conectada con diversas aplicaciones y automatizaras el proceso de buscar informacion"},
                 {"role": "user", "content": prompt}
             ],
             max_tokens=4096
@@ -296,45 +722,113 @@ def setup_routes(app):
         ia_response = response.choices[0].message['content'].strip()
 
         return jsonify({
-            "response": ia_response
+            "response": to_ascii(ia_response)
         })
 
-
     def generate_prompt(query, search_results):
-        gmail_results = "\n".join([
+        # Gmail Results
+        gmail_results = "\n".join([ 
             f"De: {email['from']}\nFecha: {email['date']}\nAsunto: {email['subject']}\nCuerpo: {email['body']}\n"
             for email in search_results.get('gmail', []) if isinstance(email, dict)
         ])
 
-        slack_results = "\n".join([
+        # Slack Results
+        slack_results = "\n".join([ 
             f"En el canal '{msg['channel']}', el usuario '{msg['user']}' dijo:\n'{msg['text']}'\nFecha: {msg['ts']}\n"
             for msg in search_results.get('slack', []) if isinstance(msg, dict)
         ])
 
-        notion_results = "\n".join([
+        # Notion Results
+        notion_results = "\n".join([ 
             f"Página ID: {page['id']}\nCreada el: {page['created_time']}\nÚltima editada: {page['last_edited_time']}\n"
             f"URL: {page['url']}\nPropiedades: {json.dumps(page['properties'], ensure_ascii=False)}\n"
             for page in search_results.get('notion', []) if isinstance(page, dict)
         ])
 
+        # Outlook Results
+        outlook_results = "\n".join([ 
+            f"De: {email['sender']}\nFecha: {email['receivedDateTime']}\nAsunto: {email['subject']}\nCuerpo: {email['bodyPreview']}\n"
+            for email in search_results.get('outlook', []) if isinstance(email, dict)
+        ])
+
+        hubspot_results = ""
+
+        # Verificar si hay datos en "hubspot"
+        hubspot_data = search_results.get("hubspot", {})
+
+        # Verificar si hay datos en contactos
+        if "contacts" in hubspot_data:
+            contacts = hubspot_data["contacts"]
+            if isinstance(contacts, list) and contacts:  # Verificar si es una lista
+                hubspot_results += "\n### Contacts:\n"
+                for contact in contacts:
+                    name = contact.get('name', 'N/A')
+                    email = contact.get('email', 'N/A')
+                    phone = contact.get('phone', 'N/A')
+                    company = contact.get('company', 'N/A')
+                    createdate = contact.get('createdate', 'N/A')
+                    hubspot_results += f"Nombre: {name}\nCorreo: {email}\nTeléfono: {phone}\nCompañía: {company}\nFecha de creación: {createdate}\n\n"
+            else:  # Si no es una lista, manejar como mensaje
+                hubspot_results += f"No se encontraron contactos: {contacts.get('message', 'Información no disponible')}.\n"
+
+        # Verificar si hay datos en compañías
+        if "companies" in hubspot_data:
+            companies = hubspot_data["companies"]
+            if isinstance(companies, list) and companies:
+                hubspot_results += "\n### Companies:\n"
+                for company in companies:
+                    name = company.get('company', 'N/A')
+                    price = company.get('price', 'N/A')
+                    phone = company.get('phone', 'N/A')
+                    email = company.get('email', 'N/A')
+                    createdate = company.get('createdate', 'N/A')
+                    hubspot_results += f"Compañía: {name}\nPrecio: {price}\nTeléfono: {phone}\nCorreo: {email}\nFecha de creación: {createdate}\n\n"
+            else:
+                hubspot_results += "No se encontraron compañías relacionadas en HubSpot.\n"
+
+        # Verificar si hay datos en negocios (deals)
+        if "deals" in hubspot_data:
+            deals = hubspot_data["deals"]
+            if isinstance(deals, list) and deals:  # Verificar si es una lista
+                hubspot_results += "\n### Deals:\n"
+                for deal in deals:
+                    name = deal.get('name', 'N/A')
+                    price = deal.get('price', 'N/A')
+                    stage = deal.get('stage', 'N/A')
+                    owner = deal.get('owner', 'N/A')
+                    createdate = deal.get('createdate', 'N/A')
+                    hubspot_results += f"Negocio: {name}\nMonto: {price}\nEstado: {stage}\nPropietario: {owner}\nFecha de cierre: {createdate}\n"
+            else:  # Si no es una lista, manejar como mensaje
+                hubspot_results += f"No se encontraron negocios: {deals.get('message', 'Información no disponible')}.\n"
+
+        # Si no hay resultados de HubSpot, mostrar mensaje
+        if not hubspot_results.strip():
+            hubspot_results = "No se encontraron resultados relacionados en HubSpot."
+
+        # Finalmente, la respuesta completa
         prompt = f"""Resultados de búsqueda para la consulta: "{query}"
 
         ### Gmail:
         {gmail_results if gmail_results else "No se encontraron correos relacionados en Gmail."}
 
         ### Notion:
-        {notion_results if notion_results else "No se encontraron correos relacionados en Notion."}
+        {notion_results if notion_results else "No se encontraron notas o registros relacionados en Notion."}
 
         ### Slack:
-        {slack_results if slack_results else "No se encontraron correos relacionados en Slack."}
+        {slack_results if slack_results else "No se encontraron mensajes relacionados en Slack."}
 
-        
-        Based on this information, please provide a detailed and extensive response to the query. Make sure to explain each result in depth. For example:
-        - Describe the body and subject of the email, what was discussed and its relevance, as well as the name of the user who sent the email, search by keywords, including links and any file types.
-        - For Slack, comment on the tone of the message and its importance.
-        - For Notion, provide a summary of the key information contained in the properties.
+        ### Outlook:
+        {outlook_results if outlook_results else "No se encontraron correos relacionados en Outlook."}
 
-        Also, include exact information found from emails they sent, message bodies, which channel or group they were sent in, and important dates, both explicit and when the email was created or arrived. Please do all this in markdown or in an organized way so that it is more readable, as well as values ​​that are not legible such as accents or emojis, keep in mind that dates are only year/month/day, split the answer with enters.
+        ### HubSpot:
+        {hubspot_results}
+
+        Con base en esta información, genera una respuesta detallada que incluya únicamente resultados específicos para la consulta.
+        - Para **Gmail**, proporciona el asunto, cuerpo y enlaces relevantes, el nombre del remitente y palabras clave detectadas. Asegúrate de verificar coincidencias exactas con '{query}'.
+        - En **Slack**, resume el contenido y tono del mensaje, el canal o grupo, y la fecha de envío.
+        - En **Notion**, enfócate en los contenidos de las propiedades clave y su relación con '{query}'.
+        - En **Outlook**, proporciona los detalles del asunto, cuerpo y remitente de los correos relevantes, verificando coincidencias con '{query}'.
+        - En **HubSpot**, resalta los contactos, compañías y negocios que coincidan con la búsqueda, incluyendo nombres, correos, información de la compañía, monto de negocio, fecha de cierre y cualquier otra información relevante.
         """
 
         return prompt
@@ -358,39 +852,46 @@ def setup_routes(app):
         """Extrae texto del contenido HTML."""
         soup = BeautifulSoup(html_content, 'html.parser')
         return soup.get_text()
+
     @app.route('/search/all', methods=['GET'])
     def search_all():
         query = request.args.get('query')
         if not query:
             return jsonify({"error": "No se proporcionó una consulta de búsqueda"}), 400
+
         two_weeks_ago = datetime.now() - timedelta(weeks=2)
         two_weeks_ago_str = two_weeks_ago.strftime('%Y/%m/%d')
         results = {
             "gmail": [],
             "slack": [],
-            "notion": []
+            "notion": [],
+            "outlook": [],
+            "hubspot": [],
         }
 
         # Búsqueda en Gmail
         gmail_token = session.get('gmail_token')
         if gmail_token:
             headers = {'Authorization': f'Bearer {gmail_token["access_token"]}'}
-            params = {'q': f"{query} after:{two_weeks_ago_str}"}
+
+            stopwords = ["mandame", "del", "que", "link", "pasame", "enviame", "brindame", "dame", "me", "paso", "envio", "dijo","dame","toda","la","información", "del"]
+            keywords = ' '.join([word for word in query.split() if word.lower() not in stopwords])
+            params = {'q': f"{keywords} after:{two_weeks_ago_str}"}
             gmail_response = requests.get('https://www.googleapis.com/gmail/v1/users/me/messages', headers=headers, params=params)
-            
+
             if gmail_response.status_code == 200:
                 messages = gmail_response.json().get('messages', [])
                 for message in messages:
                     message_id = message['id']
                     message_response = requests.get(f'https://www.googleapis.com/gmail/v1/users/me/messages/{message_id}', headers=headers)
-                    
+
                     if message_response.status_code == 200:
                         message_data = message_response.json()
                         message_headers = message_data.get('payload', {}).get('headers', [])
                         sender = next((header['value'] for header in message_headers if header['name'] == 'From'), "Sin remitente")
                         date = next((header['value'] for header in message_headers if header['name'] == 'Date'), "Sin fecha")
                         subject = next((header['value'] for header in message_headers if header['name'] == 'Subject'), "Sin asunto")
-                        
+
                         body = ""
                         if 'parts' in message_data['payload']:
                             for part in message_data['payload']['parts']:
@@ -407,48 +908,39 @@ def setup_routes(app):
                                 body = clean_body(body)
                                 body = extract_text_from_html(html_body)
 
-
                         results['gmail'].append({
                             'from': sender,
                             'date': date,
                             'subject': subject,
-                            'body': body if body else "Cuerpo vacío" 
+                            'body': body if body else "Cuerpo vacío"
                         })
             else:
                 results['gmail'] = {"error": "Error al buscar en Gmail", "details": gmail_response.json()}
-
         else:
             results['gmail'] = {"error": "Sesión no ingresada en Gmail"}
 
         # Búsqueda en Slack
         slack_token = session.get('slack_token')
         if slack_token:
-             query = request.args.get('query')
-        if not query:
-            return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
+            url = 'https://slack.com/api/search.messages'
+            headers = {
+                'Authorization': f'Bearer {Config.SLACK_USER_TOKEN}',
+                'Content-Type': 'application/json'
+            }
+            params = {'query': query}
+            response = requests.get(url, headers=headers, params=params)
+            data = response.json()
 
-        url = 'https://slack.com/api/search.messages'
-        headers = {
-            'Authorization': f'Bearer {Config.SLACK_USER_TOKEN}',
-            'Content-Type': 'application/json'
-        }
-        params = {
-            'query': query
-        }
-
-        response = requests.get(url, headers=headers, params=params)
-        data = response.json()
-
-        if response.status_code != 200 or not data.get('ok'):
-            return jsonify({"error": "Error al buscar en Slack", "details": data}), response.status_code
-        messages = data.get("messages", {}).get("matches", [])
-        for message in messages:
-            results['slack'].append({
-                "channel": message.get("channel", {}).get("name"),
-                "user": message.get("username"),
-                "text": message.get("text"),
-                "ts": message.get("ts")
-            })
+            if response.status_code != 200 or not data.get('ok'):
+                return jsonify({"error": "Error al buscar en Slack", "details": data}), response.status_code
+            messages = data.get("messages", {}).get("matches", [])
+            for message in messages:
+                results['slack'].append({
+                    "channel": message.get("channel", {}).get("name"),
+                    "user": message.get("username"),
+                    "text": message.get("text"),
+                    "ts": message.get("ts")
+                })
 
         # Búsqueda en Notion
         notion_token = session.get('access_token')
@@ -460,7 +952,7 @@ def setup_routes(app):
             }
             data = {"query": query}
             notion_response = requests.post('https://api.notion.com/v1/search', headers=headers, json=data)
-            
+
             if notion_response.status_code == 200:
                 for result in notion_response.json().get("results", []):
                     page_info = {
@@ -493,13 +985,69 @@ def setup_routes(app):
                             elif property_value.get("type") == "rich_text":
                                 page_info["properties"][property_name] = "".join([text["text"]["content"] for text in property_value.get("rich_text", [])])
                         else:
-                            # Maneja el caso en que property_value no sea un diccionario
                             page_info["properties"][property_name] = str(property_value)  
                     results['notion'].append(page_info)
             else:
                 results['notion'] = {"error": "Error al buscar en Notion", "details": notion_response.json()}
-
         else:
             results['notion'] = {"error": "Sesión no ingresada en Notion"}
+
+        # Búsqueda en Outlook
+        access_token = session.get('outlook_token')
+        if access_token:
+            expires_at = session.get('expires_at')
+            if expires_at and datetime.now().timestamp() > expires_at:
+                return jsonify({"error": "El token de acceso ha expirado, por favor vuelve a iniciar sesión."}), 401
+
+            # Obtener la consulta de búsqueda desde los parámetros de la URL
+            query = request.args.get('query')
+            if not query:
+                return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
+            
+            # Definir la URL y los encabezados para la solicitud
+            url = 'https://graph.microsoft.com/v1.0/me/messages'
+            headers = {
+                'Authorization': f"Bearer {access_token['access_token']}",
+                'Content-Type': 'application/json'
+            }
+            
+            # Realizar la solicitud GET para obtener los correos electrónicos
+            try:
+                response = requests.get(url, headers=headers, params={'$search': query})
+                response.raise_for_status()  # Lanzar error si la respuesta no es exitosa
+            except requests.exceptions.RequestException as e:
+                return jsonify({"error": "Error al buscar en Outlook", "details": str(e)}), 500
+
+            # Procesar la respuesta exitosa
+            results_outlook = response.json().get('value', [])
+            search_results_outlook = []
+            # Filtrar los resultados y extraer solo la información relevante
+            for result in results_outlook:
+                body = to_ascii(result.get("bodyPreview"))
+                result_info = {
+                    "subject": result.get("subject"),
+                    "receivedDateTime": result.get("receivedDateTime"),
+                    "sender": result.get("sender", {}).get("emailAddress", {}).get("address"),
+                    "bodyPreview": body
+                }
+
+                search_results_outlook.append(result_info)
+            print(search_results_outlook)
+            results['outlook'] = search_results_outlook
+        else:
+            results['outlook'] = {"error": "Sesión no ingresada en Outlook"}
+
+        hubspot_token = session.get('hubspot_token')
+        if hubspot_token:
+            hubspot_data = search_hubspot()
+            print(hubspot_data)
+            # Validar si 'hubspot_data' es serializable a JSON
+            try:
+                json.dumps(hubspot_data)  # Intentamos convertir a JSON
+                results['hubspot'] = hubspot_data
+            except TypeError as e:
+                results['hubspot'] = {"error": f"HubSpot data is not serializable: {str(e)}"}
+        else:
+            results['hubspot'] = {"error": "Sesión no ingresada en HubSpot"}
 
         return jsonify(results)

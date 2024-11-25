@@ -74,8 +74,9 @@ def setup_routes(app, mongo):
         usuario = mongo.db.usuarios.find_one({"correo": data["correo"]})
         if not usuario or not check_password_hash(usuario["password"], data["password"]):
             return jsonify({"error": "Credenciales incorrectas"}), 401
-        
+
         session['user_id'] = str(usuario['_id'])
+        print(session['user_id'])
         return jsonify({"message": "Inicio de sesión exitoso", "user_id": session['user_id']}), 200
         
     @app.route('/check_integrations', methods=['GET'])
@@ -85,7 +86,6 @@ def setup_routes(app, mongo):
         if not email:
             return jsonify({"error": "Correo electrónico no proporcionado"}), 400
 
-        # Buscamos al usuario por su correo electrónico
         usuario = mongo.db.usuarios.find_one({"correo": email})
         
         if not usuario:
@@ -101,7 +101,7 @@ def setup_routes(app, mongo):
         return service_auth_gmail()
 
     @app.route('/auth/gmail/callback')
-    def auth_gmail_callback(mongo):
+    def auth_gmail_callback():
        return service_auth_callback(mongo)
     
     @app.route('/auth/hubspot')
@@ -252,7 +252,7 @@ def setup_routes(app, mongo):
         return service_auth_notion()
 
     @app.route('/notion/callback')
-    def auth_notion_callback(mongo):
+    def auth_notion_callback():
         return service_auth_notion_callback(mongo)
     
     @app.route('/auth/slack')
@@ -260,8 +260,8 @@ def setup_routes(app, mongo):
         scopes = ["channels:read", "chat:write", "users:read"]
         slack = OAuth2Session(Config.SLACK_CLIENT_ID, redirect_uri='https://neuron-hyper.vercel.app/auth/slack/callback', scope=scopes)
         authorization_url, state = slack.authorization_url('https://slack.com/oauth/v2/authorize')
-        session['oauth_state'] = stateSlack   # Almacena el estado en la sesión
-        print(f"Estado almacenado en la sesión: {state}")  # Debug
+        session['oauth_state'] = stateSlack
+        print(f"Estado almacenado en la sesión: {state}")
         return redirect(authorization_url)
 
     @app.route('/auth/slack/callback')

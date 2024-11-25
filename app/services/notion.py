@@ -64,7 +64,7 @@ def notion_callback(mongo):
         if not access_token:
             return jsonify({"error": "No se pudo obtener el token de acceso"}), 400
 
-        user_id = session['user_id']
+        user_id = "674405f911a09ad979c5c6ec"
         mongo.db.usuarios.update_one(
             {"_id": ObjectId(user_id)},
             {"$push": {"integrations": {"platform": "notion", "token": access_token_data}}}

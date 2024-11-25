@@ -77,6 +77,23 @@ def setup_routes(app, mongo):
         
         session['user_id'] = str(usuario['_id'])
         return jsonify({"message": "Inicio de sesión exitoso", "user_id": session['user_id']}), 200
+    
+    @app.route('/check_integrations', methods=['GET'])
+    def check_integrations():
+        user_id = session.get('user_id')
+        
+        if not user_id:
+            return jsonify({"error": "No hay usuario autenticado"}), 401
+        
+        usuario = mongo.db.usuarios.find_one({"_id": ObjectId(user_id)})
+        
+        if not usuario:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+
+        if not usuario.get('integrations') or len(usuario['integrations']) == 0:
+            return jsonify({"message": "Usuario sin integraciones"}), 200
+        
+        return jsonify({"message": "Usuario con integraciones", "integrations": usuario['integrations']}), 200
 
     @app.route('/auth/gmail')
     def auth_gmail():

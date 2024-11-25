@@ -94,9 +94,24 @@ def setup_routes(app, mongo):
             return jsonify({"error": "Usuario no encontrado"}), 404
 
         if not usuario.get('integrations') or len(usuario['integrations']) == 0:
-            return jsonify({"message": "Usuario sin integraciones"}), 200
+            return jsonify({"message": "Usuario sin integraciones", "usuario": usuario}), 200
         
         return jsonify({"message": "Usuario con integraciones", "integrations": usuario['integrations']}), 200
+
+    @app.route('/assign_user_id', methods=['POST'])
+    def assign_user_id():
+        data = request.get_json()
+        
+        # Validamos el token de sesión o encabezado de autorización
+        if 'Authorization' not in request.headers:
+            return jsonify({"error": "No autorizado"}), 401
+        
+        user_id = session.get('user_id')  # Obtenemos el id de sesión
+        if not user_id:
+            return jsonify({"error": "Sesión no encontrada"}), 401
+
+        return jsonify({"message": "ID de usuario asignado correctamente", "user_id": user_id}), 200
+
 
     @app.route('/auth/gmail')
     def auth_gmail():

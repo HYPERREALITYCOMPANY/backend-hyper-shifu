@@ -19,7 +19,7 @@ def notion_auth():
         return redirect(f"{notion_auth_url}?{urlencode(query_params)}")
 
 def notion_callback(mongo, idUser):
-    usuario = mongo.db.usuarios.find_one({"_id": idUser})
+    usuario = mongo.db.usuarios.find_one({"_id": ObjectId(idUser)})
     if not usuario:
          return jsonify({"error": "No se encontró el usuario en la base de datos"}), 404
     try:

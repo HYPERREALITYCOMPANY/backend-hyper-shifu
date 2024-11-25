@@ -83,8 +83,8 @@ def setup_routes(app, mongo):
         return service_auth_gmail()
 
     @app.route('/auth/gmail/callback')
-    def auth_gmail_callback():
-       return service_auth_callback()
+    def auth_gmail_callback(mongo):
+       return service_auth_callback(mongo)
     
     @app.route('/auth/hubspot')
     def auth_hubspot():
@@ -141,12 +141,13 @@ def setup_routes(app, mongo):
 
     @app.route('/auth/hubspot/callback')
     def auth_hubspot_callback():
+        if 'user_id' not in session:
+            return jsonify({"error": "Usuario no autenticado"}), 401
+
+        user_id = session['user_id']
         code = request.args.get('code')
         if not code:
             return jsonify({"error": "El parámetro 'code' falta en la respuesta"}), 400
-
-        if 'hubspot_state' not in session or session['hubspot_state'] != request.args.get('state'):
-            return jsonify({"error": "El estado recibido no coincide con el enviado"}), 400
 
         try:
             token_url = 'https://api.hubapi.com/oauth/v1/token'
@@ -158,18 +159,20 @@ def setup_routes(app, mongo):
                 'code': code
             }
             headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-
             response = requests.post(token_url, data=payload, headers=headers)
             token_data = response.json()
 
             if response.status_code != 200:
-                return jsonify({"error": "Error al obtener el token", "details": token_data}), response.status_code
+                return jsonify({"error": "Error al obtener el token de HubSpot", "details": token_data}), response.status_code
 
-            session['hubspot_token'] = token_data
-            return jsonify(token_data)
+            mongo.db.usuarios.update_one(
+                {"_id": ObjectId(user_id)},
+                {"$push": {"integrations": {"platform": "hubspot", "token": token_data}}}
+            )
 
+            return jsonify({"message": "Integración de HubSpot guardada exitosamente", "integration": token_data}), 200
         except Exception as e:
-            return jsonify({"error": f"Excepción durante el proceso: {str(e)}"}), 500
+            return jsonify({"error": f"Error al procesar el token de HubSpot: {str(e)}"}), 500
 
     @app.route('/auth/outlook')
     def auth_outlook():
@@ -191,27 +194,48 @@ def setup_routes(app, mongo):
 
     @app.route('/auth/outlook/callback')
     def auth_outlook_callback():
-        outlook = OAuth2Session(Config.OUTLOOK_CLIENT_ID, 
-                                state=session.get('outlook_state'), 
-                                redirect_uri="https://neuron-hyper.vercel.app/auth/outlook/callback")
+        if 'user_id' not in session:
+            return jsonify({"error": "Usuario no autenticado"}), 401
+
+        user_id = session['user_id']
+        code = request.args.get('code')
+        if not code:
+            return jsonify({"error": "El parámetro 'code' falta en la respuesta"}), 400
+
         try:
-            token = outlook.fetch_token("https://login.microsoftonline.com/common/oauth2/v2.0/token",
-                                        client_secret=Config.OUTLOOK_CLIENT_SECRET,
-                                        authorization_response=request.url)
-            
-            session['outlook_token'] = token
-            
-            return jsonify(token)
+            token_url = 'https://login.microsoftonline.com/common/oauth2/v2.0/token'
+            payload = {
+                'client_id': Config.OUTLOOK_CLIENT_ID,
+                'scope': 'https://graph.microsoft.com/.default',
+                'redirect_uri': 'https://neuron-hyper.vercel.app/auth/outlook/callback',
+                'client_secret': Config.OUTLOOK_CLIENT_SECRET,
+                'grant_type': 'authorization_code',
+                'code': code
+            }
+            headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+            response = requests.post(token_url, data=payload, headers=headers)
+            token_data = response.json()
+
+            if response.status_code != 200:
+                return jsonify({"error": "Error al obtener el token de Outlook", "details": token_data}), response.status_code
+
+            mongo.db.usuarios.update_one(
+                {"_id": ObjectId(user_id)},
+                {"$push": {"integrations": {"platform": "outlook", "token": token_data}}}
+            )
+
+            return jsonify({"message": "Integración de Outlook guardada exitosamente", "integration": token_data}), 200
         except Exception as e:
-            return jsonify({"error": f"Error al obtener el token: {str(e)}"}), 500
+            return jsonify({"error": f"Error al procesar el token de Outlook: {str(e)}"}), 500
+
         
     @app.route('/auth/notion')
     def auth_notion():
         return service_auth_notion()
 
     @app.route('/notion/callback')
-    def auth_notion_callback():
-        return service_auth_notion_callback()
+    def auth_notion_callback(mongo):
+        return service_auth_notion_callback(mongo)
     
     @app.route('/auth/slack')
     def auth_slack():
@@ -224,15 +248,28 @@ def setup_routes(app, mongo):
 
     @app.route('/auth/slack/callback')
     def auth_slack_callback():
-        scopes = ["channels:read", "chat:write", "users:read", "search:read"]
-        slack = OAuth2Session(Config.SLACK_CLIENT_ID, state=stateSlack)
-        token = slack.fetch_token('https://slack.com/api/oauth.v2.access', 
-                                client_secret=Config.SLACK_CLIENT_SECRET, 
-                                scope = scopes,
-                                authorization_response=request.url)
-        session['slack_token'] = token
-        return jsonify(token)
-    
+        if 'user_id' not in session:
+            return jsonify({"error": "Usuario no autenticado"}), 401
+
+        user_id = session['user_id']
+        slack = OAuth2Session(Config.SLACK_CLIENT_ID, redirect_uri='https://neuron-hyper.vercel.app/auth/slack/callback')
+        try:
+            token = slack.fetch_token(
+                'https://slack.com/api/oauth.v2.access',
+                client_secret=Config.SLACK_CLIENT_SECRET,
+                authorization_response=request.url
+            )
+
+            mongo.db.usuarios.update_one(
+                {"_id": ObjectId(user_id)},
+                {"$push": {"integrations": {"platform": "slack", "token": token}}}
+            )
+
+            return jsonify({"message": "Integración de Slack guardada exitosamente", "integration": token}), 200
+        except Exception as e:
+            return jsonify({"error": f"Error al procesar el token de Slack: {str(e)}"}), 500
+
+
     def to_ascii(text):
         normalized_text = unicodedata.normalize('NFD', text)
         ascii_text = ''.join(

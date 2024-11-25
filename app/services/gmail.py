@@ -15,7 +15,7 @@ def auth_gmail():
     ]
 
     gmail = OAuth2Session(Config.GMAIL_CLIENT_ID, 
-                          redirect_uri='https://jk6rq3rx-5000.use2.devtunnels.ms/auth/gmail/callback',
+                          redirect_uri='https://neuron-hyper.vercel.app/auth/gmail/callback',
                           scope=scope)
 
     authorization_url, state = gmail.authorization_url('https://accounts.google.com/o/oauth2/auth',
@@ -30,7 +30,7 @@ def auth_gmail_callback():
         return jsonify({"error": "Estado de OAuth faltante en la sesión"}), 400
 
     gmail = OAuth2Session(Config.GMAIL_CLIENT_ID, state=session['gmail_state'], 
-                          redirect_uri='https://jk6rq3rx-5000.use2.devtunnels.ms/auth/gmail/callback')
+                          redirect_uri='https://neuron-hyper.vercel.app/auth/gmail/callback')
     try:
         token = gmail.fetch_token('https://accounts.google.com/o/oauth2/token',
                                   client_secret=Config.GMAIL_CLIENT_SECRET,

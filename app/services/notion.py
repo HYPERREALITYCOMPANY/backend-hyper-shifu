@@ -11,7 +11,7 @@ def notion_auth():
         notion_auth_url = "https://api.notion.com/v1/oauth/authorize"
         query_params = {
             'client_id': Config.NOTION_CLIENT_ID,
-            'redirect_uri': "https://jk6rq3rx-5000.use2.devtunnels.ms/notion/callback",
+            'redirect_uri': "https://neuron-hyper.vercel.app/notion/callback",
             'response_type': 'code',
         }
         return redirect(f"{notion_auth_url}?{urlencode(query_params)}")
@@ -29,7 +29,7 @@ def notion_callback():
         token_data = {
             'grant_type': 'authorization_code',
             'code': code,
-            'redirect_uri': "https://jk6rq3rx-5000.use2.devtunnels.ms/notion/callback",
+            'redirect_uri': "https://neuron-hyper.vercel.app/notion/callback",
         }
 
         client_credentials = f"{Config.NOTION_CLIENT_ID}:{Config.NOTION_CLIENT_SECRET}"

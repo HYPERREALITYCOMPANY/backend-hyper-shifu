@@ -133,7 +133,7 @@ def setup_routes(app, mongo):
             "tickets"
         ]
         hubspot = OAuth2Session(Config.HUBSPOT_CLIENT_ID, 
-                                redirect_uri='https://jk6rq3rx-5000.use2.devtunnels.ms/auth/hubspot/callback', 
+                                redirect_uri='https://neuron-hyper.vercel.app/auth/hubspot/callback', 
                                 scope=scope)
         authorization_url, state = hubspot.authorization_url('https://app.hubspot.com/oauth/authorize')
         session['hubspot_state'] = state
@@ -154,7 +154,7 @@ def setup_routes(app, mongo):
                 'grant_type': 'authorization_code',
                 'client_id': Config.HUBSPOT_CLIENT_ID,
                 'client_secret': Config.HUBSPOT_CLIENT_SECRET,
-                'redirect_uri': 'https://jk6rq3rx-5000.use2.devtunnels.ms/auth/hubspot/callback',
+                'redirect_uri': 'https://neuron-hyper.vercel.app/auth/hubspot/callback',
                 'code': code
             }
             headers = {'Content-Type': 'application/x-www-form-urlencoded'}
@@ -181,7 +181,7 @@ def setup_routes(app, mongo):
         ]
         
         outlook = OAuth2Session(Config.OUTLOOK_CLIENT_ID, 
-                                redirect_uri="https://jk6rq3rx-5000.use2.devtunnels.ms/auth/outlook/callback", 
+                                redirect_uri="https://neuron-hyper.vercel.app/auth/outlook/callback", 
                                 scope=MICROSOFT_OUTLOOK_SCOPE)
         
         authorization_url, state = outlook.authorization_url("https://login.microsoftonline.com/common/oauth2/v2.0/authorize", access_type="online", prompt="consent")
@@ -193,7 +193,7 @@ def setup_routes(app, mongo):
     def auth_outlook_callback():
         outlook = OAuth2Session(Config.OUTLOOK_CLIENT_ID, 
                                 state=session.get('outlook_state'), 
-                                redirect_uri="https://jk6rq3rx-5000.use2.devtunnels.ms/auth/outlook/callback")
+                                redirect_uri="https://neuron-hyper.vercel.app/auth/outlook/callback")
         try:
             token = outlook.fetch_token("https://login.microsoftonline.com/common/oauth2/v2.0/token",
                                         client_secret=Config.OUTLOOK_CLIENT_SECRET,
@@ -216,7 +216,7 @@ def setup_routes(app, mongo):
     @app.route('/auth/slack')
     def auth_slack():
         scopes = ["channels:read", "chat:write", "users:read"]
-        slack = OAuth2Session(Config.SLACK_CLIENT_ID, redirect_uri='https://jk6rq3rx-5000.use2.devtunnels.ms/auth/slack/callback', scope=scopes)
+        slack = OAuth2Session(Config.SLACK_CLIENT_ID, redirect_uri='https://neuron-hyper.vercel.app/auth/slack/callback', scope=scopes)
         authorization_url, state = slack.authorization_url('https://slack.com/oauth/v2/authorize')
         session['oauth_state'] = stateSlack   # Almacena el estado en la sesión
         print(f"Estado almacenado en la sesión: {state}")  # Debug

@@ -19,6 +19,7 @@ def notion_auth():
         return redirect(f"{notion_auth_url}?{urlencode(query_params)}")
 
 def notion_callback(mongo, idUser):
+    usuario = mongo.db.usuarios.find_one({"_id": idUser})
     try:
         error = request.args.get('error')
         if error:
@@ -60,7 +61,7 @@ def notion_callback(mongo, idUser):
         if not access_token:
             return jsonify({"error": "No se pudo obtener el token de acceso"}), 400
         mongo.db.usuarios.update_one(
-            {"_id": ObjectId(idUser)},
+            {"_id": usuario._id},
             {"$push": {"integrations": {"platform": "notion", "token": access_token_data}}}
         )
 

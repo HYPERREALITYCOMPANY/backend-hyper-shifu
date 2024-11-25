@@ -16,6 +16,9 @@ def notion_auth():
             'redirect_uri': "https://neuron-hyper.vercel.app/notion/callback",
             'response_type': 'code',
         }
+        auth_url = f"{notion_auth_url}?{urlencode(query_params)}"
+        print(f"Auth URL: {auth_url}")
+
         return redirect(f"{notion_auth_url}?{urlencode(query_params)}")
 
 def notion_callback(mongo, idUser):
@@ -59,6 +62,7 @@ def notion_callback(mongo, idUser):
             return jsonify({"error": "Error al obtener el token de Notion", "details": response.json()}), response.status_code
 
         access_token_data = response.json()
+        print(f"Access token: {access_token_data}")
         access_token = access_token_data.get('access_token')
         if not access_token:
             return jsonify({"error": "No se pudo obtener el token de acceso"}), 400

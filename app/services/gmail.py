@@ -22,7 +22,7 @@ def auth_gmail():
                                                        access_type="online", prompt="consent")
     session['gmail_state'] = state
 
-    return redirect(authorization_url)
+    return jsonify({"authorizationUrl": authorization_url})
 
 
 def auth_gmail_callback():

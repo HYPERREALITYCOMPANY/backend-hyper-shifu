@@ -24,6 +24,7 @@ openai.api_key=Config.CHAT_API_KEY
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 def setup_routes(app, mongo):
     stateSlack = ""
+    idUser = ""
     notion_bp = Blueprint('notion', __name__)
     @app.route('/')
     def home():
@@ -76,7 +77,7 @@ def setup_routes(app, mongo):
             return jsonify({"error": "Credenciales incorrectas"}), 401
 
         session['user_id'] = str(usuario['_id'])
-        print(session['user_id'])
+        idUser = str(usuario['_id'])
         return jsonify({"message": "Inicio de sesión exitoso", "user_id": session['user_id']}), 200
         
     @app.route('/check_integrations', methods=['GET'])
@@ -253,7 +254,7 @@ def setup_routes(app, mongo):
 
     @app.route('/notion/callback')
     def auth_notion_callback():
-        return service_auth_notion_callback(mongo)
+        return service_auth_notion_callback(mongo, idUser)
     
     @app.route('/auth/slack')
     def auth_slack():

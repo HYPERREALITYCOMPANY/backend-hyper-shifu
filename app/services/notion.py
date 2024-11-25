@@ -18,8 +18,8 @@ def notion_auth():
         }
         return redirect(f"{notion_auth_url}?{urlencode(query_params)}")
 
-def notion_callback(mongo):
-    if 'user_id' not in session:
+def notion_callback(mongo, idUser):
+    if  not idUser:
         return jsonify({"error": "Usuario no autenticado"}), 401
     print("hola")
 
@@ -63,10 +63,8 @@ def notion_callback(mongo):
         access_token = access_token_data.get('access_token')
         if not access_token:
             return jsonify({"error": "No se pudo obtener el token de acceso"}), 400
-
-        user_id = "674405f911a09ad979c5c6ec"
         mongo.db.usuarios.update_one(
-            {"_id": ObjectId(user_id)},
+            {"_id": ObjectId(idUser)},
             {"$push": {"integrations": {"platform": "notion", "token": access_token_data}}}
         )
 

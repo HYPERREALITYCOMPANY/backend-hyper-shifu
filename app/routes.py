@@ -31,11 +31,9 @@ def setup_routes(app, mongo):
 
     @app.route('/register', methods=['POST'])
     def register_user():
-        request_data = request.get_json()  # Esto contiene los headers y el body
+        request_data = request.get_json() 
         if not request_data or "body" not in request_data:
             return jsonify({"error": "El cuerpo de la solicitud es inválido"}), 400
-
-        # Decodificar el 'body'
         try:
             data = json.loads(request_data["body"])
         except json.JSONDecodeError:
@@ -59,7 +57,6 @@ def setup_routes(app, mongo):
             "integrations": []  # Inicialmente vacío
         }
 
-        # Verificar si la colección 'usuarios' existe y crearla si no
         if 'usuarios' not in mongo.db.list_collection_names():
             mongo.db.create_collection('usuarios')
 
@@ -144,16 +141,13 @@ def setup_routes(app, mongo):
 
     @app.route('/auth/hubspot/callback')
     def auth_hubspot_callback():
-        # Validar que el parámetro 'code' está presente
         code = request.args.get('code')
         if not code:
             return jsonify({"error": "El parámetro 'code' falta en la respuesta"}), 400
 
-        # Validar que el estado recibido coincide
         if 'hubspot_state' not in session or session['hubspot_state'] != request.args.get('state'):
             return jsonify({"error": "El estado recibido no coincide con el enviado"}), 400
 
-        # Solicitar el token
         try:
             token_url = 'https://api.hubapi.com/oauth/v1/token'
             payload = {
@@ -165,15 +159,12 @@ def setup_routes(app, mongo):
             }
             headers = {'Content-Type': 'application/x-www-form-urlencoded'}
 
-            # Enviar solicitud para obtener el token
             response = requests.post(token_url, data=payload, headers=headers)
             token_data = response.json()
 
-            # Verificar si hay errores en la respuesta
             if response.status_code != 200:
                 return jsonify({"error": "Error al obtener el token", "details": token_data}), response.status_code
 
-            # Guardar el token en la sesión
             session['hubspot_token'] = token_data
             return jsonify(token_data)
 
@@ -186,7 +177,7 @@ def setup_routes(app, mongo):
             "https://graph.microsoft.com/Mail.Read",
             "https://graph.microsoft.com/Mail.Send",
             "https://graph.microsoft.com/User.Read",
-            "https://graph.microsoft.com/Files.ReadWrite"  # Este es el scope para acceder a OneDrive
+            "https://graph.microsoft.com/Files.ReadWrite"
         ]
         
         outlook = OAuth2Session(Config.OUTLOOK_CLIENT_ID, 
@@ -210,7 +201,6 @@ def setup_routes(app, mongo):
             
             session['outlook_token'] = token
             
-            # Puedes guardar el token o hacer alguna llamada a la API para obtener información del usuario
             return jsonify(token)
         except Exception as e:
             return jsonify({"error": f"Error al obtener el token: {str(e)}"}), 500
@@ -444,41 +434,34 @@ def setup_routes(app, mongo):
     
     @app.route('/search/outlook', methods=['GET'])
     def search_outlook():
-        # Obtener el token de acceso de la sesión
         access_token = session.get('outlook_token')
         
         if not access_token:
             return jsonify({"error": "Usuario no autenticado en Outlook"}), 401
-        
-        # Verificar si el token ha expirado
+
         expires_at = session.get('expires_at')
         if expires_at and datetime.now().timestamp() > expires_at:
             return jsonify({"error": "El token de acceso ha expirado, por favor vuelve a iniciar sesión."}), 401
 
-        # Obtener la consulta de búsqueda desde los parámetros de la URL
         query = request.args.get('query')
         if not query:
             return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
-        
-        # Definir la URL y los encabezados para la solicitud
+
         url = 'https://graph.microsoft.com/v1.0/me/messages'
         headers = {
             'Authorization': f"Bearer {access_token['access_token']}",
             'Content-Type': 'application/json'
         }
         
-        # Realizar la solicitud GET para obtener los correos electrónicos
         try:
             response = requests.get(url, headers=headers, params={'$search': query})
-            response.raise_for_status()  # Lanzar error si la respuesta no es exitosa
+            response.raise_for_status()
         except requests.exceptions.RequestException as e:
             return jsonify({"error": "Error al buscar en Outlook", "details": str(e)}), 500
 
-        # Procesar la respuesta exitosa
         results = response.json().get('value', [])
         search_results = []
 
-        # Filtrar los resultados y extraer solo la información relevante
         for result in results:
             body = to_ascii(result.get("bodyPreview"))
             result_info = {
@@ -542,7 +525,7 @@ def setup_routes(app, mongo):
                         results.append({
                             "id": assoc_id,
                             "name": name,
-                            "email": properties.get("email", "N/A")  # Asegurando que se obtenga el teléfono
+                            "email": properties.get("email", "N/A") 
                         })
                     elif object_type == "companies":
                         # Para las compañías, solo se usa 'name'
@@ -572,15 +555,15 @@ def setup_routes(app, mongo):
         endpoints = {
             "contacts": {
                 "url": "https://api.hubapi.com/crm/v3/objects/contacts/search",
-                "propertyName": "firstname"  # Campo usado para buscar en contactos
+                "propertyName": "firstname"
             },
             "companies": {
                 "url": "https://api.hubapi.com/crm/v3/objects/companies/search",
-                "propertyName": "name"  # Campo usado para buscar en empresas
+                "propertyName": "name" 
             },
             "deals": {
                 "url": "https://api.hubapi.com/crm/v3/objects/deals/search",
-                "propertyName": "dealname"  # Campo usado para buscar en acuerdos
+                "propertyName": "dealname" 
             }
         }
 
@@ -594,7 +577,6 @@ def setup_routes(app, mongo):
             url = config["url"]
             property_name = config["propertyName"]
 
-            # Configurar el cuerpo de la solicitud
             data = {
                 "filters": [
                     {
@@ -638,12 +620,8 @@ def setup_routes(app, mongo):
                                 result_info["owner"] = get_owner_name(properties.get("hubspot_owner_id"), access_token['access_token'], "name")
                                 result_info["stage"] = properties.get("dealstage", "N/A")
                                 result_info["name"] = properties.get("dealname", "N/A")
-                                
-                                # Obtener el precio de la empresa asociada al negocio (si aplica)
-                                price = properties.get("price", "N/A")  # Asegúrate de que 'price' sea un campo válido
+                                price = properties.get("price", "N/A")
                                 result_info["price"] = price
-
-                                # Obtener asociaciones con contactos y compañías
                                 contacts_assoc = get_associations("deals", result_info["id"], "contacts", access_token['access_token'])
                                 companies_assoc = get_associations("deals", result_info["id"], "companies", access_token['access_token'])
                                 result_info["associations"] = {
@@ -657,21 +635,17 @@ def setup_routes(app, mongo):
                                 else:
                                     result_info["name"] = "N/A"
                                 
-                                # Obtener la empresa asociada al contacto
                                 company_assoc = get_associations("contacts", result_info["id"], "companies", access_token['access_token'])
                                 company_info = fetch_associated_details(company_assoc, "companies", access_token['access_token'])
-                                
-                                # Actualizar el campo 'company' con el nombre de la empresa
+
                                 if company_info:
                                     result_info["company"] = company_info[0].get("name", "N/A")
                                 else:
                                     result_info["company"] = "N/A"
 
                             elif object_type == "companies":
-                                # Mostrar el nombre de la compañía en el campo 'company'
                                 result_info["company"] = properties.get("name", "N/A")
-                                # Si existe un campo 'price' en las compañías, agregarlo
-                                result_info["price"] = properties.get("price", "N/A")  # Asegúrate de que 'price' sea válido
+                                result_info["price"] = properties.get("price", "N/A") 
 
                             formatted_results.append(result_info)
 
@@ -753,13 +727,12 @@ def setup_routes(app, mongo):
 
         hubspot_results = ""
 
-        # Verificar si hay datos en "hubspot"
         hubspot_data = search_results.get("hubspot", {})
 
         # Verificar si hay datos en contactos
         if "contacts" in hubspot_data:
             contacts = hubspot_data["contacts"]
-            if isinstance(contacts, list) and contacts:  # Verificar si es una lista
+            if isinstance(contacts, list) and contacts:
                 hubspot_results += "\n### Contacts:\n"
                 for contact in contacts:
                     name = contact.get('name', 'N/A')
@@ -768,7 +741,7 @@ def setup_routes(app, mongo):
                     company = contact.get('company', 'N/A')
                     createdate = contact.get('createdate', 'N/A')
                     hubspot_results += f"Nombre: {name}\nCorreo: {email}\nTeléfono: {phone}\nCompañía: {company}\nFecha de creación: {createdate}\n\n"
-            else:  # Si no es una lista, manejar como mensaje
+            else: 
                 hubspot_results += f"No se encontraron contactos: {contacts.get('message', 'Información no disponible')}.\n"
 
         # Verificar si hay datos en compañías
@@ -789,7 +762,7 @@ def setup_routes(app, mongo):
         # Verificar si hay datos en negocios (deals)
         if "deals" in hubspot_data:
             deals = hubspot_data["deals"]
-            if isinstance(deals, list) and deals:  # Verificar si es una lista
+            if isinstance(deals, list) and deals:
                 hubspot_results += "\n### Deals:\n"
                 for deal in deals:
                     name = deal.get('name', 'N/A')
@@ -798,14 +771,13 @@ def setup_routes(app, mongo):
                     owner = deal.get('owner', 'N/A')
                     createdate = deal.get('createdate', 'N/A')
                     hubspot_results += f"Negocio: {name}\nMonto: {price}\nEstado: {stage}\nPropietario: {owner}\nFecha de cierre: {createdate}\n"
-            else:  # Si no es una lista, manejar como mensaje
+            else:
                 hubspot_results += f"No se encontraron negocios: {deals.get('message', 'Información no disponible')}.\n"
 
         # Si no hay resultados de HubSpot, mostrar mensaje
         if not hubspot_results.strip():
             hubspot_results = "No se encontraron resultados relacionados en HubSpot."
 
-        # Finalmente, la respuesta completa
         prompt = f"""Resultados de búsqueda para la consulta: "{query}"
 
         ### Gmail:
@@ -999,29 +971,24 @@ def setup_routes(app, mongo):
             if expires_at and datetime.now().timestamp() > expires_at:
                 return jsonify({"error": "El token de acceso ha expirado, por favor vuelve a iniciar sesión."}), 401
 
-            # Obtener la consulta de búsqueda desde los parámetros de la URL
             query = request.args.get('query')
             if not query:
                 return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
-            
-            # Definir la URL y los encabezados para la solicitud
+
             url = 'https://graph.microsoft.com/v1.0/me/messages'
             headers = {
                 'Authorization': f"Bearer {access_token['access_token']}",
                 'Content-Type': 'application/json'
             }
             
-            # Realizar la solicitud GET para obtener los correos electrónicos
             try:
                 response = requests.get(url, headers=headers, params={'$search': query})
-                response.raise_for_status()  # Lanzar error si la respuesta no es exitosa
+                response.raise_for_status()
             except requests.exceptions.RequestException as e:
                 return jsonify({"error": "Error al buscar en Outlook", "details": str(e)}), 500
 
-            # Procesar la respuesta exitosa
             results_outlook = response.json().get('value', [])
             search_results_outlook = []
-            # Filtrar los resultados y extraer solo la información relevante
             for result in results_outlook:
                 body = to_ascii(result.get("bodyPreview"))
                 result_info = {
@@ -1041,9 +1008,8 @@ def setup_routes(app, mongo):
         if hubspot_token:
             hubspot_data = search_hubspot()
             print(hubspot_data)
-            # Validar si 'hubspot_data' es serializable a JSON
             try:
-                json.dumps(hubspot_data)  # Intentamos convertir a JSON
+                json.dumps(hubspot_data)
                 results['hubspot'] = hubspot_data
             except TypeError as e:
                 results['hubspot'] = {"error": f"HubSpot data is not serializable: {str(e)}"}

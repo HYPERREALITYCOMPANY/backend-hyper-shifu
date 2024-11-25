@@ -78,7 +78,6 @@ def setup_routes(app, mongo):
 
         session['user_id'] = str(usuario['_id'])
         idUser = str(usuario['_id'])
-        print(idUser)
         return jsonify({"message": "Inicio de sesión exitoso", "user_id": session['user_id']}), 200
         
     @app.route('/check_integrations', methods=['GET'])
@@ -109,7 +108,7 @@ def setup_routes(app, mongo):
         user_id = session.get('user_id')  # Obtenemos el id de sesión
         if not user_id:
             return jsonify({"error": "Sesión no encontrada"}), 401
-
+        idUser = user_id
         return jsonify({"message": "ID de usuario asignado correctamente", "user_id": user_id}), 200
 
 

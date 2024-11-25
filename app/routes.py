@@ -99,17 +99,15 @@ def setup_routes(app, mongo):
 
     @app.route('/assign_user_id', methods=['POST'])
     def assign_user_id():
-        data = request.get_json()
+        id_user = request.args.get('idUser')  # Obtenemos el parámetro de consulta
         
-        # Validamos el token de sesión o encabezado de autorización
-        if 'Authorization' not in request.headers:
-            return jsonify({"error": "No autorizado"}), 401
+        if not id_user:
+            return jsonify({"error": "ID de usuario no proporcionado"}), 400
         
-        user_id = session.get('user_id')  # Obtenemos el id de sesión
-        if not user_id:
-            return jsonify({"error": "Sesión no encontrada"}), 401
-        idUser = user_id
-        return jsonify({"message": "ID de usuario asignado correctamente", "user_id": user_id}), 200
+        # Aquí podrías realizar validaciones o asignar este ID a una sesión, si fuera necesario
+        idUser = id_user  # Ejemplo: almacenar el ID en la sesión
+
+        return jsonify({"message": "ID de usuario asignado correctamente", "user_id": id_user}), 200
 
 
     @app.route('/auth/gmail')

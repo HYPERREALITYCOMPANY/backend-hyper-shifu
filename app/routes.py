@@ -97,6 +97,17 @@ def setup_routes(app, mongo):
         
         return jsonify({"message": "Usuario con integraciones", "integrations": usuario['integrations']}), 200
 
+    @app.route('/get_integrations', methods=['GET'])
+    def get_integrations():
+        user_email = request.args.get("email")
+        
+        user = mongo.db.usuarios.find_one({"correo": user_email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+
+        # Devolvemos las integraciones que tiene el usuario
+        return jsonify({"integrations": user.get("integrations", {})}), 200
+
 
     @app.route('/add_integration', methods=['POST'])
     def add_integration():
@@ -116,15 +127,14 @@ def setup_routes(app, mongo):
             return jsonify({"error": "Usuario no encontrado"}), 404
 
         # Actualizar el campo de integraciones
-        # Si `integrations` es una lista de diccionarios, puedes hacer lo siguiente:
-        integrations = {item['integration_name']: item['token'] for item in integrations}
-
-        mongo.usuarios.update_one(
+        # Verifica si la integración ya existe, de lo contrario, la agrega
+        mongo.db.usuarios.update_one(
             {"correo": user_email},
-            {"$set": {"integrations": integrations}}
+            {"$set": {f"integrations.{integration_name}": token}}
         )
 
         return jsonify({"message": "Integración añadida exitosamente"}), 200
+
 
     @app.route('/assign_user_id', methods=['POST'])
     def assign_user_id():
@@ -637,8 +647,7 @@ def setup_routes(app, mongo):
 
 
     @app.route('/search/hubspot', methods=['GET'])
-    def search_hubspot():
-        access_token = session.get('hubspot_token')
+    def search_hubspot(access_token):
 
         if not access_token or "access_token" not in access_token:
             return jsonify({"error": "Usuario no autenticado en HubSpot"}), 401
@@ -666,7 +675,7 @@ def setup_routes(app, mongo):
         }
 
         headers = {
-            'Authorization': f"Bearer {access_token['access_token']}",
+            'Authorization': f"Bearer {'access_token'}",
             'Content-Type': 'application/json'
         }
 
@@ -763,29 +772,40 @@ def setup_routes(app, mongo):
 
     @app.route('/askIa', methods=['GET'])
     def ask():
+        # Obtener los parámetros 'email' y 'query' de la solicitud
+        email = request.args.get('email')
         query = request.args.get('query')
-        search_results = search_all()
-        if not query:
-            return jsonify({"error": "No se proporcionó una consulta de búsqueda"}), 400
+
+        # Verificar si se proporcionaron ambos parámetros
+        if not email or not query:
+            return jsonify({"error": "Se deben proporcionar tanto el email como la consulta de búsqueda"}), 400
+
+        # Obtener los resultados de búsqueda usando el email
+        search_results = search_all(email)
+
+        # Si no se obtienen resultados de búsqueda, devolver un error
         if not search_results:
             return jsonify({"error": "No se proporcionaron resultados de búsqueda"}), 400
+
         try:
-            if isinstance(search_results.response, list) and isinstance(search_results.response[0], bytes):
-                search_results_json = json.loads(search_results.response[0].decode('utf-8'))
-            elif isinstance(search_results.response, str):
-                search_results_json = json.loads(search_results.response)
+            # Comprobar si la respuesta es una lista de bytes (o cadena) y convertirla en JSON
+            if isinstance(search_results['response'], list) and isinstance(search_results['response'][0], bytes):
+                search_results_json = json.loads(search_results['response'][0].decode('utf-8'))
+            elif isinstance(search_results['response'], str):
+                search_results_json = json.loads(search_results['response'])
             else:
                 return jsonify({"error": "Formato de respuesta no soportado"}), 500
         except json.JSONDecodeError:
             return jsonify({"error": "La respuesta de búsqueda no es un JSON válido"}), 500
 
+        # Generar el prompt para la IA usando la query y los resultados de búsqueda
         prompt = generate_prompt(query, search_results_json)
 
-
+        # Realizar la solicitud a OpenAI para obtener la respuesta de la IA
         response = openai.ChatCompletion.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "Eres un asistente útil el cual esta conectada con diversas aplicaciones y automatizaras el proceso de buscar informacion"},
+                {"role": "system", "content": "Eres un asistente útil el cual está conectado con diversas aplicaciones y automatizarás el proceso de buscar información en base a la query que se te envie, tomando toda la información necesaria"},
                 {"role": "user", "content": prompt}
             ],
             max_tokens=4096
@@ -793,6 +813,7 @@ def setup_routes(app, mongo):
 
         ia_response = response.choices[0].message['content'].strip()
 
+        # Retornar la respuesta de la IA en formato JSON
         return jsonify({
             "response": to_ascii(ia_response)
         })
@@ -803,12 +824,16 @@ def setup_routes(app, mongo):
             f"De: {email['from']}\nFecha: {email['date']}\nAsunto: {email['subject']}\nCuerpo: {email['body']}\n"
             for email in search_results.get('gmail', []) if isinstance(email, dict)
         ])
+        if not gmail_results:
+            gmail_results = "No se encontraron correos relacionados en Gmail."
 
         # Slack Results
         slack_results = "\n".join([ 
             f"En el canal '{msg['channel']}', el usuario '{msg['user']}' dijo:\n'{msg['text']}'\nFecha: {msg['ts']}\n"
             for msg in search_results.get('slack', []) if isinstance(msg, dict)
         ])
+        if not slack_results:
+            slack_results = "No se encontraron mensajes relacionados en Slack."
 
         # Notion Results
         notion_results = "\n".join([ 
@@ -816,15 +841,19 @@ def setup_routes(app, mongo):
             f"URL: {page['url']}\nPropiedades: {json.dumps(page['properties'], ensure_ascii=False)}\n"
             for page in search_results.get('notion', []) if isinstance(page, dict)
         ])
+        if not notion_results:
+            notion_results = "No se encontraron notas o registros relacionados en Notion."
 
         # Outlook Results
         outlook_results = "\n".join([ 
             f"De: {email['sender']}\nFecha: {email['receivedDateTime']}\nAsunto: {email['subject']}\nCuerpo: {email['bodyPreview']}\n"
             for email in search_results.get('outlook', []) if isinstance(email, dict)
         ])
+        if not outlook_results:
+            outlook_results = "No se encontraron correos relacionados en Outlook."
 
+        # HubSpot Results
         hubspot_results = ""
-
         hubspot_data = search_results.get("hubspot", {})
 
         # Verificar si hay datos en contactos
@@ -840,7 +869,7 @@ def setup_routes(app, mongo):
                     createdate = contact.get('createdate', 'N/A')
                     hubspot_results += f"Nombre: {name}\nCorreo: {email}\nTeléfono: {phone}\nCompañía: {company}\nFecha de creación: {createdate}\n\n"
             else: 
-                hubspot_results += f"No se encontraron contactos: {contacts.get('message', 'Información no disponible')}.\n"
+                hubspot_results += "No se encontraron contactos relacionados en HubSpot.\n"
 
         # Verificar si hay datos en compañías
         if "companies" in hubspot_data:
@@ -870,25 +899,26 @@ def setup_routes(app, mongo):
                     createdate = deal.get('createdate', 'N/A')
                     hubspot_results += f"Negocio: {name}\nMonto: {price}\nEstado: {stage}\nPropietario: {owner}\nFecha de cierre: {createdate}\n"
             else:
-                hubspot_results += f"No se encontraron negocios: {deals.get('message', 'Información no disponible')}.\n"
+                hubspot_results += "No se encontraron negocios relacionados en HubSpot.\n"
 
         # Si no hay resultados de HubSpot, mostrar mensaje
         if not hubspot_results.strip():
             hubspot_results = "No se encontraron resultados relacionados en HubSpot."
 
+        # Construcción del prompt
         prompt = f"""Resultados de búsqueda para la consulta: "{query}"
 
         ### Gmail:
-        {gmail_results if gmail_results else "No se encontraron correos relacionados en Gmail."}
+        {gmail_results}
 
         ### Notion:
-        {notion_results if notion_results else "No se encontraron notas o registros relacionados en Notion."}
+        {notion_results}
 
         ### Slack:
-        {slack_results if slack_results else "No se encontraron mensajes relacionados en Slack."}
+        {slack_results}
 
         ### Outlook:
-        {outlook_results if outlook_results else "No se encontraron correos relacionados en Outlook."}
+        {outlook_results}
 
         ### HubSpot:
         {hubspot_results}
@@ -902,6 +932,7 @@ def setup_routes(app, mongo):
         """
 
         return prompt
+
 
     def clean_body(body):
         normalized_text = unicodedata.normalize('NFD', body)
@@ -924,11 +955,11 @@ def setup_routes(app, mongo):
         return soup.get_text()
 
     @app.route('/search/all', methods=['GET'])
-    def search_all():
+    def search_all(email):
         query = request.args.get('query')
         if not query:
             return jsonify({"error": "No se proporcionó una consulta de búsqueda"}), 400
-
+        
         two_weeks_ago = datetime.now() - timedelta(weeks=2)
         two_weeks_ago_str = two_weeks_ago.strftime('%Y/%m/%d')
         results = {
@@ -939,8 +970,11 @@ def setup_routes(app, mongo):
             "hubspot": [],
         }
 
+        user = mongo.db.usuarios.find_one({'correo': email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
         # Búsqueda en Gmail
-        gmail_token = session.get('gmail_token')
+        gmail_token = user.get('integrations', {}).get('Gmail', None)
         if gmail_token:
             headers = {'Authorization': f'Bearer {gmail_token["access_token"]}'}
 
@@ -990,7 +1024,7 @@ def setup_routes(app, mongo):
             results['gmail'] = {"error": "Sesión no ingresada en Gmail"}
 
         # Búsqueda en Slack
-        slack_token = session.get('slack_token')
+        slack_token = user.get('integrations', {}).get('Slack', None)
         if slack_token:
             url = 'https://slack.com/api/search.messages'
             headers = {
@@ -1013,7 +1047,7 @@ def setup_routes(app, mongo):
                 })
 
         # Búsqueda en Notion
-        notion_token = session.get('access_token')
+        notion_token = user.get('integrations', {}).get('Notion', None)
         if notion_token:
             headers = {
                 'Authorization': f'Bearer {notion_token}',
@@ -1063,8 +1097,8 @@ def setup_routes(app, mongo):
             results['notion'] = {"error": "Sesión no ingresada en Notion"}
 
         # Búsqueda en Outlook
-        access_token = session.get('outlook_token')
-        if access_token:
+        outlook_token = user.get('integrations', {}).get('Outlook', None)
+        if outlook_token:
             expires_at = session.get('expires_at')
             if expires_at and datetime.now().timestamp() > expires_at:
                 return jsonify({"error": "El token de acceso ha expirado, por favor vuelve a iniciar sesión."}), 401
@@ -1075,7 +1109,7 @@ def setup_routes(app, mongo):
 
             url = 'https://graph.microsoft.com/v1.0/me/messages'
             headers = {
-                'Authorization': f"Bearer {access_token['access_token']}",
+                'Authorization': f"Bearer {outlook_token}",
                 'Content-Type': 'application/json'
             }
             
@@ -1102,9 +1136,9 @@ def setup_routes(app, mongo):
         else:
             results['outlook'] = {"error": "Sesión no ingresada en Outlook"}
 
-        hubspot_token = session.get('hubspot_token')
+        hubspot_token = user.get('integrations', {}).get('Hubspot', None)
         if hubspot_token:
-            hubspot_data = search_hubspot()
+            hubspot_data = search_hubspot(hubspot_token)
             print(hubspot_data)
             try:
                 json.dumps(hubspot_data)

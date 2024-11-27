@@ -7,6 +7,7 @@ import base64
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 import unicodedata
+from requests.models import Response
 import re
 import json
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -775,43 +776,52 @@ def setup_routes(app, mongo):
         # Obtener los parámetros 'email' y 'query' de la solicitud
         email = request.args.get('email')
         query = request.args.get('query')
+        print(email)
+        print(query)
 
-        # Verificar si se proporcionaron ambos parámetros
+        # Validar si se proporcionaron ambos parámetros
         if not email or not query:
             return jsonify({"error": "Se deben proporcionar tanto el email como la consulta de búsqueda"}), 400
 
-        # Obtener los resultados de búsqueda usando el email
-        search_results = search_all(email)
-
-        # Si no se obtienen resultados de búsqueda, devolver un error
-        if not search_results:
-            return jsonify({"error": "No se proporcionaron resultados de búsqueda"}), 400
-
+        # Llamar a la función de búsqueda usando el email proporcionado
         try:
-            # Comprobar si la respuesta es una lista de bytes (o cadena) y convertirla en JSON
-            if isinstance(search_results['response'], list) and isinstance(search_results['response'][0], bytes):
-                search_results_json = json.loads(search_results['response'][0].decode('utf-8'))
-            elif isinstance(search_results['response'], str):
-                search_results_json = json.loads(search_results['response'])
-            else:
-                return jsonify({"error": "Formato de respuesta no soportado"}), 500
-        except json.JSONDecodeError:
-            return jsonify({"error": "La respuesta de búsqueda no es un JSON válido"}), 500
+            search_results = search_all(email)
+            print("search_results obtenidos:", search_results.json)  # Verificar si los resultados son correctos
+        except Exception as e:
+            # Si ocurre un error al buscar los resultados
+            return jsonify({"error": f"Error al obtener resultados de búsqueda: {str(e)}"}), 500
 
+        # Asegurarse de que search_results es un diccionario y contiene datos
+        if isinstance(search_results, dict):
+            if 'gmail' not in search_results or not search_results['gmail']:
+                return jsonify({"error": "No se encontraron correos relacionados con el email proporcionado"}), 404
+        else:
+            return jsonify({"error": "La respuesta de búsqueda no es válida"}), 500
         # Generar el prompt para la IA usando la query y los resultados de búsqueda
-        prompt = generate_prompt(query, search_results_json)
+        prompt = generate_prompt(query, search_results)
+        print(prompt)
 
         # Realizar la solicitud a OpenAI para obtener la respuesta de la IA
-        response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "Eres un asistente útil el cual está conectado con diversas aplicaciones y automatizarás el proceso de buscar información en base a la query que se te envie, tomando toda la información necesaria"},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=4096
-        )
+        try:
+            response = openai.ChatCompletion.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "Eres un asistente útil el cual está conectado con diversas aplicaciones y automatizarás el proceso de buscar información en base a la query que se te envie, tomando toda la información necesaria"},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=4096
+            )
+        except Exception as e:
+            # Manejo de error si ocurre un problema con OpenAI
+            return jsonify({"error": f"Error al contactar con OpenAI: {str(e)}"}), 500
 
+        # Obtener la respuesta de la IA
         ia_response = response.choices[0].message['content'].strip()
+        print(ia_response)
+
+        # Validar que la respuesta de la IA no esté vacía
+        if not ia_response:
+            return jsonify({"error": "La respuesta de la IA está vacía"}), 500
 
         # Retornar la respuesta de la IA en formato JSON
         return jsonify({
@@ -823,40 +833,31 @@ def setup_routes(app, mongo):
         gmail_results = "\n".join([ 
             f"De: {email['from']}\nFecha: {email['date']}\nAsunto: {email['subject']}\nCuerpo: {email['body']}\n"
             for email in search_results.get('gmail', []) if isinstance(email, dict)
-        ])
-        if not gmail_results:
-            gmail_results = "No se encontraron correos relacionados en Gmail."
+        ]) or "No se encontraron correos relacionados en Gmail."
 
         # Slack Results
         slack_results = "\n".join([ 
             f"En el canal '{msg['channel']}', el usuario '{msg['user']}' dijo:\n'{msg['text']}'\nFecha: {msg['ts']}\n"
             for msg in search_results.get('slack', []) if isinstance(msg, dict)
-        ])
-        if not slack_results:
-            slack_results = "No se encontraron mensajes relacionados en Slack."
+        ]) or "No se encontraron mensajes relacionados en Slack."
 
         # Notion Results
         notion_results = "\n".join([ 
             f"Página ID: {page['id']}\nCreada el: {page['created_time']}\nÚltima editada: {page['last_edited_time']}\n"
             f"URL: {page['url']}\nPropiedades: {json.dumps(page['properties'], ensure_ascii=False)}\n"
             for page in search_results.get('notion', []) if isinstance(page, dict)
-        ])
-        if not notion_results:
-            notion_results = "No se encontraron notas o registros relacionados en Notion."
+        ]) or "No se encontraron notas o registros relacionados en Notion."
 
         # Outlook Results
         outlook_results = "\n".join([ 
             f"De: {email['sender']}\nFecha: {email['receivedDateTime']}\nAsunto: {email['subject']}\nCuerpo: {email['bodyPreview']}\n"
             for email in search_results.get('outlook', []) if isinstance(email, dict)
-        ])
-        if not outlook_results:
-            outlook_results = "No se encontraron correos relacionados en Outlook."
+        ]) or "No se encontraron correos relacionados en Outlook."
 
         # HubSpot Results
         hubspot_results = ""
         hubspot_data = search_results.get("hubspot", {})
 
-        # Verificar si hay datos en contactos
         if "contacts" in hubspot_data:
             contacts = hubspot_data["contacts"]
             if isinstance(contacts, list) and contacts:
@@ -871,7 +872,6 @@ def setup_routes(app, mongo):
             else: 
                 hubspot_results += "No se encontraron contactos relacionados en HubSpot.\n"
 
-        # Verificar si hay datos en compañías
         if "companies" in hubspot_data:
             companies = hubspot_data["companies"]
             if isinstance(companies, list) and companies:
@@ -886,7 +886,6 @@ def setup_routes(app, mongo):
             else:
                 hubspot_results += "No se encontraron compañías relacionadas en HubSpot.\n"
 
-        # Verificar si hay datos en negocios (deals)
         if "deals" in hubspot_data:
             deals = hubspot_data["deals"]
             if isinstance(deals, list) and deals:
@@ -902,8 +901,7 @@ def setup_routes(app, mongo):
                 hubspot_results += "No se encontraron negocios relacionados en HubSpot.\n"
 
         # Si no hay resultados de HubSpot, mostrar mensaje
-        if not hubspot_results.strip():
-            hubspot_results = "No se encontraron resultados relacionados en HubSpot."
+        hubspot_results = hubspot_results.strip() or "No se encontraron resultados relacionados en HubSpot."
 
         # Construcción del prompt
         prompt = f"""Resultados de búsqueda para la consulta: "{query}"
@@ -932,6 +930,7 @@ def setup_routes(app, mongo):
         """
 
         return prompt
+
 
 
     def clean_body(body):
@@ -976,7 +975,7 @@ def setup_routes(app, mongo):
         # Búsqueda en Gmail
         gmail_token = user.get('integrations', {}).get('Gmail', None)
         if gmail_token:
-            headers = {'Authorization': f'Bearer {gmail_token["access_token"]}'}
+            headers = {'Authorization': f'Bearer {gmail_token}'}
 
             stopwords = ["mandame", "del", "que", "link", "pasame", "enviame", "brindame", "dame", "me", "paso", "envio", "dijo","dame","toda","la","información", "del"]
             keywords = ' '.join([word for word in query.split() if word.lower() not in stopwords])

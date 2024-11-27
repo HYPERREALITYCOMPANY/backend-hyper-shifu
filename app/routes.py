@@ -97,6 +97,32 @@ def setup_routes(app, mongo):
         
         return jsonify({"message": "Usuario con integraciones", "integrations": usuario['integrations']}), 200
 
+
+    @app.route('/add_integration', methods=['POST'])
+    def add_integration():
+        request_data = request.get_json()
+        user_email = request_data.get("correo")
+        integration_name = request_data.get("integration")
+        token = request_data.get("token")
+
+        if not all([user_email, integration_name, token]):
+            return jsonify({"error": "Faltan campos obligatorios"}), 400
+
+        user = mongo.usuarios.find_one({"correo": user_email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+
+        # Actualizar el campo de integraciones
+        integrations = user.get("integrations", {})
+        integrations[integration_name] = token
+
+        mongo.usuarios.update_one(
+            {"correo": user_email},
+            {"$set": {"integrations": integrations}}
+        )
+
+        return jsonify({"message": "Integración añadida exitosamente"}), 200
+
     @app.route('/assign_user_id', methods=['POST'])
     def assign_user_id():
         id_user = request.args.get('idUser')  # Obtenemos el parámetro de consulta

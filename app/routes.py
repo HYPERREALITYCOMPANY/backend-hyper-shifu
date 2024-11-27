@@ -55,7 +55,7 @@ def setup_routes(app, mongo):
             "apellido": data["apellido"],
             "correo": data["correo"],
             "password": hashed_password,
-            "integrations": []  # Inicialmente vacío
+            "integrations": {} # Inicialmente vacío
         }
 
         if 'usuarios' not in mongo.db.list_collection_names():
@@ -101,20 +101,23 @@ def setup_routes(app, mongo):
     @app.route('/add_integration', methods=['POST'])
     def add_integration():
         request_data = request.get_json()
-        user_email = request_data.get("correo")
+        user_email = request_data.get("email")
+        print(user_email)
         integration_name = request_data.get("integration")
+        print(integration_name)
         token = request_data.get("token")
+        print(token)
 
         if not all([user_email, integration_name, token]):
             return jsonify({"error": "Faltan campos obligatorios"}), 400
 
-        user = mongo.usuarios.find_one({"correo": user_email})
+        user = mongo.db.usuarios.find_one({"correo": user_email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
         # Actualizar el campo de integraciones
-        integrations = user.get("integrations", {})
-        integrations[integration_name] = token
+        # Si `integrations` es una lista de diccionarios, puedes hacer lo siguiente:
+        integrations = {item['integration_name']: item['token'] for item in integrations}
 
         mongo.usuarios.update_one(
             {"correo": user_email},

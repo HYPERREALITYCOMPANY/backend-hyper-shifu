@@ -952,6 +952,75 @@ def setup_routes(app, mongo):
         """Extrae texto del contenido HTML."""
         soup = BeautifulSoup(html_content, 'html.parser')
         return soup.get_text()
+    
+    @app.route('/notion-proxy', methods=['POST'])
+    def notion_proxy():
+        try:
+            # Datos enviados desde el frontend
+            data = request.json
+
+            # Credenciales de cliente codificadas en Base64
+            client_id = data.get('client_id')
+            client_secret = data.get('client_secret')
+            client_credentials = f"{client_id}:{client_secret}"
+            encoded_credentials = base64.b64encode(client_credentials.encode()).decode()
+
+            # Configuración de los encabezados
+            headers = {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Authorization": f"Basic {encoded_credentials}",
+                "Notion-Version": "2022-06-28",
+            }
+
+            # Datos de la solicitud enviados al endpoint de Notion
+            token_data = {
+                "grant_type": "authorization_code",
+                "code": data.get("code"),
+                "redirect_uri": data.get("redirect_uri"),
+            }
+
+            # Realiza la solicitud POST a la API de Notion
+            response = requests.post("https://api.notion.com/v1/oauth/token", data=token_data, headers=headers)
+
+            # Devuelve la respuesta de Notion al cliente
+            return jsonify(response.json()), response.status_code
+
+        except Exception as e:
+            # Manejo de errores
+            return jsonify({"error": str(e)}), 500
+        
+    @app.route('/hubspot-proxy', methods=['POST'])
+    def hubspot_proxy():
+        try:
+            # Datos enviados desde el frontend
+            data = request.json
+            
+            # Parámetros de autenticación
+            token_url = 'https://api.hubapi.com/oauth/v1/token'
+            payload = {
+                'grant_type': 'authorization_code',
+                'client_id': data.get('client_id'),  # Client ID de HubSpot
+                'client_secret': data.get('client_secret'),  # Client Secret de HubSpot
+                'redirect_uri': data.get('redirect_uri'),  # URI de redirección
+                'code': data.get('code')  # El código de autorización obtenido
+            }
+
+            headers = {
+                'Content-Type': 'application/x-www-form-urlencoded',
+            }
+
+            # Realiza la solicitud POST a la API de HubSpot
+            response = requests.post(token_url, data=urlencode(payload), headers=headers)
+
+            if response.status_code == 200:
+                token_data = response.json()
+                return jsonify(token_data), 200  # Devuelve el token de HubSpot al frontend
+            else:
+                return jsonify({'error': 'HubSpot API error', 'details': response.json()}), response.status_code
+
+        except Exception as e:
+            # Manejo de errores
+            return jsonify({"error": str(e)}), 500
 
     @app.route('/search/all', methods=['GET'])
     def search_all(email):

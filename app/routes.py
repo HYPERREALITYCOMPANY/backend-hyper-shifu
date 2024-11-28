@@ -1204,7 +1204,7 @@ def setup_routes(app, mongo):
         else:
             results['outlook'] = {"error": "Sesión no ingresada en Outlook"}
 
-        hubspot_token = user.get('integrations', {}).get('Hubspot', None)
+        hubspot_token = user.get('integrations', {}).get('HubSpot', None)
         if hubspot_token:
             hubspot_data = search_hubspot(hubspot_token)
             print(hubspot_data)

@@ -649,12 +649,11 @@ def setup_routes(app, mongo):
 
     @app.route('/search/hubspot', methods=['GET'])
     def search_hubspot(access_token):
-
         if not access_token or "access_token" not in access_token:
             return jsonify({"error": "Usuario no autenticado en HubSpot"}), 401
 
         query = request.args.get('query')
-        stopwords = ["mandame", "del", "que", "link", "pasame", "enviame", "brindame", "dame", "me", "paso", "envio", "dijo","dame","toda","la","información", "del","en", "que","esta", "empresa"]
+        stopwords = ["mandame", "del", "que", "link", "pasame", "enviame", "brindame", "dame", "me", "paso", "envio", "dijo", "dame", "toda", "la", "información", "del", "en", "que", "esta", "empresa"]
         keywords = ' '.join([word for word in query.split() if word.lower() not in stopwords])
         if not query:
             return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
@@ -667,16 +666,16 @@ def setup_routes(app, mongo):
             },
             "companies": {
                 "url": "https://api.hubapi.com/crm/v3/objects/companies/search",
-                "propertyName": "name" 
+                "propertyName": "name"
             },
             "deals": {
                 "url": "https://api.hubapi.com/crm/v3/objects/deals/search",
-                "propertyName": "dealname" 
+                "propertyName": "dealname"
             }
         }
 
         headers = {
-            'Authorization': f"Bearer {'access_token'}",
+            'Authorization': f"Bearer {access_token['access_token']}",
             'Content-Type': 'application/json'
         }
 
@@ -693,7 +692,7 @@ def setup_routes(app, mongo):
                         "value": keywords
                     }
                 ],
-                "properties": ["firstname", "lastname","name", "dealname","cost", "email", "phone", "company", "createdate", "hubspot_owner_id", "dealstage", "price"]
+                "properties": ["firstname", "lastname", "name", "dealname", "cost", "email", "phone", "company", "createdate", "hubspot_owner_id", "dealstage", "price"]
             }
 
             try:
@@ -742,7 +741,7 @@ def setup_routes(app, mongo):
                                     result_info["name"] = f"{properties['firstname']} {properties['lastname']}"
                                 else:
                                     result_info["name"] = "N/A"
-                                
+
                                 company_assoc = get_associations("contacts", result_info["id"], "companies", access_token['access_token'])
                                 company_info = fetch_associated_details(company_assoc, "companies", access_token['access_token'])
 
@@ -753,7 +752,7 @@ def setup_routes(app, mongo):
 
                             elif object_type == "companies":
                                 result_info["company"] = properties.get("name", "N/A")
-                                result_info["price"] = properties.get("price", "N/A") 
+                                result_info["price"] = properties.get("price", "N/A")
 
                             formatted_results.append(result_info)
 
@@ -769,7 +768,8 @@ def setup_routes(app, mongo):
                     "error": f"Error al procesar la solicitud en {object_type}",
                     "details": str(e)
                 }
-        return search_results
+
+        return response.json(search_results)
 
     @app.route('/askIa', methods=['GET'])
     def ask():
@@ -1199,7 +1199,6 @@ def setup_routes(app, mongo):
                 }
 
                 search_results_outlook.append(result_info)
-            print(search_results_outlook)
             results['outlook'] = search_results_outlook
         else:
             results['outlook'] = {"error": "Sesión no ingresada en Outlook"}
@@ -1207,9 +1206,9 @@ def setup_routes(app, mongo):
         hubspot_token = user.get('integrations', {}).get('HubSpot', None)
         if hubspot_token:
             hubspot_data = search_hubspot(hubspot_token)
-            print(hubspot_data)
+
             try:
-                json.dumps(hubspot_data)
+                jsonify(hubspot_data)
                 results['hubspot'] = hubspot_data
             except TypeError as e:
                 results['hubspot'] = {"error": f"HubSpot data is not serializable: {str(e)}"}

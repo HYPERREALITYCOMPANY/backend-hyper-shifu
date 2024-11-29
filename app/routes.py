@@ -820,9 +820,9 @@ def setup_routes(app, mongo):
         # Realizar la solicitud a OpenAI para obtener la respuesta de la IA
         try:
             response = openai.ChatCompletion.create(
-                model="gpt-4o-mini",
+                model="gpt-4",
                 messages=[
-                    {"role": "system", "content": "Eres un asistente útil el cual está conectado con diversas aplicaciones y automatizarás el proceso de buscar información en base a la query que se te envie, tomando toda la información necesaria"},
+                    {"role": "system", "content": "Eres un asistente útil el cual está conectado con diversas aplicaciones y automatizarás el proceso de buscar información en base a la query que se te envie"},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=4096

@@ -820,8 +820,8 @@ def setup_routes(app, mongo):
         # Realizar la solicitud a OpenAI para obtener la respuesta de la IA
         try:
             print("hola")
-            response = openai.Completion.create(
-                model="gpt-3.5-turbo",
+            response = openai.chat.completions.create(
+                model="gpt-3.5",
                 messages=[
                     {"role": "system", "content": "Eres un asistente útil el cual está conectado con diversas aplicaciones y automatizarás el proceso de buscar información en base a la query que se te envie"},
                     {"role": "user", "content": prompt}

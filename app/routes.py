@@ -825,7 +825,7 @@ def setup_routes(app, mongo):
                     {"role": "system", "content": "Eres un asistente útil el cual está conectado con diversas aplicaciones y automatizarás el proceso de buscar información en base a la query que se te envie"},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=4096
+                max_tokens=2000
             )
             print("RESPONSE IA CONNECTED", response)
         except Exception as e:

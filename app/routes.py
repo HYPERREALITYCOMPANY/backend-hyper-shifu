@@ -649,9 +649,6 @@ def setup_routes(app, mongo):
 
     @app.route('/search/hubspot', methods=['GET'])
     def search_hubspot(access_token):
-        if not access_token or "access_token" not in access_token:
-            return jsonify({"error": "Usuario no autenticado en HubSpot"}), 401
-
         query = request.args.get('query')
         stopwords = ["mandame", "del", "que", "link", "pasame", "enviame", "brindame", "dame", "me", "paso", "envio", "dijo", "dame", "toda", "la", "información", "del", "en", "que", "esta", "empresa"]
         keywords = ' '.join([word for word in query.split() if word.lower() not in stopwords])
@@ -675,7 +672,7 @@ def setup_routes(app, mongo):
         }
 
         headers = {
-            'Authorization': f"Bearer {access_token['access_token']}",
+            'Authorization': f"Bearer {access_token}",
             'Content-Type': 'application/json'
         }
 
@@ -699,7 +696,6 @@ def setup_routes(app, mongo):
                 response = requests.post(url, headers=headers, json=data)
                 if response.status_code == 200:
                     results = response.json().get("results", [])
-                    print("RESULTS", results)
 
                     if not results:
                         search_results[object_type] = {"message": f"No se encontraron {object_type} con '{query}'"}
@@ -769,7 +765,7 @@ def setup_routes(app, mongo):
                     "details": str(e)
                 }
 
-        return response.json(search_results)
+        return jsonify(search_results)
 
     @app.route('/askIa', methods=['GET'])
     def ask():
@@ -786,19 +782,39 @@ def setup_routes(app, mongo):
         # Llamar a la función de búsqueda usando el email proporcionado
         try:
             search_results = search_all(email)
-            print("search_results obtenidos:", search_results.json)  # Verificar si los resultados son correctos
+            search_results_data = search_results.get_json()
+            print("search_results obtenidos:", search_results_data)  # Verificar si los resultados son correctos
+
+            user = mongo.db.usuarios.find_one({'correo': email})
+            if not user:
+                return jsonify({"error": "Usuario no encontrado"}), 404
+            # Verificar y buscar datos en HubSpot si existe un token
+            # Verificar si existe un token de HubSpot
+            hubspot_token = user.get('integrations', {}).get('HubSpot', None)
+            if hubspot_token:
+                hubspot_data = search_hubspot(hubspot_token)
+                print(f"Tipo de search_results: {type(search_results)}")
+                print(f"Tipo de hubspot_data: {type(hubspot_data)}")
+                # Extraemos el contenido de ambas respuestas como JSON
+                search_results_data = search_results.get_json()  # Extraemos los datos de search_results
+                hubspot_data_extracted = hubspot_data.get_json()  # Extraemos los datos de hubspot_data
+
+                print("search_results_data:", search_results_data)
+                print("hubspot_data_extracted:", hubspot_data_extracted)
+
+                # Actualizamos search_results_data con los datos de HubSpot
+                search_results_data.update(hubspot_data_extracted)
+                
+                print("Resultados combinados:", search_results_data)
+            else:
+                print("No se encontró token de HubSpot")
+
         except Exception as e:
             # Si ocurre un error al buscar los resultados
             return jsonify({"error": f"Error al obtener resultados de búsqueda: {str(e)}"}), 500
 
-        # Asegurarse de que search_results es un diccionario y contiene datos
-        if isinstance(search_results, dict):
-            if 'gmail' not in search_results or not search_results['gmail']:
-                return jsonify({"error": "No se encontraron correos relacionados con el email proporcionado"}), 404
-        else:
-            return jsonify({"error": "La respuesta de búsqueda no es válida"}), 500
         # Generar el prompt para la IA usando la query y los resultados de búsqueda
-        prompt = generate_prompt(query, search_results)
+        prompt = generate_prompt(query, search_results_data)
         print(prompt)
 
         # Realizar la solicitud a OpenAI para obtener la respuesta de la IA
@@ -927,6 +943,8 @@ def setup_routes(app, mongo):
         - En **Notion**, enfócate en los contenidos de las propiedades clave y su relación con '{query}'.
         - En **Outlook**, proporciona los detalles del asunto, cuerpo y remitente de los correos relevantes, verificando coincidencias con '{query}'.
         - En **HubSpot**, resalta los contactos, compañías y negocios que coincidan con la búsqueda, incluyendo nombres, correos, información de la compañía, monto de negocio, fecha de cierre y cualquier otra información relevante.
+
+        Quiero que no respondas como lista por cada uno si no que solo menciones En gmail se encontro esto, En Notion se encontro esto, y asi con cada una. Si en dado caso hay error en busqueda pon que busque con terminos semejantes
         """
 
         return prompt
@@ -1034,8 +1052,7 @@ def setup_routes(app, mongo):
             "gmail": [],
             "slack": [],
             "notion": [],
-            "outlook": [],
-            "hubspot": [],
+            "outlook": []
         }
 
         user = mongo.db.usuarios.find_one({'correo': email})
@@ -1202,17 +1219,5 @@ def setup_routes(app, mongo):
             results['outlook'] = search_results_outlook
         else:
             results['outlook'] = {"error": "Sesión no ingresada en Outlook"}
-
-        hubspot_token = user.get('integrations', {}).get('HubSpot', None)
-        if hubspot_token:
-            hubspot_data = search_hubspot(hubspot_token)
-
-            try:
-                jsonify(hubspot_data)
-                results['hubspot'] = hubspot_data
-            except TypeError as e:
-                results['hubspot'] = {"error": f"HubSpot data is not serializable: {str(e)}"}
-        else:
-            results['hubspot'] = {"error": "Sesión no ingresada en HubSpot"}
 
         return jsonify(results)

@@ -767,7 +767,7 @@ def setup_routes(app, mongo):
 
         return jsonify(search_results)
 
-    @app.route('/askIa', methods=['POST'])
+    @app.route('/askIa', methods=['GET'])
     def ask():
         # Obtener los parámetros 'email' y 'query' de la solicitud
         email = request.args.get('email')
@@ -945,7 +945,8 @@ def setup_routes(app, mongo):
         - En **Outlook**, proporciona los detalles del asunto, cuerpo y remitente de los correos relevantes, verificando coincidencias con '{query}'.
         - En **HubSpot**, resalta los contactos, compañías y negocios que coincidan con la búsqueda, incluyendo nombres, correos, información de la compañía, monto de negocio, fecha de cierre y cualquier otra información relevante.
 
-        Quiero que no respondas como lista por cada uno si no que solo menciones En gmail se encontro esto, En Notion se encontro esto, y asi con cada una. Si en dado caso hay error en busqueda pon que busque con terminos semejantes
+        Quiero que no respondas como lista por cada uno si no que solo menciones En gmail se encontro esto, En Notion se encontro esto, y asi con cada una. Si en dado caso hay error en busqueda pon que busque con terminos semejantes, en el caso de que se pida un link coloca el link en la respuesta
+        
         """
 
         return prompt

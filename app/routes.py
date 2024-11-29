@@ -827,6 +827,7 @@ def setup_routes(app, mongo):
                 ],
                 max_tokens=4096
             )
+            print("RESPONSE IA CONNECTED", response)
         except Exception as e:
             # Manejo de error si ocurre un problema con OpenAI
             return jsonify({"error": f"Error al contactar con OpenAI: {str(e)}"}), 500

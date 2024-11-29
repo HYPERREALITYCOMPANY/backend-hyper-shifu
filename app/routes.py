@@ -833,7 +833,7 @@ def setup_routes(app, mongo):
 
         # Obtener la respuesta de la IA
         ia_response = response.choices[0].message['content'].strip()
-        print(ia_response)
+        print("RESPONSE IA", ia_response)
 
         # Validar que la respuesta de la IA no esté vacía
         if not ia_response:

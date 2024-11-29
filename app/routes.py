@@ -819,6 +819,7 @@ def setup_routes(app, mongo):
 
         # Realizar la solicitud a OpenAI para obtener la respuesta de la IA
         try:
+            print("hola")
             response = openai.ChatCompletion.create(
                 model="gpt-4o-mini",
                 messages=[
@@ -833,6 +834,7 @@ def setup_routes(app, mongo):
             return jsonify({"error": f"Error al contactar con OpenAI: {str(e)}"}), 500
 
         # Obtener la respuesta de la IA
+        print(response)
         ia_response = response.choices[0].message['content'].strip()
         print("RESPONSE IA", ia_response)
 

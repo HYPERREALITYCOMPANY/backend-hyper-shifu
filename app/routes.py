@@ -821,7 +821,7 @@ def setup_routes(app, mongo):
         try:
             print("hola")
             response = openai.ChatCompletion.create(
-                model="gpt-4o-mini",
+                model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": "Eres un asistente útil el cual está conectado con diversas aplicaciones y automatizarás el proceso de buscar información en base a la query que se te envie"},
                     {"role": "user", "content": prompt}
@@ -829,10 +829,10 @@ def setup_routes(app, mongo):
                 max_tokens=4096
             )
             print("RESPONSE IA CONNECTED", response)
+        except openai.error.OpenAIError as e:
+            return jsonify({"error": f"Error con la API de OpenAI: {str(e)}"}), 500
         except Exception as e:
-            # Manejo de error si ocurre un problema con OpenAI
-            return jsonify({"error": f"Error al contactar con OpenAI: {str(e)}"}), 500
-
+            return jsonify({"error": f"Error desconocido: {str(e)}"}), 500
         # Obtener la respuesta de la IA
         print(response)
         ia_response = response.choices[0].message['content'].strip()

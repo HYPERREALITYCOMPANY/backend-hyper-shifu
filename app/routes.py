@@ -767,7 +767,7 @@ def setup_routes(app, mongo):
 
         return jsonify(search_results)
 
-    @app.route('/askIa', methods=['GET'])
+    @app.route('/askIa', methods=['POST'])
     def ask():
         # Obtener los parámetros 'email' y 'query' de la solicitud
         email = request.args.get('email')
@@ -820,12 +820,12 @@ def setup_routes(app, mongo):
         # Realizar la solicitud a OpenAI para obtener la respuesta de la IA
         try:
             response = openai.ChatCompletion.create(
-                model="gpt-4",
+                model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": "Eres un asistente útil el cual está conectado con diversas aplicaciones y automatizarás el proceso de buscar información en base a la query que se te envie"},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=2000
+                max_tokens=4096
             )
             print("RESPONSE IA CONNECTED", response)
         except Exception as e:

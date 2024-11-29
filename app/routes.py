@@ -813,30 +813,26 @@ def setup_routes(app, mongo):
             # Si ocurre un error al buscar los resultados
             return jsonify({"error": f"Error al obtener resultados de búsqueda: {str(e)}"}), 500
 
-        # Generar el prompt para la IA usando la query y los resultados de búsqueda
         prompt = generate_prompt(query, search_results_data)
         print(prompt)
 
-        # Realizar la solicitud a OpenAI para obtener la respuesta de la IA
-        try:
-            print("hola")
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5",
-                messages=[
-                    {"role": "system", "content": "Eres un asistente útil el cual está conectado con diversas aplicaciones y automatizarás el proceso de buscar información en base a la query que se te envie"},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=4096
-            )
-            print("RESPONSE IA CONNECTED", response)
-        except openai.error.OpenAIError as e:
-            return jsonify({"error": f"Error con la API de OpenAI: {str(e)}"}), 500
-        except Exception as e:
-            return jsonify({"error": f"Error desconocido: {str(e)}"}), 500
-        # Obtener la respuesta de la IA
+        response = openai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "Eres un asistente útil el cual está conectado con diversas aplicaciones y automatizarás el proceso de buscar información en base a la query que se te envie, tomando toda la información necesaria"},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=4096
+        )
         print(response)
-        ia_response = response.choices[0].message['content'].strip()
-        print("RESPONSE IA", ia_response)
+        try:
+            ia_response = response.choices[0].message.content.strip()
+            print(ia_response)
+        except AttributeError as e:
+            print(f"Error al acceder al contenido: {e}")
+        except IndexError as e:
+            print(f"Error en la estructura de la respuesta: {e}")
+
 
         # Validar que la respuesta de la IA no esté vacía
         if not ia_response:
@@ -946,7 +942,6 @@ def setup_routes(app, mongo):
         - En **Notion**, enfócate en los contenidos de las propiedades clave y su relación con '{query}'.
         - En **Outlook**, proporciona los detalles del asunto, cuerpo y remitente de los correos relevantes, verificando coincidencias con '{query}'.
         - En **HubSpot**, resalta los contactos, compañías y negocios que coincidan con la búsqueda, incluyendo nombres, correos, información de la compañía, monto de negocio, fecha de cierre y cualquier otra información relevante.
-        Quiero que no respondas como lista por cada uno si no que solo menciones En gmail se encontro esto, En Notion se encontro esto, y asi con cada una. Si en dado caso hay error en busqueda pon que busque con terminos semejantes, en el caso de que se pida un link coloca el link en la respuesta
         """
 
         return prompt

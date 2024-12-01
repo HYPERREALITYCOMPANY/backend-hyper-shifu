@@ -936,7 +936,7 @@ def setup_routes(app, mongo):
         ### HubSpot:
         {hubspot_results}
 
-        Con base a esta información obtenida necesito que me devuelvas una respuesta la cual sea una respuesta sugerida de la query que envio. Para ello necesito que me devuelvas concisa la respuesta a la query.
+        Con base a esta información obtenida necesito que me devuelvas una respuesta la cual sea una respuesta sugerida de la query que envio. Para ello necesito que me devuelvas concisa la respuesta a la query. Y lo mas importante a tener en cuenta son las fechas, links, etc.
         """
 
         return prompt

@@ -417,10 +417,12 @@ def setup_routes(app, mongo):
         
         return decoded_body
 
-    @app.route('/search/gmail')
+    @app.route('/search/gmail' ,methods=["GET"])
     def search_gmail():
         email = request.args.get('email')
+        print(email)
         query = request.args.get('query')
+        print(query)
         if not query:
             return jsonify({"error": "Se necesita buscar algo"}), 400
         user = mongo.db.usuarios.find_one({'correo': email})
@@ -467,13 +469,6 @@ def setup_routes(app, mongo):
                 body = message_data['payload']['body']['data'] if 'body' in message_data['payload'] else ""
                 body = decode_message_body(body)
 
-            if body:
-                try:
-                    body = base64.urlsafe_b64decode(body).decode('utf-8')
-                    body = body.encode().decode('unicode_escape')
-                    body = to_ascii(decoded_body)
-                except Exception as e:
-                    body = quopri.decodestring(body).decode('utf-8')
 
             email_details.append({
                 'from': sender,
@@ -883,7 +878,7 @@ def setup_routes(app, mongo):
                 {"role": "system", "content": "Eres un asistente útil el cual está conectado con diversas aplicaciones y automatizarás el proceso de buscar información en base a la query que se te envie, tomando toda la información necesaria"},
                 {"role": "user", "content": prompt}
             ],
-            max_tokens=4096
+            max_tokens=3000
         )
         print(response)
         try:

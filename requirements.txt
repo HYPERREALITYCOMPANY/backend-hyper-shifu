@@ -10,4 +10,3 @@ Flask-CORS==4.0.0
 Flask-PyMongo==2.3.0
 pymongo==4.6.3
 spacy
-en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.5.0/en_core_web_sm-3.5.0.tar.gz

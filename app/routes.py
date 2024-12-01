@@ -20,6 +20,8 @@ from app.services.gmail import auth_gmail_callback as service_auth_callback
 from app.services.notion import notion_auth as service_auth_notion
 from app.services.notion import notion_callback as service_auth_notion_callback
 import spacy
+from spacy.cli import download
+
 
 openai.api_key=Config.CHAT_API_KEY
 
@@ -28,7 +30,13 @@ def setup_routes(app, mongo):
     stateSlack = ""
     idUser = ""
     notion_bp = Blueprint('notion', __name__)
-    nlp = spacy.load("en_core_web_sm") 
+    try:
+        nlp = spacy.load("en_core_web_sm") 
+    except OSError:
+        print("Downloading Spacy model 'en_core_web_sm'...")
+        download("en_core_web_sm")
+        print("Model downloaded successfully!")
+        nlp = spacy.load("en_core_web_sm") 
     @app.route('/')
     def home():
         return ("Este es el backend del proyecto!!")

@@ -781,7 +781,7 @@ def setup_routes(app, mongo):
 
         # Llamar a la función de búsqueda usando el email proporcionado
         try:
-            search_results = search_all(email)
+            search_results = search_all()
             search_results_data = search_results.get_json()
             print("search_results obtenidos:", search_results_data)  # Verificar si los resultados son correctos
 
@@ -1033,7 +1033,8 @@ def setup_routes(app, mongo):
             return jsonify({"error": str(e)}), 500
 
     @app.route('/search/all', methods=['GET'])
-    def search_all(email):
+    def search_all():
+        email = request.args.get('email')
         query = request.args.get('query')
         if not query:
             return jsonify({"error": "No se proporcionó una consulta de búsqueda"}), 400
@@ -1173,7 +1174,7 @@ def setup_routes(app, mongo):
         else:
             results['notion'] = {"error": "Sesión no ingresada en Notion"}
 
-        # Búsqueda en Outlook
+        # Búsqueda en Outlookk
         outlook_token = user.get('integrations', {}).get('Outlook', None)
         if outlook_token:
             expires_at = session.get('expires_at')

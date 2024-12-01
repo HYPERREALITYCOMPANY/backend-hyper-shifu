@@ -936,12 +936,7 @@ def setup_routes(app, mongo):
         ### HubSpot:
         {hubspot_results}
 
-        Con base en esta información, genera una respuesta detallada que incluya únicamente resultados específicos para la consulta.
-        - Para **Gmail**, proporciona el asunto, cuerpo y enlaces relevantes, el nombre del remitente y palabras clave detectadas. Asegúrate de verificar coincidencias exactas con '{query}'.
-        - En **Slack**, resume el contenido y tono del mensaje, el canal o grupo, y la fecha de envío.
-        - En **Notion**, enfócate en los contenidos de las propiedades clave y su relación con '{query}'.
-        - En **Outlook**, proporciona los detalles del asunto, cuerpo y remitente de los correos relevantes, verificando coincidencias con '{query}'.
-        - En **HubSpot**, resalta los contactos, compañías y negocios que coincidan con la búsqueda, incluyendo nombres, correos, información de la compañía, monto de negocio, fecha de cierre y cualquier otra información relevante.
+        Con base a esta información obtenida necesito que me devuelvas una respuesta la cual sea una respuesta sugerida de la query que envio. Para ello necesito que me devuelvas concisa la respuesta a la query.
         """
 
         return prompt

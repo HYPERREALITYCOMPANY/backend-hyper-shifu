@@ -1,7 +1,6 @@
 from flask import Flask
 from config import Config
 from app.routes import setup_routes
-from pyngrok import ngrok
 from flask_pymongo import PyMongo, ObjectId
 from flask_cors import CORS
 import os

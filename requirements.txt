@@ -10,3 +10,4 @@ openai
 Flask-CORS==4.0.0
 Flask-PyMongo==2.3.0
 pymongo==4.6.3
+spacy

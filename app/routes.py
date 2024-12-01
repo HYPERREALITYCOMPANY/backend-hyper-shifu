@@ -19,6 +19,7 @@ from app.services.gmail import auth_gmail as service_auth_gmail
 from app.services.gmail import auth_gmail_callback as service_auth_callback
 from app.services.notion import notion_auth as service_auth_notion
 from app.services.notion import notion_callback as service_auth_notion_callback
+import spacy
 
 openai.api_key=Config.CHAT_API_KEY
 
@@ -27,9 +28,56 @@ def setup_routes(app, mongo):
     stateSlack = ""
     idUser = ""
     notion_bp = Blueprint('notion', __name__)
+    nlp = spacy.load("en_core_web_sm") 
     @app.route('/')
     def home():
         return ("Este es el backend del proyecto!!")
+    
+    def parse_query(query):
+        doc = nlp(query.lower())
+        sender = None
+        days_ago = None
+
+        for ent in doc.ents:
+            if ent.label_ == "PERSON":  # Identificar nombres de personas
+                sender = ent.text
+            elif ent.label_ == "DATE":  # Identificar fechas relativas
+                if "días" in ent.text or "days" in ent.text:
+                    days_ago = int(ent.text.split()[0])
+
+        if days_ago:
+            start_date = (datetime.now() - timedelta(days=days_ago)).strftime("%Y/%m/%d")
+        else:
+            start_date = None
+
+        return sender, start_date
+    def build_query(query):
+        sender, start_date = parse_query(query)
+
+        # Construir la consulta final para Gmail
+        gmail_query = query
+        if sender:
+            gmail_query = f"from:{sender} {gmail_query}"
+        if start_date:
+            gmail_query = f"{gmail_query} after:{start_date}"
+
+        return gmail_query
+    
+    def build_outlook_query(query):
+        sender, start_date = parse_query(query)  # Reutiliza la lógica de parse_query
+
+        # Convertir fechas a formato ISO 8601
+        if start_date:
+            start_date = datetime.strptime(start_date, "%Y/%m/%d").isoformat()
+
+        # Construir filtros avanzados
+        filters = []
+        if sender:
+            filters.append(f"from/emailAddress/address eq '{sender}'")
+        if start_date:
+            filters.append(f"receivedDateTime ge {start_date}")
+
+        return " and ".join(filters)
 
     @app.route('/register', methods=['POST'])
     def register_user():
@@ -371,16 +419,20 @@ def setup_routes(app, mongo):
 
     @app.route('/search/gmail')
     def search_gmail():
-        token = session.get('gmail_token')
-        if not token:
-            return jsonify({"error": "Usuario no autenticado en Gmail"}), 401
-        
+        email = request.args.get('email')
         query = request.args.get('query')
-        if query and not query.startswith("from:"):
-            query = f"{query}"
+        if not query:
+            return jsonify({"error": "Se necesita buscar algo"}), 400
+        user = mongo.db.usuarios.find_one({'correo': email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+        # Búsqueda en Gmail
+        gmail_token = user.get('integrations', {}).get('Gmail', None)
+        refined_query = build_query(query)
         
-        headers = {'Authorization': f'Bearer {token["access_token"]}'}
-        params = {'q': query}
+        headers = {'Authorization': f'Bearer {gmail_token}'}
+        params = {'q': refined_query,
+                  'maxResults': 10}
         
         response = requests.get('https://www.googleapis.com/gmail/v1/users/me/messages', headers=headers, params=params)
         if response.status_code != 200:
@@ -435,9 +487,12 @@ def setup_routes(app, mongo):
     @app.route('/search/notion', methods=['GET'])
     def search_notion():
         simplified_results = []
-        access_token = session.get('access_token')
-        if not access_token:
-            return jsonify({"error": "Usuario no autenticado en Notion"}), 401
+        email = request.args.get('email')
+        user = mongo.db.usuarios.find_one({'correo': email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+        # Búsqueda en Gmail
+        notion_token = user.get('integrations', {}).get('Notion', None)
 
         query = request.args.get('query')
         if not query:
@@ -445,7 +500,7 @@ def setup_routes(app, mongo):
 
         url = 'https://api.notion.com/v1/search'
         headers = {
-            'Authorization': f'Bearer {access_token}',
+            'Authorization': f'Bearer {notion_token}',
             'Notion-Version': '2022-06-28',
             'Content-Type': 'application/json'
         }
@@ -503,10 +558,12 @@ def setup_routes(app, mongo):
 
     @app.route('/search/slack', methods=['GET'])
     def search_slack():
-        access_token = session.get('slack_token')
-        
-        if not access_token:
-            return jsonify({"error": "Usuario no autenticado en Slack"}), 401
+        email = request.args.get('email')
+        user = mongo.db.usuarios.find_one({'correo': email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+        # Búsqueda en Gmail
+        slack_token = user.get('integrations', {}).get('Slack', None)
 
         query = request.args.get('query')
         if not query:
@@ -514,7 +571,7 @@ def setup_routes(app, mongo):
 
         url = 'https://slack.com/api/search.messages'
         headers = {
-            'Authorization': f'Bearer {Config.SLACK_USER_TOKEN}',
+            'Authorization': f'Bearer {slack_token}',
             'Content-Type': 'application/json'
         }
         params = {
@@ -543,27 +600,27 @@ def setup_routes(app, mongo):
     
     @app.route('/search/outlook', methods=['GET'])
     def search_outlook():
-        access_token = session.get('outlook_token')
+        email = request.args.get('email')
+        user = mongo.db.usuarios.find_one({'correo': email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+        # Búsqueda en Gmail
+        outlook_token = user.get('integrations', {}).get('Outlook', None)
         
-        if not access_token:
-            return jsonify({"error": "Usuario no autenticado en Outlook"}), 401
-
-        expires_at = session.get('expires_at')
-        if expires_at and datetime.now().timestamp() > expires_at:
-            return jsonify({"error": "El token de acceso ha expirado, por favor vuelve a iniciar sesión."}), 401
-
         query = request.args.get('query')
         if not query:
             return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
+        
+        refined_query = build_outlook_query(query)
 
         url = 'https://graph.microsoft.com/v1.0/me/messages'
         headers = {
-            'Authorization': f"Bearer {access_token['access_token']}",
+            'Authorization': f"Bearer {outlook_token}",
             'Content-Type': 'application/json'
         }
         
         try:
-            response = requests.get(url, headers=headers, params={'$search': query})
+            response = requests.get(url, headers=headers,params = {'$search': refined_query, '$top': 10})
             response.raise_for_status()
         except requests.exceptions.RequestException as e:
             return jsonify({"error": "Error al buscar en Outlook", "details": str(e)}), 500
@@ -648,10 +705,14 @@ def setup_routes(app, mongo):
 
 
     @app.route('/search/hubspot', methods=['GET'])
-    def search_hubspot(access_token):
+    def search_hubspot():
+        email = request.args.get('email')
+        user = mongo.db.usuarios.find_one({'correo': email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+        # Búsqueda en Gmail
+        hubspot_token = user.get('integrations', {}).get('HubSpot', None)
         query = request.args.get('query')
-        stopwords = ["mandame", "del", "que", "link", "pasame", "enviame", "brindame", "dame", "me", "paso", "envio", "dijo", "dame", "toda", "la", "información", "del", "en", "que", "esta", "empresa"]
-        keywords = ' '.join([word for word in query.split() if word.lower() not in stopwords])
         if not query:
             return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
 
@@ -672,7 +733,7 @@ def setup_routes(app, mongo):
         }
 
         headers = {
-            'Authorization': f"Bearer {access_token}",
+            'Authorization': f"Bearer {hubspot_token}",
             'Content-Type': 'application/json'
         }
 
@@ -686,7 +747,7 @@ def setup_routes(app, mongo):
                     {
                         "propertyName": property_name,
                         "operator": "CONTAINS_TOKEN",
-                        "value": keywords
+                        "value": query
                     }
                 ],
                 "properties": ["firstname", "lastname", "name", "dealname", "cost", "email", "phone", "company", "createdate", "hubspot_owner_id", "dealstage", "price"]
@@ -720,16 +781,16 @@ def setup_routes(app, mongo):
                             }
 
                             if object_type == "deals":
-                                result_info["owner"] = get_owner_name(properties.get("hubspot_owner_id"), access_token['access_token'], "name")
+                                result_info["owner"] = get_owner_name(properties.get("hubspot_owner_id"), hubspot_token, "name")
                                 result_info["stage"] = properties.get("dealstage", "N/A")
                                 result_info["name"] = properties.get("dealname", "N/A")
                                 price = properties.get("price", "N/A")
                                 result_info["price"] = price
-                                contacts_assoc = get_associations("deals", result_info["id"], "contacts", access_token['access_token'])
-                                companies_assoc = get_associations("deals", result_info["id"], "companies", access_token['access_token'])
+                                contacts_assoc = get_associations("deals", result_info["id"], "contacts", hubspot_token)
+                                companies_assoc = get_associations("deals", result_info["id"], "companies", hubspot_token)
                                 result_info["associations"] = {
-                                    "contacts": fetch_associated_details(contacts_assoc, "contacts", access_token['access_token']),
-                                    "companies": fetch_associated_details(companies_assoc, "companies", access_token['access_token'])
+                                    "contacts": fetch_associated_details(contacts_assoc, "contacts", hubspot_token),
+                                    "companies": fetch_associated_details(companies_assoc, "companies", hubspot_token)
                                 }
 
                             elif object_type == "contacts":
@@ -738,8 +799,8 @@ def setup_routes(app, mongo):
                                 else:
                                     result_info["name"] = "N/A"
 
-                                company_assoc = get_associations("contacts", result_info["id"], "companies", access_token['access_token'])
-                                company_info = fetch_associated_details(company_assoc, "companies", access_token['access_token'])
+                                company_assoc = get_associations("contacts", result_info["id"], "companies", hubspot_token)
+                                company_info = fetch_associated_details(company_assoc, "companies", hubspot_token)
 
                                 if company_info:
                                     result_info["company"] = company_info[0].get("name", "N/A")
@@ -937,6 +998,7 @@ def setup_routes(app, mongo):
         {hubspot_results}
 
         Con base a esta información obtenida necesito que me devuelvas una respuesta la cual sea una respuesta sugerida de la query que envio. Para ello necesito que me devuelvas concisa la respuesta a la query. Y lo mas importante a tener en cuenta son las fechas, links, etc.
+        Importante, no incluyas asteriscos ni nada, ademas no incluyas en la respuesta la query solo la respuesta y ademas responde de una manera mas concisa.
         """
 
         return prompt
@@ -1038,9 +1100,6 @@ def setup_routes(app, mongo):
         query = request.args.get('query')
         if not query:
             return jsonify({"error": "No se proporcionó una consulta de búsqueda"}), 400
-        
-        two_weeks_ago = datetime.now() - timedelta(weeks=2)
-        two_weeks_ago_str = two_weeks_ago.strftime('%Y/%m/%d')
         results = {
             "gmail": [],
             "slack": [],
@@ -1055,10 +1114,9 @@ def setup_routes(app, mongo):
         gmail_token = user.get('integrations', {}).get('Gmail', None)
         if gmail_token:
             headers = {'Authorization': f'Bearer {gmail_token}'}
-
-            stopwords = ["mandame", "del", "que", "link", "pasame", "enviame", "brindame", "dame", "me", "paso", "envio", "dijo","dame","toda","la","información", "del"]
-            keywords = ' '.join([word for word in query.split() if word.lower() not in stopwords])
-            params = {'q': f"{keywords} after:{two_weeks_ago_str}"}
+            refined_query = build_query(query)
+            params = {'q': refined_query,
+                      'maxResults': 10}
             gmail_response = requests.get('https://www.googleapis.com/gmail/v1/users/me/messages', headers=headers, params=params)
 
             if gmail_response.status_code == 200:
@@ -1177,13 +1235,11 @@ def setup_routes(app, mongo):
         # Búsqueda en Outlookk
         outlook_token = user.get('integrations', {}).get('Outlook', None)
         if outlook_token:
-            expires_at = session.get('expires_at')
-            if expires_at and datetime.now().timestamp() > expires_at:
-                return jsonify({"error": "El token de acceso ha expirado, por favor vuelve a iniciar sesión."}), 401
-
             query = request.args.get('query')
             if not query:
                 return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
+            
+            refined_query = build_outlook_query(query)
 
             url = 'https://graph.microsoft.com/v1.0/me/messages'
             headers = {
@@ -1192,7 +1248,7 @@ def setup_routes(app, mongo):
             }
             
             try:
-                response = requests.get(url, headers=headers, params={'$search': query})
+                response = requests.get(url, headers=headers, params={'$search': query,'$top': 10})
                 response.raise_for_status()
             except requests.exceptions.RequestException as e:
                 return jsonify({"error": "Error al buscar en Outlook", "details": str(e)}), 500

@@ -19,8 +19,6 @@ from app.services.gmail import auth_gmail as service_auth_gmail
 from app.services.gmail import auth_gmail_callback as service_auth_callback
 from app.services.notion import notion_auth as service_auth_notion
 from app.services.notion import notion_callback as service_auth_notion_callback
-import spacy
-from spacy.cli import download
 
 
 openai.api_key=Config.CHAT_API_KEY
@@ -30,35 +28,31 @@ def setup_routes(app, mongo):
     stateSlack = ""
     idUser = ""
     notion_bp = Blueprint('notion', __name__)
-    try:
-        nlp = spacy.load("en_core_web_sm") 
-    except OSError:
-        print("Downloading Spacy model 'en_core_web_sm'...")
-        download("en_core_web_sm")
-        print("Model downloaded successfully!")
-        nlp = spacy.load("en_core_web_sm") 
+
     @app.route('/')
     def home():
         return ("Este es el backend del proyecto!!")
     
     def parse_query(query):
-        doc = nlp(query.lower())
-        sender = None
-        days_ago = None
-
-        for ent in doc.ents:
-            if ent.label_ == "PERSON":  # Identificar nombres de personas
-                sender = ent.text
-            elif ent.label_ == "DATE":  # Identificar fechas relativas
-                if "días" in ent.text or "days" in ent.text:
-                    days_ago = int(ent.text.split()[0])
-
+        # Convertir a minúsculas para manejar queries insensibles a mayúsculas
+        query = query.lower()
+        
+        # Extraer el remitente (persona) usando una expresión regular
+        sender_match = re.search(r"mando (.*?)( de| el| la| los| las| sobre| con| para| que|$)", query)
+        sender = sender_match.group(1).strip() if sender_match else None
+        
+        # Extraer días relativos (e.g., "hace 2 días")
+        days_ago_match = re.search(r"hace (\d+) días", query)
+        days_ago = int(days_ago_match.group(1)) if days_ago_match else None
+        
+        # Calcular la fecha inicial si se especifican días
         if days_ago:
             start_date = (datetime.now() - timedelta(days=days_ago)).strftime("%Y/%m/%d")
         else:
             start_date = None
 
         return sender, start_date
+
     def build_query(query):
         sender, start_date = parse_query(query)
 
@@ -70,7 +64,7 @@ def setup_routes(app, mongo):
             gmail_query = f"{gmail_query} after:{start_date}"
 
         return gmail_query
-    
+
     def build_outlook_query(query):
         sender, start_date = parse_query(query)  # Reutiliza la lógica de parse_query
 

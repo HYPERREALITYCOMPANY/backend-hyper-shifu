@@ -156,6 +156,25 @@ def setup_routes(app, mongo):
         usuario["_id"] = str(usuario["_id"])  # Convertir ObjectId a string para serialización
         return jsonify({"user": usuario}), 200
 
+    @app.route("/update_user", methods=["PUT"])
+    def update_user():
+        user_id = request.json.get('id')
+        update_data = {
+            "nombre": request.json.get('nombre'),
+            "correo": request.json.get('correo'),
+            "img": request.json.get('img')
+        }
+
+        if not user_id or not ObjectId.is_valid(user_id):
+            return jsonify({"error": "ID de usuario inválido"}), 400
+
+        result = mongo.db.usuarios.update_one({"_id": ObjectId(user_id)}, {"$set": update_data})
+
+        if result.matched_count == 0:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+
+        return jsonify({"message": "Usuario actualizado con éxito"}), 200
+
     @app.route('/check_integrations', methods=['GET'])
     def check_integrations():
         email = request.args.get('email')

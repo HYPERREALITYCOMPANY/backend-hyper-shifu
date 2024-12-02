@@ -145,13 +145,16 @@ def setup_routes(app, mongo):
         if not user_id:
             return jsonify({"error": "ID de usuario no proporcionado"}), 400
         
-        usuario = mongo.db.usuarios.find_one({"_id": ObjectId(user_id)})
+        try:
+            usuario = mongo.db.usuarios.find_one({"_id": ObjectId(user_id)})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
         
         if not usuario:
             return jsonify({"error": "Usuario no encontrado"}), 404
         
+        usuario["_id"] = str(usuario["_id"])  # Convertir ObjectId a string para serialización
         return jsonify({"user": usuario}), 200
-
 
     @app.route('/check_integrations', methods=['GET'])
     def check_integrations():

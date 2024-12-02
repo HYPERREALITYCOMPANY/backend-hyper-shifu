@@ -134,9 +134,25 @@ def setup_routes(app, mongo):
             return jsonify({"error": "Credenciales incorrectas"}), 401
 
         session['user_id'] = str(usuario['_id'])
+        name = usuario['nombre'] + usuario['apellido']
+        img = usuario['img']
         idUser = str(usuario['_id'])
-        return jsonify({"message": "Inicio de sesión exitoso", "user_id": session['user_id']}), 200
+        return jsonify({"message": "Inicio de sesión exitoso", "user_id": session['user_id'], "user_name": name, "user_img": img }), 200
         
+    @app.route("/get_user", methods=["GET"])
+    def get_user():
+        user_id = request.args.get('id')
+        if not user_id:
+            return jsonify({"error": "ID de usuario no proporcionado"}), 400
+        
+        usuario = mongo.db.usuarios.find_one({"_id": ObjectId(user_id)})
+        
+        if not usuario:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+        
+        return jsonify({"user": usuario}), 200
+
+
     @app.route('/check_integrations', methods=['GET'])
     def check_integrations():
         email = request.args.get('email')

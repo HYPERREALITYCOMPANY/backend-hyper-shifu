@@ -436,7 +436,7 @@ def setup_routes(app, mongo):
         
         headers = {'Authorization': f'Bearer {gmail_token}'}
         params = {'q': refined_query,
-                  'maxResults': 10}
+                  'maxResults': 3}
         
         response = requests.get('https://www.googleapis.com/gmail/v1/users/me/messages', headers=headers, params=params)
         if response.status_code != 200:
@@ -617,7 +617,7 @@ def setup_routes(app, mongo):
         }
         
         try:
-            response = requests.get(url, headers=headers,params = {'$search': refined_query, '$top': 10})
+            response = requests.get(url, headers=headers,params = {'$search': refined_query, '$top': 3})
             response.raise_for_status()
         except requests.exceptions.RequestException as e:
             return jsonify({"error": "Error al buscar en Outlook", "details": str(e)}), 500
@@ -1113,7 +1113,7 @@ def setup_routes(app, mongo):
             headers = {'Authorization': f'Bearer {gmail_token}'}
             refined_query = build_query(query)
             params = {'q': refined_query,
-                      'maxResults': 10}
+                      'maxResults': 3}
             gmail_response = requests.get('https://www.googleapis.com/gmail/v1/users/me/messages', headers=headers, params=params)
 
             if gmail_response.status_code == 200:
@@ -1245,7 +1245,7 @@ def setup_routes(app, mongo):
             }
             
             try:
-                response = requests.get(url, headers=headers, params={'$search': query,'$top': 10})
+                response = requests.get(url, headers=headers, params={'$search': query,'$top': 3})
                 response.raise_for_status()
             except requests.exceptions.RequestException as e:
                 return jsonify({"error": "Error al buscar en Outlook", "details": str(e)}), 500

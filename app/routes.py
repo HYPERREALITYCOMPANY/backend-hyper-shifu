@@ -38,7 +38,8 @@ def setup_routes(app, mongo):
         query = query.lower()
         
         # Extraer el remitente (persona) usando una expresión regular
-        sender_match = re.search(r"mando (.*?)( de| el| la| los| las| sobre| con| para| que|$)", query)
+        sender_match = re.search(r"(mando|de) (.*?)( de| el| la| los| las| sobre| con| para| que|$)", query)
+
         sender = sender_match.group(1).strip() if sender_match else None
         
         # Extraer días relativos (e.g., "hace 2 días")
@@ -59,7 +60,7 @@ def setup_routes(app, mongo):
         # Construir la consulta final para Gmail
         gmail_query = query
         if sender:
-            gmail_query = f"from:{sender} {gmail_query}"
+            gmail_query = f"from:{sender}"
         if start_date:
             gmail_query = f"{gmail_query} after:{start_date}"
 
@@ -79,7 +80,12 @@ def setup_routes(app, mongo):
         if start_date:
             filters.append(f"receivedDateTime ge {start_date}")
 
-        return " and ".join(filters)
+        # Unir los filtros con "and"
+        refined_query = " and ".join(filters)
+        print("BUILD QUERY",refined_query)
+        
+        # Si no se agregaron filtros, devolver un query vacío (o predeterminado)
+        return refined_query if refined_query else ""
 
     @app.route('/register', methods=['POST'])
     def register_user():
@@ -419,65 +425,66 @@ def setup_routes(app, mongo):
         
         return decoded_body
 
-    @app.route('/search/gmail' ,methods=["GET"])
+    @app.route('/search/gmail', methods=["GET"])
     def search_gmail():
         email = request.args.get('email')
         print(email)
         query = request.args.get('query')
         print(query)
+
         if not query:
             return jsonify({"error": "Se necesita buscar algo"}), 400
+
+        # Buscar el usuario en la base de datos
         user = mongo.db.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
-        # Búsqueda en Gmail
+
+        # Obtener el token de Gmail
         gmail_token = user.get('integrations', {}).get('Gmail', None)
-        refined_query = build_query(query)
-        
+        if not gmail_token:
+            return jsonify({"error": "Token de Gmail no disponible"}), 400
+
         headers = {'Authorization': f'Bearer {gmail_token}'}
-        params = {'q': refined_query,
-                  'maxResults': 3}
-        
-        response = requests.get('https://www.googleapis.com/gmail/v1/users/me/messages', headers=headers, params=params)
-        if response.status_code != 200:
-            return jsonify({"error": "Error al obtener mensajes"}), response.status_code
-        
-        messages = response.json().get('messages', [])
-        if not messages:
-            return jsonify({"error": "No se encontraron mensajes"}), 404
-        
-        email_details = []
-        for message in messages:
-            message_id = message['id']
-            message_response = requests.get(f'https://www.googleapis.com/gmail/v1/users/me/messages/{message_id}', headers=headers)
-            if message_response.status_code != 200:
-                return jsonify({"error": "Error al obtener el mensaje"}), message_response.status_code
+        params = {'q': query, 'maxResults': 3}
+        gmail_response = requests.get('https://www.googleapis.com/gmail/v1/users/me/messages', headers=headers, params=params)
 
-            message_data = message_response.json()
-            message_headers = message_data.get('payload', {}).get('headers', [])
+        if gmail_response.status_code == 200:
+            messages = gmail_response.json().get('messages', [])
+            email_details = []
+            for message in messages:
+                message_id = message['id']
+                message_response = requests.get(f'https://www.googleapis.com/gmail/v1/users/me/messages/{message_id}', headers=headers)
 
-            sender = next((header['value'] for header in message_headers if header['name'] == 'From'), "Sin remitente")
-            date = next((header['value'] for header in message_headers if header['name'] == 'Date'), "Sin fecha")
-            subject = next((header['value'] for header in message_headers if header['name'] == 'Subject'), "Sin asunto")
-            body = ""
-            if 'parts' in message_data['payload']:
-                for part in message_data['payload']['parts']:
-                    if part['mimeType'] == 'text/plain':
-                        body = part['body']['data']
-                        decoded_body = decode_message_body(body)
-                        decoded_body = to_ascii(decoded_body)
-                        break
-            else:
-                body = message_data['payload']['body']['data'] if 'body' in message_data['payload'] else ""
-                body = decode_message_body(body)
+                if message_response.status_code == 200:
+                    message_data = message_response.json()
+                    message_headers = message_data.get('payload', {}).get('headers', [])
+                    sender = next((header['value'] for header in message_headers if header['name'] == 'From'), "Sin remitente")
+                    date = next((header['value'] for header in message_headers if header['name'] == 'Date'), "Sin fecha")
+                    subject = next((header['value'] for header in message_headers if header['name'] == 'Subject'), "Sin asunto")
 
-
-            email_details.append({
-                'from': sender,
-                'date': date,
-                'subject': subject,
-                'body': body
-            })
+                    body = ""
+                    if 'parts' in message_data['payload']:
+                        for part in message_data['payload']['parts']:
+                            if part['mimeType'] == 'text/html':
+                                html_body = decode_message_body(part['body']['data'])
+                                decoded_body = decode_message_body(body)
+                                decoded_body = to_ascii(decoded_body)
+                                body = extract_text_from_html(html_body)
+                                body = clean_body(body)
+                                break
+                    else:
+                        if message_data['payload'].get('body', {}).get('data'):
+                            html_body = decode_message_body(message_data['payload']['body']['data'])
+                            body = clean_body(body)
+                            body = extract_text_from_html(html_body)
+                    # Añadir los detalles del mensaje a la lista
+                    email_details.append({
+                        'from': sender,
+                        'date': date,
+                        'subject': subject,
+                        'body': body
+                    })
 
         return jsonify(email_details)
 
@@ -559,8 +566,11 @@ def setup_routes(app, mongo):
         user = mongo.db.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
-        # Búsqueda en Gmail
+        
+        # Búsqueda en Slack
         slack_token = user.get('integrations', {}).get('Slack', None)
+        if not slack_token:
+            return jsonify({"error": "No se encuentra integración con Slack"}), 404
 
         query = request.args.get('query')
         if not query:
@@ -575,40 +585,47 @@ def setup_routes(app, mongo):
             'query': query
         }
 
-        response = requests.get(url, headers=headers, params=params)
-        data = response.json()
-        print(data)
+        try:
+            response = requests.get(url, headers=headers, params=params)
+            data = response.json()
+            print(data)
 
-        if response.status_code != 200 or not data.get('ok'):
-            return jsonify({"error": "Error al buscar en Slack", "details": data}), response.status_code
-        messages = data.get("messages", {}).get("matches", [])
-        if not messages:
-            return jsonify({"error": "No se encontraron mensajes en Slack"}), 404
-        slack_results = []
-        for message in messages:
-            slack_results.append({
-                "channel": message.get("channel", {}).get("name"),
-                "user": message.get("username"),
-                "text": message.get("text"),
-                "ts": message.get("ts")
-            })
+            if response.status_code != 200 or not data.get('ok'):
+                return jsonify({"error": "Error al buscar en Slack", "details": data}), response.status_code
+            
+            messages = data.get("messages", {}).get("matches", [])
+            if not messages:
+                return jsonify({"message": "No se encontraron resultados en Slack"}), 200
+            
+            slack_results = []
+            for message in messages:
+                slack_results.append({
+                    "channel": message.get("channel", {}).get("name"),
+                    "user": message.get("username"),
+                    "text": message.get("text"),
+                    "ts": message.get("ts")
+                })
 
-        return jsonify(slack_results)
-    
+            return jsonify(slack_results)
+
+        except requests.exceptions.RequestException as e:
+            return jsonify({"error": "Error al conectarse a Slack", "details": str(e)}), 500
+
+
     @app.route('/search/outlook', methods=['GET'])
     def search_outlook():
         email = request.args.get('email')
         user = mongo.db.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
-        # Búsqueda en Gmail
-        outlook_token = user.get('integrations', {}).get('Outlook', None)
         
+        outlook_token = user.get('integrations', {}).get('Outlook', None)
+        if not outlook_token:
+            return jsonify({"error": "Token de Outlook no disponible"}), 400
+
         query = request.args.get('query')
         if not query:
             return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
-        
-        refined_query = build_outlook_query(query)
 
         url = 'https://graph.microsoft.com/v1.0/me/messages'
         headers = {
@@ -617,16 +634,28 @@ def setup_routes(app, mongo):
         }
         
         try:
-            response = requests.get(url, headers=headers,params = {'$search': refined_query, '$top': 3})
+            response = requests.get(url, headers=headers, params={'$search': query, '$top': 3})
             response.raise_for_status()
         except requests.exceptions.RequestException as e:
             return jsonify({"error": "Error al buscar en Outlook", "details": str(e)}), 500
 
-        results = response.json().get('value', [])
-        search_results = []
+        if response.status_code != 200:
+            return jsonify({
+                "error": "Error en la respuesta de Outlook",
+                "status_code": response.status_code,
+                "response": response.text
+            }), 500
 
+        results = response.json().get('value', [])
+        if not results:
+            return jsonify({"message": "No se encontraron resultados en Outlook"}), 200
+
+        print("Outlook response:", response.json())  # Verifica la respuesta de Outlook
+
+        search_results = []
         for result in results:
             body = to_ascii(result.get("bodyPreview"))
+            print("Body preview:", result.get("bodyPreview"))  # Verifica el contenido del cuerpo
             result_info = {
                 "subject": result.get("subject"),
                 "receivedDateTime": result.get("receivedDateTime"),
@@ -830,8 +859,6 @@ def setup_routes(app, mongo):
         # Obtener los parámetros 'email' y 'query' de la solicitud
         email = request.args.get('email')
         query = request.args.get('query')
-        print(email)
-        print(query)
 
         # Validar si se proporcionaron ambos parámetros
         if not email or not query:
@@ -841,7 +868,6 @@ def setup_routes(app, mongo):
         try:
             search_results = search_all()
             search_results_data = search_results.get_json()
-            print("search_results obtenidos:", search_results_data)  # Verificar si los resultados son correctos
 
             user = mongo.db.usuarios.find_one({'correo': email})
             if not user:
@@ -850,20 +876,14 @@ def setup_routes(app, mongo):
             # Verificar si existe un token de HubSpot
             hubspot_token = user.get('integrations', {}).get('HubSpot', None)
             if hubspot_token:
-                hubspot_data = search_hubspot(hubspot_token)
-                print(f"Tipo de search_results: {type(search_results)}")
-                print(f"Tipo de hubspot_data: {type(hubspot_data)}")
+                hubspot_data = search_hubspot()
                 # Extraemos el contenido de ambas respuestas como JSON
                 search_results_data = search_results.get_json()  # Extraemos los datos de search_results
                 hubspot_data_extracted = hubspot_data.get_json()  # Extraemos los datos de hubspot_data
 
-                print("search_results_data:", search_results_data)
-                print("hubspot_data_extracted:", hubspot_data_extracted)
-
                 # Actualizamos search_results_data con los datos de HubSpot
                 search_results_data.update(hubspot_data_extracted)
                 
-                print("Resultados combinados:", search_results_data)
             else:
                 print("No se encontró token de HubSpot")
 
@@ -880,9 +900,8 @@ def setup_routes(app, mongo):
                 {"role": "system", "content": "Eres un asistente útil el cual está conectado con diversas aplicaciones y automatizarás el proceso de buscar información en base a la query que se te envie, tomando toda la información necesaria"},
                 {"role": "user", "content": prompt}
             ],
-            max_tokens=3000
+            max_tokens=4096
         )
-        print(response)
         try:
             ia_response = response.choices[0].message.content.strip()
             print(ia_response)
@@ -995,12 +1014,10 @@ def setup_routes(app, mongo):
         {hubspot_results}
 
         Con base a esta información obtenida necesito que me devuelvas una respuesta la cual sea una respuesta sugerida de la query que envio. Para ello necesito que me devuelvas concisa la respuesta a la query. Y lo mas importante a tener en cuenta son las fechas, links, etc.
-        Importante, no incluyas asteriscos ni nada, ademas no incluyas en la respuesta la query solo la respuesta y ademas responde de una manera mas concisa.
+        Importante, no incluyas asteriscos ni nada, ademas no incluyas en la respuesta la query solo la respuesta y ademas responde de una manera mas concisa. Haz que sea mas legible para las personas es decir no incluyas [link] si no que solo pon los links. IMPORTANTE NO INCLUYAS ASTERISCOS SOLO TEXTO NECESITO, RESPONDE EN BASE A LA INFORMACION OBTENIDA DE LAS APIS 
         """
 
         return prompt
-
-
 
     def clean_body(body):
         normalized_text = unicodedata.normalize('NFD', body)
@@ -1111,8 +1128,7 @@ def setup_routes(app, mongo):
         gmail_token = user.get('integrations', {}).get('Gmail', None)
         if gmail_token:
             headers = {'Authorization': f'Bearer {gmail_token}'}
-            refined_query = build_query(query)
-            params = {'q': refined_query,
+            params = {'q': query,
                       'maxResults': 3}
             gmail_response = requests.get('https://www.googleapis.com/gmail/v1/users/me/messages', headers=headers, params=params)
 
@@ -1235,8 +1251,6 @@ def setup_routes(app, mongo):
             query = request.args.get('query')
             if not query:
                 return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
-            
-            refined_query = build_outlook_query(query)
 
             url = 'https://graph.microsoft.com/v1.0/me/messages'
             headers = {

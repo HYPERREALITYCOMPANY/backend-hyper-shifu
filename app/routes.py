@@ -611,7 +611,7 @@ def setup_routes(app, mongo):
             elif property_name == "Etiquetas" and property_value.get("multi_select"):
                 processed["Etiquetas"] = [tag["name"] for tag in property_value.get("multi_select", [])]
             elif property_name == "Fecha límite" and property_value.get("date"):
-                processed["Fecha límite"] = property_value.get("date"]
+                processed["Fecha límite"] = property_value.get("date")
             elif property_name == "Prioridad" and property_value.get("select"):
                 processed["Prioridad"] = property_value["select"].get("name")
             elif property_name == "Proyecto" and property_value.get("relation"):

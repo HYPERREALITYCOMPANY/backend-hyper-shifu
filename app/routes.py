@@ -533,17 +533,13 @@ def setup_routes(app, mongo):
         user = mongo.db.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
-
-        # Verificar token de Notion
+        # Búsqueda en Gmail
         notion_token = user.get('integrations', {}).get('Notion', None)
-        if not notion_token:
-            return jsonify({"error": "Token de Notion no encontrado"}), 403
 
         query = request.args.get('query')
         if not query:
             return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
 
-        # Configurar petición a la API de Notion
         url = 'https://api.notion.com/v1/search'
         headers = {
             'Authorization': f'Bearer {notion_token}',
@@ -551,81 +547,56 @@ def setup_routes(app, mongo):
             'Content-Type': 'application/json'
         }
         data = {
-            "query": query,
-            "filter": {
-                "value": "page",
-                "property": "object"
-            }
+            "query": query
         }
 
-        # Realizar petición a la API de Notion
         response = requests.post(url, headers=headers, json=data)
+
         if response.status_code != 200:
             return jsonify({"error": "Error al buscar en Notion", "details": response.json()}), response.status_code
 
-        # Procesar resultados
-        notion_results = response.json().get("results", [])
-        for result in notion_results:
-            # Filtros adicionales para búsquedas exactas
-            properties = result.get("properties", {})
-            matches_exact_query = any(
-                query.lower() in str(value).lower() 
-                for value in extract_text_from_properties(properties)
-            )
-
-            if not matches_exact_query:
-                continue  # Ignorar resultados que no coinciden con la búsqueda exacta
-
+        for result in response.json().get("results", []):
             page_info = {
                 "id": result["id"],
                 "created_time": result.get("created_time"),
                 "last_edited_time": result.get("last_edited_time"),
                 "url": result.get("url"),
-                "properties": process_properties(properties)
+                "properties": {}
             }
+
+            properties = result.get("properties", {})
+
+            for property_name, property_value in properties.items():
+                if property_name == "Nombre de tarea" and property_value.get("title"):
+                    page_info["properties"]["Nombre de tarea"] = property_value["title"][0]["plain_text"]
+                elif property_name == "Estado" and property_value.get("status"):
+                    page_info["properties"]["Estado"] = property_value["status"].get("name", None)
+                elif property_name == "Etiquetas" and property_value.get("multi_select"):
+                    page_info["properties"]["Etiquetas"] = [tag["name"] for tag in property_value.get("multi_select", [])]
+                elif property_name == "Fecha límite" and property_value.get("date"):
+                    page_info["properties"]["Fecha límite"] = property_value.get("date")
+                elif property_name == "Prioridad" and property_value.get("select"):
+                    page_info["properties"]["Prioridad"] = property_value["select"].get("name")
+                elif property_name == "Proyecto" and property_value.get("relation"):
+                    page_info["properties"]["Proyecto"] = [relation["id"] for relation in property_value.get("relation", [])]
+                elif property_name == "Responsable" and property_value.get("people"):
+                    page_info["properties"]["Responsable"] = [person["id"] for person in property_value.get("people", [])]
+                elif property_name == "Resumen" and property_value.get("rich_text"):
+                    page_info["properties"]["Resumen"] = [text["text"]["content"] for text in property_value.get("rich_text", [])]
+                elif property_name == "Subtareas" and property_value.get("relation"):
+                    page_info["properties"]["Subtareas"] = [subtask["id"] for subtask in property_value.get("relation", [])]
+                elif property_name == "Tarea principal" and property_value.get("relation"):
+                    page_info["properties"]["Tarea principal"] = [parent_task["id"] for parent_task in property_value.get("relation", [])]
+
+            children = result.get("children", [])
+            for block in children:
+                if block.get("type") == "gallery":
+                    gallery_items = block.get("gallery", {}).get("items", [])
+                    page_info["properties"]["Galería"] = [item.get("title", "Sin título") for item in gallery_items]
 
             simplified_results.append(page_info)
 
         return jsonify(simplified_results)
-
-
-    def extract_text_from_properties(properties):
-        """Extrae texto relevante de las propiedades para la comparación."""
-        text_values = []
-        for property_value in properties.values():
-            if property_value.get("title"):
-                text_values.extend(item["plain_text"] for item in property_value["title"])
-            elif property_value.get("rich_text"):
-                text_values.extend(item["text"]["content"] for item in property_value["rich_text"])
-        return text_values
-
-
-    def process_properties(properties):
-        """Procesa las propiedades de Notion para devolver información simplificada."""
-        processed = {}
-        for property_name, property_value in properties.items():
-            if property_name == "Nombre de tarea" and property_value.get("title"):
-                processed["Nombre de tarea"] = property_value["title"][0]["plain_text"]
-            elif property_name == "Estado" and property_value.get("status"):
-                processed["Estado"] = property_value["status"].get("name", None)
-            elif property_name == "Etiquetas" and property_value.get("multi_select"):
-                processed["Etiquetas"] = [tag["name"] for tag in property_value.get("multi_select", [])]
-            elif property_name == "Fecha límite" and property_value.get("date"):
-                processed["Fecha límite"] = property_value.get("date")
-            elif property_name == "Prioridad" and property_value.get("select"):
-                processed["Prioridad"] = property_value["select"].get("name")
-            elif property_name == "Proyecto" and property_value.get("relation"):
-                processed["Proyecto"] = [relation["id"] for relation in property_value.get("relation", [])]
-            elif property_name == "Responsable" and property_value.get("people"):
-                processed["Responsable"] = [person["id"] for person in property_value.get("people", [])]
-            elif property_name == "Resumen" and property_value.get("rich_text"):
-                processed["Resumen"] = [text["text"]["content"] for text in property_value.get("rich_text", [])]
-            elif property_name == "Subtareas" and property_value.get("relation"):
-                processed["Subtareas"] = [subtask["id"] for subtask in property_value.get("relation", [])]
-            elif property_name == "Tarea principal" and property_value.get("relation"):
-                processed["Tarea principal"] = [parent_task["id"] for parent_task in property_value.get("relation", [])]
-        return processed
-
 
     @app.route('/search/slack', methods=['GET'])
     def search_slack():

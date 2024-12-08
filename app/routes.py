@@ -528,7 +528,7 @@ def setup_routes(app, mongo):
                 'Content-Type': 'application/json'
             }
 
-            response = requests.get(url, headers=headers, params={'$search': search_query, '$top': 3})
+            response = requests.get(url, headers=headers, params={'$filter': search_query, '$top': 3})
             response.raise_for_status()
 
             results = response.json().get('value', [])

@@ -816,6 +816,8 @@ def setup_routes(app, mongo):
                 )
             except Exception as e:
                 search_results_data['notion'] = [f"Error al buscar en Notion: {str(e)}"]
+            
+            print(search_results_data['notion'])
 
             try:
                 gmail_results = search_gmail()
@@ -826,6 +828,7 @@ def setup_routes(app, mongo):
                 )
             except Exception as e:
                 search_results_data['gmail'] = [f"Error al buscar en Gmail: {str(e)}"]
+            print(search_results_data['gmail'])
 
             try:
                 slack_results = search_slack()
@@ -836,6 +839,7 @@ def setup_routes(app, mongo):
                 )
             except Exception as e:
                 search_results_data['slack'] = [f"Error al buscar en Slack: {str(e)}"]
+            print(search_results_data['slack'])
 
             try:
                 outlook_results = search_outlook()
@@ -846,6 +850,7 @@ def setup_routes(app, mongo):
                 )
             except Exception as e:
                 search_results_data['outlook'] = [f"Error al buscar en Outlook: {str(e)}"]
+            print(search_results_data['outlook'])
 
             try:
                 hubspot_results = search_hubspot()
@@ -856,6 +861,9 @@ def setup_routes(app, mongo):
                 )
             except Exception as e:
                 search_results_data['hubspot'] = [f"Error al buscar en HubSpot: {str(e)}"]
+
+            print(search_results_data['hubspot'])
+
 
         except Exception as e:
             return jsonify({"error": f"Error general al obtener resultados de búsqueda: {str(e)}"}), 500
@@ -875,6 +883,7 @@ def setup_routes(app, mongo):
                 max_tokens=4096
             )
             ia_response = response.choices[0].message.content.strip()
+            print(ia_response)
             if not ia_response:
                 return jsonify({"error": "La respuesta de la IA está vacía"}), 500
             return jsonify({"response": to_ascii(ia_response)})
@@ -882,54 +891,66 @@ def setup_routes(app, mongo):
         except Exception as e:
             return jsonify({"error": f"Error al generar la respuesta de la IA: {str(e)}"}), 500
 
+    def validate_search_results(data):
+        if not isinstance(data, dict):
+            raise ValueError("search_results debe ser un diccionario.")
+        for key, value in data.items():
+            if not isinstance(value, (list, dict)):
+                raise ValueError(f"El valor asociado a '{key}' debe ser una lista o un diccionario.")
 
     def generate_prompt(query, search_results):
+        # Validar los datos de entrada
+
+
         # Extraer solo la información relevante de cada fuente
         results = {}
 
-        # Gmail Results (extracting relevant info)
+        # Gmail Results (extraer información relevante)
         gmail_results = "\n".join([
-            f"De: {email['from']} | Asunto: {email['subject']} | Fecha: {email['date']} | Body: {email['body']}"
+            f"De: {email.get('from', 'Desconocido')} | Asunto: {email.get('subject', 'Sin asunto')} | Fecha: {email.get('date', 'Sin fecha')} | Body: {email.get('body', 'Sin cuerpo')}"
             for email in search_results.get('gmail', []) if isinstance(email, dict)
         ]) or "No se encontraron correos relacionados en Gmail."
 
-        # Slack Results (extracting relevant info)
+        # Slack Results (extraer información relevante)
         slack_results = "\n".join([
-            f"Canal: {msg['channel']} | Usuario: {msg['user']} | Mensaje: {msg['text']} | Fecha: {msg['ts']}"
+            f"Canal: {msg.get('channel', 'Desconocido')} | Usuario: {msg.get('user', 'Desconocido')} | Mensaje: {msg.get('text', 'Sin mensaje')} | Fecha: {msg.get('ts', 'Sin fecha')}"
             for msg in search_results.get('slack', []) if isinstance(msg, dict)
         ]) or "No se encontraron mensajes relacionados en Slack."
 
-        # Notion Results (extracting relevant info)
+        # Notion Results (extraer información relevante)
         notion_results = "\n".join([
-            f"Página ID: {page['id']} | URL: {page['url']} | Última edición: {page['last_edited_time']}"
+            f"Página ID: {page.get('id', 'Sin ID')} | URL: {page.get('url', 'Sin URL')} | Última edición: {page.get('last_edited_time', 'Sin edición')}"
             for page in search_results.get('notion', []) if isinstance(page, dict)
         ]) or "No se encontraron notas relacionadas en Notion."
 
-        # Outlook Results (extracting relevant info)
+        # Outlook Results (extraer información relevante)
         outlook_results = "\n".join([
-            f"De: {email['sender']} | Asunto: {email['subject']} | Fecha: {email['receivedDateTime']}"
+            f"De: {email.get('sender', 'Desconocido')} | Asunto: {email.get('subject', 'Sin asunto')} | Fecha: {email.get('receivedDateTime', 'Sin fecha')}"
             for email in search_results.get('outlook', []) if isinstance(email, dict)
         ]) or "No se encontraron correos relacionados en Outlook."
 
-        # HubSpot Results (extracting relevant info)
+        # HubSpot Results (extraer información relevante)
         hubspot_results = []
         hubspot_data = search_results.get("hubspot", {})
 
-        # Extract contacts, companies, and deals from HubSpot if available
-        if "contacts" in hubspot_data:
-            contacts = hubspot_data["contacts"]
-            if isinstance(contacts, list) and contacts:
-                hubspot_results.append("Contactos:\n" + "\n".join([f"Nombre: {contact.get('name', 'N/A')} | Correo: {contact.get('email', 'N/A')} | Teléfono: {contact.get('phone', 'N/A')}" for contact in contacts]))
+        try:
+            if "contacts" in hubspot_data:
+                contacts = hubspot_data["contacts"]
+                if isinstance(contacts, list) and contacts:
+                    hubspot_results.append("Contactos:\n" + "\n".join([f"Nombre: {contact.get('name', 'N/A')} | Correo: {contact.get('email', 'N/A')} | Teléfono: {contact.get('phone', 'N/A')}" for contact in contacts]))
 
-        if "companies" in hubspot_data:
-            companies = hubspot_data["companies"]
-            if isinstance(companies, list) and companies:
-                hubspot_results.append("Compañías:\n" + "\n".join([f"Compañía: {company.get('company', 'N/A')} | Teléfono: {company.get('phone', 'N/A')}" for company in companies]))
+            if "companies" in hubspot_data:
+                companies = hubspot_data["companies"]
+                if isinstance(companies, list) and companies:
+                    hubspot_results.append("Compañías:\n" + "\n".join([f"Compañía: {company.get('company', 'N/A')} | Teléfono: {company.get('phone', 'N/A')}" for company in companies]))
 
-        if "deals" in hubspot_data:
-            deals = hubspot_data["deals"]
-            if isinstance(deals, list) and deals:
-                hubspot_results.append("Negocios:\n" + "\n".join([f"Negocio: {deal.get('name', 'N/A')} | Monto: {deal.get('price', 'N/A')} | Estado: {deal.get('stage', 'N/A')}" for deal in deals]))
+            if "deals" in hubspot_data:
+                deals = hubspot_data["deals"]
+                if isinstance(deals, list) and deals:
+                    hubspot_results.append("Negocios:\n" + "\n".join([f"Negocio: {deal.get('name', 'N/A')} | Monto: {deal.get('price', 'N/A')} | Estado: {deal.get('stage', 'N/A')}" for deal in deals]))
+
+        except Exception as e:
+            hubspot_results.append(f"Error procesando datos de HubSpot: {str(e)}")
 
         hubspot_results = "\n".join(hubspot_results) or "No se encontraron resultados relacionados en HubSpot."
 
@@ -954,6 +975,7 @@ def setup_routes(app, mongo):
         Responde de forma concisa y directa, enfocándote solo en la información más relevante sin repetir detalles innecesarios ni mencionar la query. Utiliza fechas, URLs y detalles clave, y asegúrate de que la respuesta sea fácilmente comprensible. En el caso de links solo colocalos una vez
         """
 
+        print(prompt)  # Depuración: Verificar que el prompt esté correcto
         return prompt
 
     def clean_body(body):

@@ -807,6 +807,17 @@ def setup_routes(app, mongo):
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
             # Llamadas a las funciones de búsqueda
+
+            try:
+                notion_results = search_notion()
+                search_results_data['notion'] = (
+                    notion_results.get_json() 
+                    if hasattr(notion_results, 'get_json') 
+                    else notion_results
+                )
+            except Exception as e:
+                search_results_data['notion'] = [f"Error al buscar en Notion: {str(e)}"]
+
             try:
                 gmail_results = search_gmail()
                 search_results_data['gmail'] = (
@@ -847,15 +858,6 @@ def setup_routes(app, mongo):
             except Exception as e:
                 search_results_data['hubspot'] = [f"Error al buscar en HubSpot: {str(e)}"]
 
-            try:
-                notion_results = search_notion()
-                search_results_data['notion'] = (
-                    notion_results.get_json() 
-                    if hasattr(notion_results, 'get_json') 
-                    else notion_results
-                )
-            except Exception as e:
-                search_results_data['notion'] = [f"Error al buscar en Notion: {str(e)}"]
 
         except Exception as e:
             return jsonify({"error": f"Error general al obtener resultados de búsqueda: {str(e)}"}), 500

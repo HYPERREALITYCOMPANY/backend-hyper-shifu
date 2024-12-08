@@ -268,7 +268,7 @@ def setup_routes(app, mongo):
     def search_gmail():
         email = request.args.get('email')
         query = request.args.get('solicitud')
-        
+
         try:
             user = mongo.db.usuarios.find_one({'correo': email})
             if not user:
@@ -280,6 +280,7 @@ def setup_routes(app, mongo):
 
             if not query:
                 return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
+
             url = "https://www.googleapis.com/gmail/v1/users/me/messages"
             headers = {
                 'Authorization': f"Bearer {gmail_token}"
@@ -296,7 +297,9 @@ def setup_routes(app, mongo):
             search_results = []
             for message in messages:
                 message_id = message['id']
-                message_response = requests.get(f'https://www.googleapis.com/gmail/v1/users/me/messages/{message_id}', headers=headers)
+                message_response = requests.get(
+                    f'https://www.googleapis.com/gmail/v1/users/me/messages/{message_id}', headers=headers
+                )
 
                 if message_response.status_code == 200:
                     message_data = message_response.json()
@@ -310,22 +313,23 @@ def setup_routes(app, mongo):
                         for part in message_data['payload']['parts']:
                             if part['mimeType'] == 'text/html':
                                 html_body = decode_message_body(part['body']['data'])
-                                decoded_body = decode_message_body(body)
-                                decoded_body = to_ascii(decoded_body)
                                 body = extract_text_from_html(html_body)
-                                body = clean_body(body)
                                 break
                     else:
                         if message_data['payload'].get('body', {}).get('data'):
                             html_body = decode_message_body(message_data['payload']['body']['data'])
-                            body = clean_body(body)
                             body = extract_text_from_html(html_body)
+
+                    # Crear la URL del correo
+                    mail_url = f"https://mail.google.com/mail/u/0/#inbox/{message_id}"
+
                     # Añadir los detalles del mensaje a la lista
                     search_results.append({
                         'from': sender,
                         'date': date,
                         'subject': subject,
-                        'body': body
+                        'body': body,
+                        'link': mail_url
                     })
 
             return jsonify(search_results)
@@ -338,21 +342,25 @@ def setup_routes(app, mongo):
     @app.route('/search/notion', methods=['GET'])
     def search_notion():
         email = request.args.get('email')
-        query = request.args.get('proyecto')
+        query = request.args.get('proyecto') or request.args.get('empresa') or request.args.get('company')
         simplified_results = []
 
         try:
+            # Verificar usuario en la base de datos
             user = mongo.db.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
+            # Verificar token de Notion
             notion_token = user.get('integrations', {}).get('Notion', None)
             if not notion_token:
                 return jsonify({"error": "Token de Notion no disponible"}), 400
 
+            # Verificar término de búsqueda
             if not query:
                 return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
 
+            # Configuración de solicitud a Notion
             url = 'https://api.notion.com/v1/search'
             headers = {
                 'Authorization': f'Bearer {notion_token}',
@@ -361,26 +369,26 @@ def setup_routes(app, mongo):
             }
             data = {"query": query}
 
+            # Realizar solicitud a Notion
             response = requests.post(url, headers=headers, json=data)
             response.raise_for_status()
 
+            # Procesar resultados
             results = response.json().get("results", [])
             if not results:
-                return jsonify({"error": "No se encontraron resultados"}), 404
+                return jsonify({"error": "No se encontraron resultados en Notion"}), 404
 
             for result in results:
                 page_info = {
                     "id": result["id"],
-                    "created_time": result.get("created_time"),
-                    "last_edited_time": result.get("last_edited_time"),
                     "url": result.get("url"),
                     "properties": {}
                 }
 
                 properties = result.get("properties", {})
                 for property_name, property_value in properties.items():
-                    if property_name == "Nombre de tarea" and property_value.get("title"):
-                        page_info["properties"]["Nombre de tarea"] = property_value["title"][0]["plain_text"]
+                    if property_name in ["Nombre de tarea", "Nombre del proyecto"] and property_value.get("title"):
+                        page_info["properties"][property_name] = property_value["title"][0]["plain_text"]
                     elif property_name == "Estado" and property_value.get("status"):
                         page_info["properties"]["Estado"] = property_value["status"].get("name", None)
                     elif property_name == "Etiquetas" and property_value.get("multi_select"):
@@ -400,14 +408,26 @@ def setup_routes(app, mongo):
                     elif property_name == "Tarea principal" and property_value.get("relation"):
                         page_info["properties"]["Tarea principal"] = [parent_task["id"] for parent_task in property_value.get("relation", [])]
 
-                # Filtrar por "Rendimiento" en el resumen o nombre del proyecto
-                if 'Resumen' in page_info["properties"] and query.lower() in page_info["properties"]["Resumen"][0].lower():
+                if (
+                    'Resumen' in page_info["properties"]
+                    and page_info["properties"]["Resumen"]
+                    and query.lower() in page_info["properties"]["Resumen"][0].lower()
+                ):
                     simplified_results.append(page_info)
-                elif 'Nombre de tarea' in page_info["properties"] and query.lower() in page_info["properties"]["Nombre de tarea"].lower():
+                elif (
+                    'Nombre de tarea' in page_info["properties"]
+                    and query.lower() in page_info["properties"]["Nombre de tarea"].lower()
+                ):
+                    simplified_results.append(page_info)
+                elif (
+                    'Nombre del proyecto' in page_info["properties"]
+                    and query.lower() in page_info["properties"]["Nombre del proyecto"].lower()
+                ):
                     simplified_results.append(page_info)
 
+            # Si no hay resultados simplificados
             if not simplified_results:
-                return jsonify({"error": "No se encontraron proyectos que coincidan con la búsqueda"}), 404
+                return jsonify({"error": "No se encontraron resultados en Notion"}), 404
 
             return jsonify(simplified_results)
 
@@ -415,6 +435,7 @@ def setup_routes(app, mongo):
             return jsonify({"error": "Error al realizar la solicitud a Notion", "details": str(e)}), 500
         except Exception as e:
             return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+
 
     @app.route('/search/slack', methods=['GET'])
     def search_slack():
@@ -572,55 +593,58 @@ def setup_routes(app, mongo):
     @app.route('/search/hubspot', methods=['GET'])
     def search_hubspot():
         email = request.args.get('email')
+        user = mongo.db.usuarios.find_one({'correo': email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+        
+        hubspot_token = user.get('integrations', {}).get('HubSpot', None)
         query = request.args.get('solicitud')
-        persona = request.args.get('persona')
-        company = request.args.get('company')
-        empresa = request.args.get('empresa')
+        persona = request.args.get('persona')  # Persona extraída del query
+        if not query:
+            return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
 
-        try:
-            user = mongo.db.usuarios.find_one({'correo': email})
-            if not user:
-                return jsonify({"error": "Usuario no encontrado"}), 404
-
-            hubspot_token = user.get('integrations', {}).get('HubSpot', None)
-            if not query and not company and not empresa:
-                return jsonify({"error": "Debe proporcionar al menos un término de búsqueda"}), 400
-
-            # Configuración de endpoints
-            endpoints = {
-                "contacts": {"url": "https://api.hubapi.com/crm/v3/objects/contacts/search", "propertyName": "firstname"},
-                "companies": {"url": "https://api.hubapi.com/crm/v3/objects/companies/search", "propertyName": "name"},
-                "deals": {"url": "https://api.hubapi.com/crm/v3/objects/deals/search", "propertyName": "dealname"}
+        # Endpoints de búsqueda en HubSpot
+        endpoints = {
+            "contacts": {
+                "url": "https://api.hubapi.com/crm/v3/objects/contacts/search",
+                "propertyName": "firstname"
+            },
+            "companies": {
+                "url": "https://api.hubapi.com/crm/v3/objects/companies/search",
+                "propertyName": "name"
+            },
+            "deals": {
+                "url": "https://api.hubapi.com/crm/v3/objects/deals/search",
+                "propertyName": "dealname"
             }
+        }
 
-            headers = {'Authorization': f"Bearer {hubspot_token}", 'Content-Type': 'application/json'}
-            search_results = {}
+        headers = {
+            'Authorization': f"Bearer {hubspot_token}",
+            'Content-Type': 'application/json'
+        }
 
-            for object_type, config in endpoints.items():
-                url = config["url"]
-                property_name = config["propertyName"]
+        search_results = {}
 
-                # Construir los filtros de búsqueda dinámicamente
-                filters = []
-                if query:
-                    filters.append({"propertyName": property_name, "operator": "CONTAINS_TOKEN", "value": query})
-                if company:
-                    filters.append({"propertyName": "company", "operator": "CONTAINS_TOKEN", "value": company})
-                if empresa:
-                    filters.append({"propertyName": "empresa", "operator": "CONTAINS_TOKEN", "value": empresa})
-
-                data = {
-                    "filters": filters,
-                    "properties": ["firstname", "lastname", "email", "phone", "company", "createdate", "hubspot_owner_id"]
-                }
-
-                try:
-                    response = requests.post(url, headers=headers, json=data)
-                    response.raise_for_status()
-
+        # Si la consulta menciona una persona, buscar en contactos de HubSpot
+        if persona:
+            # Buscar por nombre en los contactos si se menciona una persona
+            data = {
+                "filters": [
+                    {
+                        "propertyName": "firstname",
+                        "operator": "CONTAINS_TOKEN",
+                        "value": persona
+                    }
+                ],
+                "properties": ["firstname", "lastname", "email", "phone", "company", "createdate", "hubspot_owner_id"]
+            }
+            try:
+                response = requests.post(endpoints["contacts"]["url"], headers=headers, json=data)
+                if response.status_code == 200:
                     results = response.json().get("results", [])
                     if not results:
-                        search_results[object_type] = {"message": f"No se encontraron {object_type} con los criterios especificados"}
+                        search_results["contacts"] = {"message": f"No se encontraron contactos para '{persona}'"}
                     else:
                         formatted_results = []
                         for result in results:
@@ -630,30 +654,136 @@ def setup_routes(app, mongo):
                                 formatted_date = datetime.strptime(created_date, "%Y-%m-%dT%H:%M:%S.%fZ").strftime("%Y-%m-%d")
                             except ValueError:
                                 formatted_date = created_date
-
+                            
                             result_info = {
                                 "id": result.get("id"),
-                                "name": properties.get("firstname", "N/A"),
+                                "name": f"{properties.get('firstname', 'N/A')} {properties.get('lastname', 'N/A')}",
                                 "email": properties.get("email", "N/A"),
-                                "createdate": formatted_date,
-                                "company": properties.get("company", "N/A")
+                                "phone": properties.get("phone", "N/A"),
+                                "createdate": formatted_date
+                            }
+
+                            company_assoc = get_associations("contacts", result_info["id"], "companies", hubspot_token)
+                            company_info = fetch_associated_details(company_assoc, "companies", hubspot_token)
+
+                            if company_info:
+                                result_info["company"] = company_info[0].get("name", "N/A")
+                            else:
+                                result_info["company"] = "N/A"
+                            
+                            formatted_results.append(result_info)
+
+                        search_results["contacts"] = formatted_results
+                else:
+                    search_results["contacts"] = {
+                        "error": "Error al buscar en contactos",
+                        "details": response.json()
+                    }
+            except requests.RequestException as e:
+                search_results["contacts"] = {
+                    "error": "Error al procesar la solicitud en contactos",
+                    "details": str(e)
+                }
+
+        # Si la consulta menciona "empresa" o "company", hacer búsqueda de empresas
+        elif "empresa" in query.lower() or "company" in query.lower():
+            data = {
+                "filters": [
+                    {
+                        "propertyName": "name",
+                        "operator": "CONTAINS_TOKEN",
+                        "value": query
+                    }
+                ],
+                "properties": ["name", "price"]
+            }
+            try:
+                response = requests.post(endpoints["companies"]["url"], headers=headers, json=data)
+                if response.status_code == 200:
+                    results = response.json().get("results", [])
+                    if not results:
+                        search_results["companies"] = {"message": f"No se encontraron empresas con '{query}'"}
+                    else:
+                        formatted_results = []
+                        for result in results:
+                            properties = result.get("properties", {})
+                            result_info = {
+                                "id": result.get("id"),
+                                "name": properties.get("name", "N/A"),
+                                "price": properties.get("price", "N/A")
                             }
                             formatted_results.append(result_info)
 
-                        search_results[object_type] = formatted_results
+                        search_results["companies"] = formatted_results
+                else:
+                    search_results["companies"] = {
+                        "error": "Error al buscar en empresas",
+                        "details": response.json()
+                    }
+            except requests.RequestException as e:
+                search_results["companies"] = {
+                    "error": "Error al procesar la solicitud en empresas",
+                    "details": str(e)
+                }
 
+        # Procesar búsqueda general (deals, contactos, empresas) si no se menciona una persona específica
+        else:
+            for object_type, config in endpoints.items():
+                url = config["url"]
+                property_name = config["propertyName"]
+
+                data = {
+                    "filters": [
+                        {
+                            "propertyName": property_name,
+                            "operator": "CONTAINS_TOKEN",
+                            "value": query
+                        }
+                    ],
+                    "properties": ["firstname", "lastname", "name", "dealname", "cost", "email", "phone", "company", "createdate", "hubspot_owner_id", "dealstage", "price"]
+                }
+
+                try:
+                    response = requests.post(url, headers=headers, json=data)
+                    if response.status_code == 200:
+                        results = response.json().get("results", [])
+                        if not results:
+                            search_results[object_type] = {"message": f"No se encontraron {object_type} con '{query}'"}
+                        else:
+                            formatted_results = []
+                            for result in results:
+                                properties = result.get("properties", {})
+                                created_date = properties.get("createdate", "")
+                                try:
+                                    formatted_date = datetime.strptime(created_date, "%Y-%m-%dT%H:%M:%S.%fZ").strftime("%Y-%m-%d")
+                                except ValueError:
+                                    formatted_date = created_date
+
+                                result_info = {
+                                    "id": result.get("id"),
+                                    "email": properties.get("email", "N/A"),
+                                    "phone": properties.get("phone", "N/A"),
+                                    "createdate": formatted_date
+                                }
+
+                                if object_type == "deals":
+                                    result_info["owner"] = get_owner_name(properties.get("hubspot_owner_id", ""), hubspot_token, "firstName")
+                                    result_info["dealname"] = properties.get("dealname", "N/A")
+                                formatted_results.append(result_info)
+
+                            search_results[object_type] = formatted_results
+                    else:
+                        search_results[object_type] = {
+                            "error": f"Error al buscar en {object_type}",
+                            "details": response.json()
+                        }
                 except requests.RequestException as e:
                     search_results[object_type] = {
-                        "error": f"Error al buscar en {object_type}",
+                        "error": f"Error al procesar la solicitud en {object_type}",
                         "details": str(e)
                     }
 
-            return jsonify(search_results)
-
-        except requests.RequestException as e:
-            return jsonify({"error": "Error al procesar la solicitud en HubSpot", "details": str(e)}), 500
-        except Exception as e:
-            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+        return jsonify(search_results)
 
     @app.route('/askIa', methods=['GET'])
     def ask():
@@ -677,16 +807,6 @@ def setup_routes(app, mongo):
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
             # Llamadas a las funciones de búsqueda
-            try:
-                notion_results = search_notion()
-                search_results_data['notion'] = (
-                    notion_results.get_json() 
-                    if hasattr(notion_results, 'get_json') 
-                    else notion_results
-                )
-            except Exception as e:
-                search_results_data['notion'] = [f"Error al buscar en Notion: {str(e)}"]
-
             try:
                 gmail_results = search_gmail()
                 search_results_data['gmail'] = (
@@ -726,6 +846,16 @@ def setup_routes(app, mongo):
                 )
             except Exception as e:
                 search_results_data['hubspot'] = [f"Error al buscar en HubSpot: {str(e)}"]
+
+            try:
+                notion_results = search_notion()
+                search_results_data['notion'] = (
+                    notion_results.get_json() 
+                    if hasattr(notion_results, 'get_json') 
+                    else notion_results
+                )
+            except Exception as e:
+                search_results_data['notion'] = [f"Error al buscar en Notion: {str(e)}"]
 
         except Exception as e:
             return jsonify({"error": f"Error general al obtener resultados de búsqueda: {str(e)}"}), 500

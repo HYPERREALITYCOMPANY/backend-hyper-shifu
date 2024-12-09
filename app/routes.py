@@ -197,7 +197,6 @@ def setup_routes(app, mongo):
         # Devolvemos las integraciones que tiene el usuario
         return jsonify({"integrations": user.get("integrations", {})}), 200
 
-
     @app.route('/add_integration', methods=['POST'])
     def add_integration():
         request_data = request.get_json()
@@ -207,23 +206,33 @@ def setup_routes(app, mongo):
         print(integration_name)
         token = request_data.get("token")
         print(token)
+        expires_in = request_data.get("expires_in")
 
         if not all([user_email, integration_name, token]):
             return jsonify({"error": "Faltan campos obligatorios"}), 400
 
+        # Verificar que el usuario exista
         user = mongo.db.usuarios.find_one({"correo": user_email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
+
+        # Crear el objeto para la integración
+        integration_data = {"token": token}
+
+        # Si no es Notion ni Slack, agregar el campo expires_in
+        if integration_name not in ["Notion", "Slack"]:
+            if expires_in is None:
+                return jsonify({"error": "El campo 'expires_in' es obligatorio para esta integración"}), 400
+            integration_data["expires_in"] = int(expires_in)
 
         # Actualizar el campo de integraciones
         # Verifica si la integración ya existe, de lo contrario, la agrega
         mongo.db.usuarios.update_one(
             {"correo": user_email},
-            {"$set": {f"integrations.{integration_name}": token}}
+            {"$set": {f"integrations.{integration_name}": integration_data}}
         )
 
         return jsonify({"message": "Integración añadida exitosamente"}), 200
-
 
     @app.route('/assign_user_id', methods=['POST'])
     def assign_user_id():
@@ -274,7 +283,14 @@ def setup_routes(app, mongo):
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
-            gmail_token = user.get('integrations', {}).get('Gmail', None)
+            gmail_integration = user.get('integrations', {}).get('Gmail', None)
+            if gmail_integration:
+                gmail_token = gmail_integration.get('token', None)
+                # Si 'expires_in' está presente, puedes acceder a él también
+                gmail_expires_in = gmail_integration.get('expires_in', None)
+            else:
+                gmail_token = None
+                gmail_expires_in = None
             if not gmail_token:
                 return jsonify({"error": "Token de Gmail no disponible"}), 400
 
@@ -352,7 +368,11 @@ def setup_routes(app, mongo):
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
             # Verificar token de Notion
-            notion_token = user.get('integrations', {}).get('Notion', None)
+            notion_integration = user.get('integrations', {}).get('Notion', None)
+            if notion_integration:
+                notion_token = notion_integration.get('token', None)
+            else:
+                notion_token = None
             if not notion_token:
                 return jsonify({"error": "Token de Notion no disponible"}), 400
 
@@ -449,7 +469,11 @@ def setup_routes(app, mongo):
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
             # Verificar integración con Slack
-            slack_token = user.get('integrations', {}).get('Slack', None)
+            slack_integration = user.get('integrations', {}).get('Slack', None)
+            if slack_integration:
+                slack_token = slack_integration.get('token', None)
+            else:
+                slack_token = None
             if not slack_token:
                 return jsonify({"error": "No se encuentra integración con Slack"}), 404
 
@@ -509,7 +533,13 @@ def setup_routes(app, mongo):
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
             
-            outlook_token = user.get('integrations', {}).get('Outlook', None)
+            outlook_integration = user.get('integrations', {}).get('Outlook', None)
+            if outlook_integration:
+                outlook_token = outlook_integration.get('token', None)
+                outlook_expires_in = outlook_integration.get('expires_in', None)
+            else:
+                outlook_token = None
+                outlook_expires_in = None
             if not outlook_token:
                 return jsonify({"error": "Token de Outlook no disponible"}), 400
 
@@ -597,7 +627,13 @@ def setup_routes(app, mongo):
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
         
-        hubspot_token = user.get('integrations', {}).get('HubSpot', None)
+        hubspot_integration = user.get('integrations', {}).get('HubSpot', None)
+        if hubspot_integration:
+            hubspot_token = hubspot_integration.get('token', None)
+            hubspot_expires_in = hubspot_integration.get('expires_in', None)
+        else:
+            hubspot_token = None
+            hubspot_expires_in = None
         query = request.args.get('solicitud')
         persona = request.args.get('persona')  # Persona extraída del query
         if not query:

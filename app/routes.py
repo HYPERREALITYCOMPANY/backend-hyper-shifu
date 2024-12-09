@@ -1,5 +1,6 @@
 from flask import redirect, Blueprint, url_for, session, request, jsonify
 import requests
+from dateutil.relativedelta import relativedelta
 from requests_oauthlib import OAuth2Session
 from config import Config
 from urllib.parse import urlencode
@@ -512,7 +513,8 @@ def setup_routes(app, mongo):
                     "channel": message.get("channel", {}).get("name"),
                     "user": message.get("username"),
                     "text": message.get("text"),
-                    "ts": message.get("ts")
+                    "ts": message.get("ts"),
+                    "link": f"https://slack.com/archives/{message.get('channel')}/p{message.get('ts').replace('.', '')}"
                 }
                 for message in messages
             ]
@@ -523,6 +525,36 @@ def setup_routes(app, mongo):
             return jsonify({"error": "Error al conectarse a Slack", "details": str(e)}), 500
         except Exception as e:
             return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+        
+    def parse_fecha_relativa(fecha_str):
+        """
+        Parsea una fecha relativa como '1 mes', '2 días', etc., y devuelve un objeto datetime.
+        """
+        # Definir las unidades que se pueden usar
+        unidades = {
+            "día": "days",
+            "mes": "months",
+            "año": "years",
+            "hora": "hours",
+            "minuto": "minutes",
+            "segundo": "seconds"
+        }
+
+        # Expresión regular para buscar el número y la unidad
+        pattern = r'(\d+)\s*(día|mes|año|hora|minuto|segundo)s?'
+        match = re.match(pattern, fecha_str)
+
+        if match:
+            cantidad = int(match.group(1))
+            unidad = match.group(2)
+            
+            # Convertir a la unidad apropiada de relativedelta
+            kwargs = {unidades[unidad]: cantidad}
+            
+            # Restar el tiempo a la fecha actual
+            return datetime.now() - relativedelta(**kwargs)
+    
+        raise ValueError("Formato de fecha relativa no válido.")
 
     @app.route('/search/outlook', methods=['GET'])
     def search_outlook():
@@ -550,10 +582,20 @@ def setup_routes(app, mongo):
                 return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
 
             search_query = query
+
+            # Si se especifica una persona (debe ser una dirección de correo electrónico)
             if persona:
                 search_query += f' from:{persona}'
+
+            # Si se especifica una fecha, filtrar por fecha de recepción
             if fecha:
-                search_query += f' received:{fecha}'
+                try:
+                    fecha_relativa = parse_fecha_relativa(fecha)
+                    # Formatear la fecha a ISO 8601
+                    fecha_formateada = fecha_relativa.strftime('%Y-%m-%dT%H:%M:%SZ')
+                    search_query += f' received ge {fecha_formateada}'
+                except ValueError:
+                    return jsonify({"error": "Formato de fecha relativa inválido"}), 400
 
             url = 'https://graph.microsoft.com/v1.0/me/messages'
             headers = {
@@ -561,7 +603,8 @@ def setup_routes(app, mongo):
                 'Content-Type': 'application/json'
             }
 
-            response = requests.get(url, headers=headers, params={'$filter': search_query, '$top': 3})
+            # Puedes especificar más parámetros como $top para el número de resultados y $orderby para ordenar
+            response = requests.get(url, headers=headers, params={'$search': search_query, '$top': 3, '$orderby': 'receivedDateTime desc'})
             response.raise_for_status()
 
             results = response.json().get('value', [])
@@ -575,7 +618,8 @@ def setup_routes(app, mongo):
                     "subject": result.get("subject"),
                     "receivedDateTime": result.get("receivedDateTime"),
                     "sender": result.get("sender", {}).get("emailAddress", {}).get("address"),
-                    "bodyPreview": body
+                    "bodyPreview": body,
+                    "webLink": result.get("webLink")
                 }
                 search_results.append(result_info)
 

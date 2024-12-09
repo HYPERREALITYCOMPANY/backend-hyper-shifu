@@ -217,7 +217,10 @@ def setup_routes(app, mongo):
             return jsonify({"error": "Usuario no encontrado"}), 404
 
         # Crear el objeto para la integración
-        integration_data = {"token": token}
+        integration_data = {
+            "token": token,
+            "timestamp": datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')  # Guardar la fecha y hora en UTC
+        }
 
         # Si no es Notion ni Slack, agregar el campo expires_in
         if integration_name not in ["Notion", "Slack"]:

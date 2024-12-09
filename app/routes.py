@@ -85,12 +85,12 @@ def setup_routes(app, mongo):
     @app.route('/register', methods=['POST'])
     def register_user():
         request_data = request.get_json() 
-        if not request_data or "body" not in request_data:
+        
+        # Aquí obtienes el dato correctamente
+        data = request_data.get('registerUser')
+        
+        if not request_data or "registerUser" not in request_data:
             return jsonify({"error": "El cuerpo de la solicitud es inválido"}), 400
-        try:
-            data = json.loads(request_data["body"])
-        except json.JSONDecodeError:
-            return jsonify({"error": "El cuerpo JSON es inválido"}), 400
 
         if not data or not all(k in data for k in ("nombre", "apellido", "correo", "password")):
             return jsonify({"error": "Faltan campos obligatorios"}), 400
@@ -107,7 +107,7 @@ def setup_routes(app, mongo):
             "apellido": data["apellido"],
             "correo": data["correo"],
             "password": hashed_password,
-            "integrations": {} # Inicialmente vacío
+            "integrations": {}  # Inicialmente vacío
         }
 
         if 'usuarios' not in mongo.db.list_collection_names():

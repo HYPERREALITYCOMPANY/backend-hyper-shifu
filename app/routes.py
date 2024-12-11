@@ -27,60 +27,6 @@ def setup_routes(app, mongo):
     @app.route('/')
     def home():
         return ("Este es el backend del proyecto!!")
-    
-    def parse_query(query):
-        # Convertir a minúsculas para manejar queries insensibles a mayúsculas
-        query = query.lower()
-        
-        # Extraer el remitente (persona) usando una expresión regular
-        sender_match = re.search(r"(mando|de|tengo) (.*?)( de| el| la| los| las| sobre| con| para| que|$)", query)
-
-        sender = sender_match.group(1).strip() if sender_match else None
-        
-        # Extraer días relativos (e.g., "hace 2 días")
-        days_ago_match = re.search(r"hace (\d+) días", query)
-        days_ago = int(days_ago_match.group(1)) if days_ago_match else None
-        
-        # Calcular la fecha inicial si se especifican días
-        if days_ago:
-            start_date = (datetime.now() - timedelta(days=days_ago)).strftime("%Y/%m/%d")
-        else:
-            start_date = None
-
-        return sender, start_date
-
-    def build_query(query):
-        sender, start_date = parse_query(query)
-
-        # Construir la consulta final para Gmail
-        gmail_query = query
-        if sender:
-            gmail_query = f"from:{sender}"
-        if start_date:
-            gmail_query = f"{gmail_query} after:{start_date}"
-
-        return gmail_query
-
-    def build_outlook_query(query):
-        sender, start_date = parse_query(query)  # Reutiliza la lógica de parse_query
-
-        # Convertir fechas a formato ISO 8601
-        if start_date:
-            start_date = datetime.strptime(start_date, "%Y/%m/%d").isoformat()
-
-        # Construir filtros avanzados
-        filters = []
-        if sender:
-            filters.append(f"from/emailAddress/address eq '{sender}'")
-        if start_date:
-            filters.append(f"receivedDateTime ge {start_date}")
-
-        # Unir los filtros con "and"
-        refined_query = " and ".join(filters)
-        print("BUILD QUERY",refined_query)
-        
-        # Si no se agregaron filtros, devolver un query vacío (o predeterminado)
-        return refined_query if refined_query else ""
 
     @app.route('/register', methods=['POST'])
     def register_user():
@@ -306,17 +252,21 @@ def setup_routes(app, mongo):
 
             # Modificar la consulta si el proyecto existe
             if proyecto:
-                query = f'{query} del proyecto "{proyecto}"'
-            
+                query = f'"{proyecto}"'  # Buscar el término exacto de proyecto entre comillas
+
+            if persona:
+                query = f'"{persona}"' #
+
             if datos_adicionales:
                 if datos_adicionales == "Empresas" or datos_adicionales == "Empresa":
-                    query += f'{query} de "{persona}"'
+                    query += f' "{persona}"'  # Buscar el término exacto de persona
 
             url = "https://www.googleapis.com/gmail/v1/users/me/messages"
             headers = {
                 'Authorization': f"Bearer {gmail_token}"
             }
-            params = {"q": query}
+            # Añadir maxResults para limitar a 3 resultados
+            params = {"q": query, "maxResults": 2}
 
             response = requests.get(url, headers=headers, params=params)
             response.raise_for_status()
@@ -605,7 +555,7 @@ def setup_routes(app, mongo):
 
             # Si se especifica una persona (debe ser una dirección de correo electrónico)
             if persona:
-                search_query += f' from:{persona}'
+                search_query += f' from{persona}'
 
             # Si se especifica una fecha, filtrar por fecha de recepción
             if fecha:
@@ -623,9 +573,19 @@ def setup_routes(app, mongo):
                 'Content-Type': 'application/json'
             }
 
-            # Puedes especificar más parámetros como $top para el número de resultados y $orderby para ordenar
-            response = requests.get(url, headers=headers, params={'$search': search_query, '$top': 3, '$orderby': 'receivedDateTime desc'})
-            response.raise_for_status()
+            print("OUTLOOK")
+            # Aquí puedes agregar los parámetros como $top y $orderby
+            params = {
+                '$search': search_query,
+                '$top': 2,
+            }
+
+            response = requests.get(url, headers=headers, params=params)
+
+            # Verificar si la respuesta tiene un código de error
+            if response.status_code != 200:
+                print("Error en la respuesta de Outlook:", response.status_code, response.text)
+                return jsonify({"error": "Error en la respuesta de Outlook", "details": response.text}), 500
 
             results = response.json().get('value', [])
             if not results:
@@ -868,6 +828,13 @@ def setup_routes(app, mongo):
             print(ia_response)
             if not ia_response:
                 return jsonify({"error": "La respuesta de la IA está vacía"}), 500
+            search_results_data = {
+            'gmail': [],
+            'slack': [],
+            'notion': [],
+            'outlook': [],
+            'hubspot': {}
+            }
             return jsonify({"response": to_ascii(ia_response)})
 
         except Exception as e:

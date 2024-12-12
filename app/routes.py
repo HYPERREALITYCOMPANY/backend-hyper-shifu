@@ -266,7 +266,7 @@ def setup_routes(app, mongo):
                 'Authorization': f"Bearer {gmail_token}"
             }
             # Añadir maxResults para limitar a 3 resultados
-            params = {"q": query, "maxResults": 2}
+            params = {"q": query}
 
             response = requests.get(url, headers=headers, params=params)
             response.raise_for_status()
@@ -324,7 +324,10 @@ def setup_routes(app, mongo):
     @app.route('/search/notion', methods=['GET'])
     def search_notion():
         email = request.args.get('email')
-        query = request.args.get('proyecto')
+        proyecto = request.args.get('proyecto')
+        compañia= request.args.get('company')
+        empresa = request.args.get('empresa')
+
         simplified_results = []
 
         try:
@@ -338,6 +341,13 @@ def setup_routes(app, mongo):
             notion_token = notion_integration.get('token') if notion_integration else None
             if not notion_token:
                 return jsonify({"error": "Token de Notion no disponible"}), 400
+
+            if proyecto:
+                query = f'({proyecto})'
+            if compañia:
+                query = f'({compañia})'
+            if empresa:
+                query = f'({empresa})'
 
             # Verificar término de búsqueda
             if not query:

@@ -1,5 +1,6 @@
 from flask import redirect, Blueprint, url_for, session, request, jsonify
 import requests
+import time
 from dateutil.relativedelta import relativedelta
 from requests_oauthlib import OAuth2Session
 from config import Config
@@ -628,9 +629,11 @@ def setup_routes(app, mongo):
 
     @app.route('/search/hubspot', methods=['POST'])
     def search_hubspot():
+        time.sleep(4)
         # Obtener los parámetros del cuerpo de la solicitud
         solicitud =  request.args.get("solicitud")
         print(solicitud)
+        empresa = request.args.get("empresa")
         compania =  request.args.get("compañia")
         persona =  request.args.get("persona")
         datos_adicionales =  request.args.get("datos_adicionales")
@@ -686,15 +689,23 @@ def setup_routes(app, mongo):
             else:
                 return jsonify({"error": f"Error al buscar en HubSpot: {response.status_code} {response.text}"}), response.status_code
 
-        elif solicitud == "contactos CRM":
-            # Buscar contactos de una compañía específica
-            if not compania:
-                return jsonify({"error": "Compañía no proporcionada"}), 400
-            
-            search_data = {
-                "filters": [{"propertyName": "company", "operator": "EQ", "value": compania}],
-                "properties": ["firstname", "lastname", "email", "company", "hubspot_owner_id"]
-            }
+        elif "contactos" in solicitud.lower():
+            print("HOLALALA SOLICITUD")
+            # Si no se proporcionó compañía, buscar todos los contactos
+            if compania:
+                print(compania)
+                # Buscar contactos de una compañía específica
+                search_data = {
+                    "filters": [{"propertyName": "company", "operator": "EQ", "value": compania}],
+                    "properties": ["firstname", "lastname", "email", "company", "hubspot_owner_id"]
+                }
+            else:
+                # Buscar todos los contactos (sin filtro por compañía)
+                search_data = {
+                    "filters": [],
+                    "properties": ["firstname", "lastname", "email", "company", "hubspot_owner_id"]
+                }
+
             response = requests.post(
                 "https://api.hubapi.com/crm/v3/objects/contacts/search",
                 headers=headers,
@@ -713,25 +724,38 @@ def setup_routes(app, mongo):
                     for contact in contacts
                 ]
                 if not search_results["contacts"]:
-                    search_results["contacts"] = {"message": f"No se encontraron contactos para {compania}."}
+                    search_results["contacts"] = {"message": f"No se encontraron contactos{(' para ' + compania) if compania else ''}."}
             else:
                 return jsonify({"error": f"Error al buscar en HubSpot: {response.status_code} {response.text}"}), response.status_code
-
-        elif solicitud == "que empresas tiene Angel (mi contacto)":
-            # Buscar contactos de una persona específica
+        elif "empresas" in solicitud.lower() and persona:
+            print("HOLAAA")
+            # Verificar si se proporcionó el nombre de la persona
             if not persona:
                 return jsonify({"error": "Persona no proporcionada"}), 400
 
+            # Dividir el nombre completo de la persona en primer nombre y apellido
+            persona_nombre = persona.split()
+            if len(persona_nombre) < 2:
+                return jsonify({"error": "Nombre completo de la persona no válido"}), 400
+
             search_data = {
-                "filters": [{"propertyName": "firstname", "operator": "EQ", "value": persona.split()[0]}, 
-                            {"propertyName": "lastname", "operator": "EQ", "value": persona.split()[1]}],
+                "filters": [
+                    {"propertyName": "firstname", "operator": "EQ", "value": persona_nombre[0]},  # Primer nombre
+                    {"propertyName": "lastname", "operator": "EQ", "value": persona_nombre[1]}   # Apellido
+                ],
                 "properties": ["firstname", "lastname", "company", "hubspot_owner_id"]
             }
+
             response = requests.post(
                 "https://api.hubapi.com/crm/v3/objects/contacts/search",
                 headers=headers,
                 json=search_data
             )
+
+            print(response)
+            print(response.status_code)
+
+
             if response.status_code == 200:
                 contacts = response.json().get("results", [])
                 search_results["contacts"] = [
@@ -743,14 +767,16 @@ def setup_routes(app, mongo):
                     }
                     for contact in contacts
                 ]
+                
+                # Si no se encuentran contactos, se envía un mensaje indicando que no se encontraron empresas
                 if not search_results["contacts"]:
-                    search_results["contacts"] = {"message": f"No se encontraron contactos para {persona}."}
+                    search_results["contacts"] = {"message": f"No se encontraron empresas para {persona}."}
             else:
                 return jsonify({"error": f"Error al buscar en HubSpot: {response.status_code} {response.text}"}), response.status_code
 
         else:
             return jsonify({"error": "Tipo de solicitud no soportado"}), 400
-
+        print ("RESPUESTA" , (search_results))
         return jsonify(search_results)
 
 
@@ -774,8 +800,8 @@ def setup_routes(app, mongo):
             user = mongo.db.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
-
-            # Llamadas a las funciones de búsqueda
+           
+           # Llamadas a las funciones de búsqueda
             try:
                 notion_results = search_notion()
                 search_results_data['notion'] = (
@@ -895,7 +921,6 @@ def setup_routes(app, mongo):
             for email in search_results.get('outlook', []) if isinstance(email, dict)
         ]) or "No se encontraron correos relacionados en Outlook."
 
-        # HubSpot Results (extraer información relevante)
         hubspot_results = []
         hubspot_data = search_results.get("hubspot", {})
 
@@ -903,7 +928,7 @@ def setup_routes(app, mongo):
             if "contacts" in hubspot_data:
                 contacts = hubspot_data["contacts"]
                 if isinstance(contacts, list) and contacts:
-                    hubspot_results.append("Contactos:\n" + "\n".join([f"Nombre: {contact.get('name', 'N/A')} | Correo: {contact.get('email', 'N/A')} | Teléfono: {contact.get('phone', 'N/A')}" for contact in contacts]))
+                    hubspot_results.append("Contactos:\n" + "\n".join([f"Nombre: {contact.get('firstname', 'N/A')} {contact.get('lastname', 'N/A')} | Correo: {contact.get('email', 'N/A')} | Compañía: {contact.get('company', 'N/A')}" for contact in contacts]))
 
             if "companies" in hubspot_data:
                 companies = hubspot_data["companies"]

@@ -263,7 +263,7 @@ def setup_routes(app, mongo):
                 'Authorization': f"Bearer {gmail_token}"
             }
             # Añadir maxResults para limitar a 3 resultados
-            params = {"q": query}
+            params = {"q": query , "maxResults": 10}
 
             response = requests.get(url, headers=headers, params=params)
             response.raise_for_status()
@@ -587,12 +587,12 @@ def setup_routes(app, mongo):
             print("OUTLOOK")
             # Aquí puedes agregar los parámetros como $top y $orderby
             params = {
-                '$search': search_query,
-                '$top': 2,
+                '$search': search_query, '$top':10
             }
 
             response = requests.get(url, headers=headers, params=params)
-
+            keywords = query.lower().split()
+            print(keywords)
             # Verificar si la respuesta tiene un código de error
             if response.status_code != 200:
                 print("Error en la respuesta de Outlook:", response.status_code, response.text)
@@ -605,14 +605,16 @@ def setup_routes(app, mongo):
             search_results = []
             for result in results:
                 body = to_ascii(result.get("bodyPreview", ""))
-                result_info = {
-                    "subject": result.get("subject"),
-                    "receivedDateTime": result.get("receivedDateTime"),
-                    "sender": result.get("sender", {}).get("emailAddress", {}).get("address"),
-                    "bodyPreview": body,
-                    "webLink": result.get("webLink")
-                }
-                search_results.append(result_info)
+                # Filtrar palabras clave en el cuerpo del mensaje
+                if any(keyword in result.get("subject").lower() for keyword in keywords):
+                    result_info = {
+                        "subject": result.get("subject"),
+                        "receivedDateTime": result.get("receivedDateTime"),
+                        "sender": result.get("sender", {}).get("emailAddress", {}).get("address"),
+                        "bodyPreview": body,
+                        "webLink": result.get("webLink")
+                    }
+                    search_results.append(result_info)
 
             return jsonify(search_results)
 
@@ -727,7 +729,7 @@ def setup_routes(app, mongo):
                     search_results["contacts"] = {"message": f"No se encontraron contactos{(' para ' + compania) if compania else ''}."}
             else:
                 return jsonify({"error": f"Error al buscar en HubSpot: {response.status_code} {response.text}"}), response.status_code
-        elif "empresas" in solicitud.lower() and persona:
+        elif "empresa" in solicitud.lower() or "company" in solicitud.lower() and persona:
             print("HOLAAA")
             # Verificar si se proporcionó el nombre de la persona
             if not persona:
@@ -911,7 +913,7 @@ def setup_routes(app, mongo):
 
         # Notion Results (extraer información relevante)
         notion_results = "\n".join([
-            f"Página ID: {page.get('id', 'Sin ID')} | URL: {page.get('url', 'Sin URL')} | Última edición: {page.get('last_edited_time', 'Sin edición')}"
+            f"Página ID: {page.get('id', 'Sin ID')} | URL: {page.get('url', 'Sin URL')} | Estado: {page['properties'].get('Estado', 'Sin estado')} | Nombre del proyecto: {page['properties'].get('Nombre del proyecto', 'Sin título')} | Resumen: {', '.join(page['properties'].get('Resumen', ['Sin resumen']))}"
             for page in search_results.get('notion', []) if isinstance(page, dict)
         ]) or "No se encontraron notas relacionadas en Notion."
 

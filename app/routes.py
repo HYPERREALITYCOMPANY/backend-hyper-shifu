@@ -629,7 +629,7 @@ def setup_routes(app, mongo):
             'Content-Type': 'application/json'
         }
 
-    @app.route('/search/hubspot', methods=['POST'])
+    @app.route('/search/hubspot', methods=['GET'])
     def search_hubspot():
         time.sleep(4)
         # Obtener los parámetros del cuerpo de la solicitud

@@ -257,13 +257,22 @@ def setup_routes(app, mongo):
 
             if company:
                 query += f'" {company}"'  # Buscar el término exacto de compañía entre comillas
-
+            
+            if "ultimo" in query.lower() or "último" in query.lower():
+                if persona:
+                    query = f'from "{persona}"'
+                    query += ' order by timestamp desc'
+            if "buscar" in query.lower() or "busqueda" in query.lower():
+                if persona:
+                    query = f'from "{persona}"'
+                    query += ' order by timestamp desc'
+                    
             url = "https://www.googleapis.com/gmail/v1/users/me/messages"
             headers = {
                 'Authorization': f"Bearer {gmail_token}"
             }
             # Añadir maxResults para limitar a 3 resultados
-            params = {"q": query , "maxResults": 10}
+            params = {"q": query}
 
             response = requests.get(url, headers=headers, params=params)
             response.raise_for_status()

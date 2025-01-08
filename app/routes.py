@@ -307,17 +307,16 @@ def setup_routes(app, mongo):
                             html_body = decode_message_body(message_data['payload']['body']['data'])
                             body = extract_text_from_html(html_body)
 
-                    # Crear la URL del correo
-                    mail_url = f"https://mail.google.com/mail/u/0/#inbox/{message_id}"
-                    # Añadir los detalles del mensaje a la lista
-                    if any(keyword in subject.lower() for keyword in keywords):
-                        search_results.append({
-                            'from': sender,
-                            'date': date,
-                            'subject': subject,
-                            'body': body,
-                            'link': mail_url
-                        })
+            # Crear la URL del correo
+            mail_url = f"https://mail.google.com/mail/u/0/#inbox/{message_id}"
+            # Añadir los detalles del mensaje a la lista
+            search_results.append({
+                    'from': sender,
+                    'date': date,
+                    'subject': subject,
+                    'body': body,
+                    'link': mail_url
+            })
 
             if not search_results:
                 return jsonify({"message": "No se encontraron resultados que coincidan con la solicitud"}), 200

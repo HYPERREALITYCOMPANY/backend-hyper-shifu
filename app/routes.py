@@ -319,8 +319,6 @@ def setup_routes(app, mongo):
                             'link': mail_url
                         })
 
-            search_results.sort(key=lambda x: x['date'], reverse=True)
-
             if not search_results:
                 return jsonify({"message": "No se encontraron resultados que coincidan con la solicitud"}), 200
             return jsonify(search_results)

@@ -260,12 +260,10 @@ def setup_routes(app, mongo):
             
             if "ultimo" in query.lower() or "último" in query.lower():
                 if persona:
-                    query = f'from "{persona}"'
-                    query += ' order by timestamp desc'
+                    query = f'from:"{persona}"'
             if "buscar" in query.lower() or "busqueda" in query.lower():
                 if persona:
-                    query = f'from "{persona}"'
-                    query += ' order by timestamp desc'
+                    query = f'from:"{persona}"'
                     
             url = "https://www.googleapis.com/gmail/v1/users/me/messages"
             headers = {
@@ -320,6 +318,8 @@ def setup_routes(app, mongo):
                             'body': body,
                             'link': mail_url
                         })
+
+            search_results.sort(key=lambda x: x['date'], reverse=True)
 
             if not search_results:
                 return jsonify({"message": "No se encontraron resultados que coincidan con la solicitud"}), 200

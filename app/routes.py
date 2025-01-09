@@ -261,7 +261,7 @@ def setup_routes(app, mongo):
             if "ultimo" in query.lower() or "último" in query.lower():
                 if persona:
                     query = f'from:"{persona}"'
-            if "buscar" in query.lower() or "busqueda" in query.lower():
+            if "buscar" in query.lower() or "busca" in query.lower():
                 if persona:
                     query = f'from:"{persona}"'
                     
@@ -310,13 +310,23 @@ def setup_routes(app, mongo):
             # Crear la URL del correo
             mail_url = f"https://mail.google.com/mail/u/0/#inbox/{message_id}"
             # Añadir los detalles del mensaje a la lista
-            search_results.append({
+            if "último" or "ultimo" in query or "buscar" or "busca" in query:
+                search_results.append({
                     'from': sender,
                     'date': date,
                     'subject': subject,
                     'body': body,
                     'link': mail_url
-            })
+                })
+            else:
+                if any(keyword in subject.lower() for keyword in keywords):
+                    search_results.append({
+                        'from': sender,
+                        'date': date,
+                        'subject': subject,
+                        'body': body,
+                        'link': mail_url
+                    })
 
             if not search_results:
                 return jsonify({"message": "No se encontraron resultados que coincidan con la solicitud"}), 200

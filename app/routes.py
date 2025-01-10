@@ -806,129 +806,94 @@ def setup_routes(app, mongo):
             user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
+            search_results_data = {
+                'gmail': [],
+                'slack': [],
+                'notion': [],
+                'outlook': [],
+                'hubspot': {}
+            }
 
-            # Si es una conversación natural
-            if datos_adicionales == "conversacion":
-                try:
-                    conversation_response = openai.chat.completions.create(
-                        model="gpt-3.5-turbo",
-                        messages=[
-                            {
-                                "role": "system",
-                                "content": """Eres Shiffu, un asistente virtual amigable y útil en su versión alfa. 
-                                Ayudas a los usuarios respondiendo preguntas de manera clara y humana. 
-                                Si el usuario pregunta "¿Qué es Shiffu?" o menciona "tu propósito", explica lo siguiente:
-                                "Soy Shiffu, un asistente en su versión alfa. Estoy diseñado para ayudar a automatizar procesos de búsqueda y conectar aplicaciones como Gmail, Notion, Slack, Outlook y HubSpot. Mi objetivo es simplificar la gestión de tareas y facilitar la integración entre herramientas para que los usuarios puedan iniciar sesión, gestionar datos y colaborar de forma eficiente."
-                                Responde saludos como "Hola" o "Saludos" con algo cálido como "¡Hola! Soy Shiffu, tu asistente virtual. ¿En qué puedo ayudarte hoy? 😊".
-                                Para cualquier otra consulta, proporciona una respuesta útil y adaptada al contexto del usuario. 
-                                Debes responder de manera conversacional y humana, mostrando empatía y entendimiento.
-                                Evita respuestas demasiado formales o robóticas. 
-                                Si el usuario comparte sentimientos o experiencias, muestra comprensión y apoyo.
-                                Si te saludan, responde al saludo de forma amigable y pregunta cómo puedes ayudar."""
-                            },
-                            {
-                                "role": "user",
-                                "content": query
-                            }
-                        ],
-                        max_tokens=1024
-                    )
-                    return jsonify({"response": to_ascii(conversation_response.choices[0].message.content.strip())})
-                except Exception as e:
-                    return jsonify({"error": f"Error en la conversación: {str(e)}"}), 500
+            try:
+                notion_results = search_notion()
+                search_results_data['notion'] = (
+                    notion_results.get_json() 
+                    if hasattr(notion_results, 'get_json') 
+                    else notion_results
+                )
+            except Exception as e:
+                search_results_data['notion'] = [f"Error al buscar en Notion: {str(e)}"]
+            
+            try:
+                gmail_results = search_gmail()
+                search_results_data['gmail'] = (
+                    gmail_results.get_json() 
+                    if hasattr(gmail_results, 'get_json') 
+                    else gmail_results
+                )
+            except Exception as e:
+                search_results_data['gmail'] = [f"Error al buscar en Gmail: {str(e)}"]
 
-            # Si es una solicitud de búsqueda
-            else:
-                search_results_data = {
-                    'gmail': [],
-                    'slack': [],
-                    'notion': [],
-                    'outlook': [],
-                    'hubspot': {}
-                }
+            try:
+                slack_results = search_slack()
+                search_results_data['slack'] = (
+                    slack_results.get_json() 
+                    if hasattr(slack_results, 'get_json') 
+                    else slack_results
+                )
+            except Exception as e:
+                search_results_data['slack'] = [f"Error al buscar en Slack: {str(e)}"]
 
-                try:
-                    notion_results = search_notion()
-                    search_results_data['notion'] = (
-                        notion_results.get_json() 
-                        if hasattr(notion_results, 'get_json') 
-                        else notion_results
-                    )
-                except Exception as e:
-                    search_results_data['notion'] = [f"Error al buscar en Notion: {str(e)}"]
+            try:
+                outlook_results = search_outlook()
+                search_results_data['outlook'] = (
+                    outlook_results.get_json() 
+                    if hasattr(outlook_results, 'get_json') 
+                    else outlook_results
+                )
+            except Exception as e:
+                search_results_data['outlook'] = [f"Error al buscar en Outlook: {str(e)}"]
+
+            try:
+                hubspot_results = search_hubspot()
+                search_results_data['hubspot'] = (
+                    hubspot_results.get_json() 
+                    if hasattr(hubspot_results, 'get_json') 
+                    else hubspot_results
+                )
+            except Exception as e:
+                search_results_data['hubspot'] = [f"Error al buscar en HubSpot: {str(e)}"]
+
+            try:
+                prompt = generate_prompt(query, search_results_data)
+                response = openai.chat.completions.create(
+                    model="gpt-4-turbo",
+                    messages=[{
+                        "role": "system",
+                        "content": "Eres un asistente útil el cual está conectado con diversas aplicaciones y automatizarás el proceso de buscar información en base a la query que se te envie, tomando toda la información necesaria"
+                    }, {
+                        "role": "user",
+                        "content": prompt
+                    }],
+                    max_tokens=4096
+                )
+                ia_response = response.choices[0].message.content.strip()
                 
-                try:
-                    gmail_results = search_gmail()
-                    search_results_data['gmail'] = (
-                        gmail_results.get_json() 
-                        if hasattr(gmail_results, 'get_json') 
-                        else gmail_results
-                    )
-                except Exception as e:
-                    search_results_data['gmail'] = [f"Error al buscar en Gmail: {str(e)}"]
+                if not ia_response:
+                    return jsonify({"error": "La respuesta de la IA está vacía"}), 500
+                
+                return jsonify({"response": to_ascii(ia_response)})
 
-                try:
-                    slack_results = search_slack()
-                    search_results_data['slack'] = (
-                        slack_results.get_json() 
-                        if hasattr(slack_results, 'get_json') 
-                        else slack_results
-                    )
-                except Exception as e:
-                    search_results_data['slack'] = [f"Error al buscar en Slack: {str(e)}"]
-
-                try:
-                    outlook_results = search_outlook()
-                    search_results_data['outlook'] = (
-                        outlook_results.get_json() 
-                        if hasattr(outlook_results, 'get_json') 
-                        else outlook_results
-                    )
-                except Exception as e:
-                    search_results_data['outlook'] = [f"Error al buscar en Outlook: {str(e)}"]
-
-                try:
-                    hubspot_results = search_hubspot()
-                    search_results_data['hubspot'] = (
-                        hubspot_results.get_json() 
-                        if hasattr(hubspot_results, 'get_json') 
-                        else hubspot_results
-                    )
-                except Exception as e:
-                    search_results_data['hubspot'] = [f"Error al buscar en HubSpot: {str(e)}"]
-
-                try:
-                    prompt = generate_prompt(query, search_results_data)
-                    response = openai.chat.completions.create(
-                        model="gpt-4-turbo",
-                        messages=[{
-                            "role": "system",
-                            "content": "Eres un asistente útil el cual está conectado con diversas aplicaciones y automatizarás el proceso de buscar información en base a la query que se te envie, tomando toda la información necesaria"
-                        }, {
-                            "role": "user",
-                            "content": prompt
-                        }],
-                        max_tokens=4096
-                    )
-                    ia_response = response.choices[0].message.content.strip()
-                    
-                    if not ia_response:
-                        return jsonify({"error": "La respuesta de la IA está vacía"}), 500
-                    
-                    return jsonify({"response": to_ascii(ia_response)})
-
-                except Exception as e:
-                    return jsonify({"error": f"Error al generar la respuesta de la IA: {str(e)}"}), 500
+            except Exception as e:
+                return jsonify({"error": f"Error al generar la respuesta de la IA: {str(e)}"}), 500
 
         except Exception as e:
             return jsonify({"error": f"Error general: {str(e)}"}), 500
     
     def generate_prompt(query, search_results):
-        # Detectar si la consulta está relacionada con contactos o empresas
         contact_keywords = ['contacto', 'contactos', 'persona', 'personas', 'cliente', 'clientes', 'representante', 'email', 'correo', 'teléfono']
         is_contact_query = any(keyword in query.lower() for keyword in contact_keywords)
-        
-        # Verificar si hay resultados en alguna plataforma
+
         has_results = any(
             search_results.get(platform, []) 
             for platform in ['gmail', 'slack', 'notion', 'outlook', 'hubspot']

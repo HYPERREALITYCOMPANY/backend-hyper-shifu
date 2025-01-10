@@ -891,7 +891,7 @@ def setup_routes(app, mongo):
             return jsonify({"error": f"Error general: {str(e)}"}), 500
     
     def generate_prompt(query, search_results):
-        contact_keywords = ['contacto', 'contactos', 'persona', 'personas', 'cliente', 'clientes', 'representante', 'email', 'correo', 'teléfono']
+        contact_keywords = ['contacto', 'contactos', 'persona', 'personas', 'cliente', 'clientes', 'representante','teléfono']
         is_contact_query = any(keyword in query.lower() for keyword in contact_keywords)
 
         has_results = any(
@@ -908,7 +908,6 @@ def setup_routes(app, mongo):
             - Palabras clave más precisas
             - O el contexto específico que estás buscando"""
 
-        # Extraer información de cada fuente
         gmail_results = "\n".join([
             f"De: {email.get('from', 'Desconocido')} | Asunto: {email.get('subject', 'Sin asunto')} | Fecha: {email.get('date', 'Sin fecha')} | Body: {email.get('body', 'Sin cuerpo')}"
             for email in search_results.get('gmail', []) if isinstance(email, dict)

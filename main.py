@@ -14,8 +14,8 @@ def create_app():
     CORS(app, resources={r"/*": {"origins": "*"}})
     app.config['MONGO_URI'] = os.getenv('MONGO_URI')
     mongo = PyMongo(app)
+    mongo = mongo.db.get_collection("Prueba")
     try:
-        mongo.db.command('ping')
         print("Conexión exitosa a MongoDB!")
     except Exception as e:
         print("Error al conectar con MongoDB:", e)

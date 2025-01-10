@@ -43,7 +43,7 @@ def setup_routes(app, mongo):
             return jsonify({"error": "Faltan campos obligatorios"}), 400
 
         # Verificar si el correo ya existe en la base de datos
-        if mongo.db.usuarios.find_one({"correo": data["correo"]}):
+        if mongo.database.usuarios.find_one({"correo": data["correo"]}):
             return jsonify({"error": "El correo ya está registrado"}), 400
 
         # Si el correo no existe, proceder con el registro
@@ -57,11 +57,11 @@ def setup_routes(app, mongo):
             "integrations": {}  # Inicialmente vacío
         }
 
-        if 'usuarios' not in mongo.db.list_collection_names():
-            mongo.db.create_collection('usuarios')
+        if 'usuarios' not in mongo.database.list_collection_names():
+            mongo.database.create_collection('usuarios')
 
-        if 'usuarios' in mongo.db.list_collection_names():
-            result = mongo.db.usuarios.insert_one(usuario)
+        if 'usuarios' in mongo.database.list_collection_names():
+            result = mongo.database.usuarios.insert_one(usuario)
         
         return jsonify({"message": "Usuario registrado exitosamente", "id": str(result.inserted_id)}), 201
 
@@ -71,7 +71,7 @@ def setup_routes(app, mongo):
         if not data or not all(k in data for k in ("correo", "password")):
             return jsonify({"error": "Faltan campos obligatorios"}), 400
         
-        usuario = mongo.db.usuarios.find_one({"correo": data["correo"]})
+        usuario = mongo.database.usuarios.find_one({"correo": data["correo"]})
         if not usuario or not check_password_hash(usuario["password"], data["password"]):
             return jsonify({"error": "Credenciales incorrectas"}), 401
 
@@ -88,7 +88,7 @@ def setup_routes(app, mongo):
             return jsonify({"error": "ID de usuario no proporcionado"}), 400
         
         try:
-            usuario = mongo.db.usuarios.find_one({"_id": ObjectId(user_id)})
+            usuario = mongo.database.usuarios.find_one({"_id": ObjectId(user_id)})
         except Exception as e:
             return jsonify({"error": str(e)}), 500
         
@@ -110,7 +110,7 @@ def setup_routes(app, mongo):
         if not user_id or not ObjectId.is_valid(user_id):
             return jsonify({"error": "ID de usuario inválido"}), 400
 
-        result = mongo.db.usuarios.update_one({"_id": ObjectId(user_id)}, {"$set": update_data})
+        result = mongo.database.usuarios.update_one({"_id": ObjectId(user_id)}, {"$set": update_data})
 
         if result.matched_count == 0:
             return jsonify({"error": "Usuario no encontrado"}), 404
@@ -124,7 +124,7 @@ def setup_routes(app, mongo):
         if not email:
             return jsonify({"error": "Correo electrónico no proporcionado"}), 400
 
-        usuario = mongo.db.usuarios.find_one({"correo": email})
+        usuario = mongo.database.usuarios.find_one({"correo": email})
         
         if not usuario:
             return jsonify({"error": "Usuario no encontrado"}), 404
@@ -138,7 +138,7 @@ def setup_routes(app, mongo):
     def get_integrations():
         user_email = request.args.get("email")
         
-        user = mongo.db.usuarios.find_one({"correo": user_email})
+        user = mongo.database.usuarios.find_one({"correo": user_email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -160,7 +160,7 @@ def setup_routes(app, mongo):
             return jsonify({"error": "Faltan campos obligatorios"}), 400
 
         # Verificar que el usuario exista
-        user = mongo.db.usuarios.find_one({"correo": user_email})
+        user = mongo.database.usuarios.find_one({"correo": user_email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -178,7 +178,7 @@ def setup_routes(app, mongo):
 
         # Actualizar el campo de integraciones
         # Verifica si la integración ya existe, de lo contrario, la agrega
-        mongo.db.usuarios.update_one(
+        mongo.database.usuarios.update_one(
             {"correo": user_email},
             {"$set": {f"integrations.{integration_name}": integration_data}}
         )
@@ -226,6 +226,7 @@ def setup_routes(app, mongo):
 
     @app.route('/search/gmail', methods=["GET"])
     def search_gmail():
+        time.sleep(4)
         email = request.args.get('email')
         query = request.args.get('solicitud')
         proyecto = request.args.get('proyecto')
@@ -233,7 +234,7 @@ def setup_routes(app, mongo):
         company = request.args.get('company')
 
         try:
-            user = mongo.db.usuarios.find_one({'correo': email})
+            user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -251,31 +252,27 @@ def setup_routes(app, mongo):
             if not query:
                 return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
 
-            # Modificar la consulta si el proyecto existe
-            if proyecto:
-                query += f'" {proyecto}"'  # Buscar el término exacto de proyecto entre comillas
-
             if company:
-                query += f'" {company}"'  # Buscar el término exacto de compañía entre comillas
+                query += f'" {company}"' 
             
-            if "ultimo" in query.lower() or "último" in query.lower():
-                if persona:
-                    query = f'from:"{persona}"'
-            if "buscar" in query.lower() or "busca" in query.lower():
-                if persona:
-                    query = f'from:"{persona}"'
+            if any(palabra in query.lower() for palabra in ["ultimo", "último"]):    
+                if any(palabra in query.lower() for palabra in ["mi", "mí", "mis"]):
+                    query = "is:inbox"
+
+            if any(palabra in query.lower() for palabra in ["buscar", "busca", "buscame"]):
+                query = f'from:"{persona}"'
                     
             url = "https://www.googleapis.com/gmail/v1/users/me/messages"
             headers = {
                 'Authorization': f"Bearer {gmail_token}"
             }
-            # Añadir maxResults para limitar a 3 resultados
-            params = {"q": query}
-
+            print("ANTES DEL RESPONSE",query)
+            params = {"q": query, "maxResults": 5 }
             response = requests.get(url, headers=headers, params=params)
             response.raise_for_status()
 
             messages = response.json().get('messages', [])
+            print(messages)
             if not messages:
                 return jsonify({"message": "No se encontraron resultados en Gmail"}), 200
 
@@ -310,7 +307,7 @@ def setup_routes(app, mongo):
             # Crear la URL del correo
             mail_url = f"https://mail.google.com/mail/u/0/#inbox/{message_id}"
             # Añadir los detalles del mensaje a la lista
-            if "último" or "ultimo" in query or "buscar" or "busca" in query:
+            if any(palabra in request.args.get('solicitud').lower() for palabra in ["buscar", "busca", "buscame", "ultimo", "último", "mi", "mí"]):
                 search_results.append({
                     'from': sender,
                     'date': date,
@@ -318,8 +315,7 @@ def setup_routes(app, mongo):
                     'body': body,
                     'link': mail_url
                 })
-            else:
-                if any(keyword in subject.lower() for keyword in keywords):
+            if any(keyword in subject.lower() for keyword in keywords):
                     search_results.append({
                         'from': sender,
                         'date': date,
@@ -349,7 +345,7 @@ def setup_routes(app, mongo):
 
         try:
             # Verificar usuario en la base de datos
-            user = mongo.db.usuarios.find_one({'correo': email})
+            user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -463,7 +459,7 @@ def setup_routes(app, mongo):
 
         try:
             # Verificar existencia de usuario
-            user = mongo.db.usuarios.find_one({'correo': email})
+            user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -559,7 +555,7 @@ def setup_routes(app, mongo):
         fecha = request.args.get('fecha')
 
         try:
-            user = mongo.db.usuarios.find_one({'correo': email})
+            user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -662,7 +658,7 @@ def setup_routes(app, mongo):
 
         # Buscar usuario en la base de datos
         email =  request.args.get("email")
-        user = mongo.db.usuarios.find_one({'correo': email})
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -797,143 +793,172 @@ def setup_routes(app, mongo):
         print ("RESPUESTA" , (search_results))
         return jsonify(search_results)
 
-
     @app.route('/askIa', methods=['GET'])
     def ask():
         email = request.args.get('email')
         query = request.args.get('query')
+        datos_adicionales = request.args.get('datos_adicionales')
 
         if not email or not query:
-            return jsonify({"error": "Se deben proporcionar tanto el email como la consulta de búsqueda"}), 400
-
-        search_results_data = {
-            'gmail': [],
-            'slack': [],
-            'notion': [],
-            'outlook': [],
-            'hubspot': {}
-        }
+            return jsonify({"error": "Se deben proporcionar tanto el email como la consulta"}), 400
 
         try:
-            user = mongo.db.usuarios.find_one({'correo': email})
+            user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
-           
-           # Llamadas a las funciones de búsqueda
-            try:
-                notion_results = search_notion()
-                search_results_data['notion'] = (
-                    notion_results.get_json() 
-                    if hasattr(notion_results, 'get_json') 
-                    else notion_results
-                )
-            except Exception as e:
-                search_results_data['notion'] = [f"Error al buscar en Notion: {str(e)}"]
-            
-            print(search_results_data['notion'])
 
-            try:
-                gmail_results = search_gmail()
-                search_results_data['gmail'] = (
-                    gmail_results.get_json() 
-                    if hasattr(gmail_results, 'get_json') 
-                    else gmail_results
-                )
-            except Exception as e:
-                search_results_data['gmail'] = [f"Error al buscar en Gmail: {str(e)}"]
-            print(search_results_data['gmail'])
+            # Si es una conversación natural
+            if datos_adicionales == "conversacion":
+                try:
+                    conversation_response = openai.chat.completions.create(
+                        model="gpt-3.5-turbo",
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": """Eres Shiffu, un asistente virtual amigable y útil en su versión alfa. 
+                                Ayudas a los usuarios respondiendo preguntas de manera clara y humana. 
+                                Si el usuario pregunta "¿Qué es Shiffu?" o menciona "tu propósito", explica lo siguiente:
+                                "Soy Shiffu, un asistente en su versión alfa. Estoy diseñado para ayudar a automatizar procesos de búsqueda y conectar aplicaciones como Gmail, Notion, Slack, Outlook y HubSpot. Mi objetivo es simplificar la gestión de tareas y facilitar la integración entre herramientas para que los usuarios puedan iniciar sesión, gestionar datos y colaborar de forma eficiente."
+                                Responde saludos como "Hola" o "Saludos" con algo cálido como "¡Hola! Soy Shiffu, tu asistente virtual. ¿En qué puedo ayudarte hoy? 😊".
+                                Para cualquier otra consulta, proporciona una respuesta útil y adaptada al contexto del usuario. 
+                                Debes responder de manera conversacional y humana, mostrando empatía y entendimiento.
+                                Evita respuestas demasiado formales o robóticas. 
+                                Si el usuario comparte sentimientos o experiencias, muestra comprensión y apoyo.
+                                Si te saludan, responde al saludo de forma amigable y pregunta cómo puedes ayudar."""
+                            },
+                            {
+                                "role": "user",
+                                "content": query
+                            }
+                        ],
+                        max_tokens=1024
+                    )
+                    return jsonify({"response": to_ascii(conversation_response.choices[0].message.content.strip())})
+                except Exception as e:
+                    return jsonify({"error": f"Error en la conversación: {str(e)}"}), 500
 
-            try:
-                slack_results = search_slack()
-                search_results_data['slack'] = (
-                    slack_results.get_json() 
-                    if hasattr(slack_results, 'get_json') 
-                    else slack_results
-                )
-            except Exception as e:
-                search_results_data['slack'] = [f"Error al buscar en Slack: {str(e)}"]
-            print(search_results_data['slack'])
+            # Si es una solicitud de búsqueda
+            else:
+                search_results_data = {
+                    'gmail': [],
+                    'slack': [],
+                    'notion': [],
+                    'outlook': [],
+                    'hubspot': {}
+                }
 
-            try:
-                outlook_results = search_outlook()
-                search_results_data['outlook'] = (
-                    outlook_results.get_json() 
-                    if hasattr(outlook_results, 'get_json') 
-                    else outlook_results
-                )
-            except Exception as e:
-                search_results_data['outlook'] = [f"Error al buscar en Outlook: {str(e)}"]
-            print(search_results_data['outlook'])
+                try:
+                    notion_results = search_notion()
+                    search_results_data['notion'] = (
+                        notion_results.get_json() 
+                        if hasattr(notion_results, 'get_json') 
+                        else notion_results
+                    )
+                except Exception as e:
+                    search_results_data['notion'] = [f"Error al buscar en Notion: {str(e)}"]
+                
+                try:
+                    gmail_results = search_gmail()
+                    search_results_data['gmail'] = (
+                        gmail_results.get_json() 
+                        if hasattr(gmail_results, 'get_json') 
+                        else gmail_results
+                    )
+                except Exception as e:
+                    search_results_data['gmail'] = [f"Error al buscar en Gmail: {str(e)}"]
 
-            try:
-                hubspot_results = search_hubspot()
-                search_results_data['hubspot'] = (
-                    hubspot_results.get_json() 
-                    if hasattr(hubspot_results, 'get_json') 
-                    else hubspot_results
-                )
-            except Exception as e:
-                search_results_data['hubspot'] = [f"Error al buscar en HubSpot: {str(e)}"]
+                try:
+                    slack_results = search_slack()
+                    search_results_data['slack'] = (
+                        slack_results.get_json() 
+                        if hasattr(slack_results, 'get_json') 
+                        else slack_results
+                    )
+                except Exception as e:
+                    search_results_data['slack'] = [f"Error al buscar en Slack: {str(e)}"]
 
-            print(search_results_data['hubspot'])
+                try:
+                    outlook_results = search_outlook()
+                    search_results_data['outlook'] = (
+                        outlook_results.get_json() 
+                        if hasattr(outlook_results, 'get_json') 
+                        else outlook_results
+                    )
+                except Exception as e:
+                    search_results_data['outlook'] = [f"Error al buscar en Outlook: {str(e)}"]
 
+                try:
+                    hubspot_results = search_hubspot()
+                    search_results_data['hubspot'] = (
+                        hubspot_results.get_json() 
+                        if hasattr(hubspot_results, 'get_json') 
+                        else hubspot_results
+                    )
+                except Exception as e:
+                    search_results_data['hubspot'] = [f"Error al buscar en HubSpot: {str(e)}"]
+
+                try:
+                    prompt = generate_prompt(query, search_results_data)
+                    response = openai.chat.completions.create(
+                        model="gpt-4-turbo",
+                        messages=[{
+                            "role": "system",
+                            "content": "Eres un asistente útil el cual está conectado con diversas aplicaciones y automatizarás el proceso de buscar información en base a la query que se te envie, tomando toda la información necesaria"
+                        }, {
+                            "role": "user",
+                            "content": prompt
+                        }],
+                        max_tokens=4096
+                    )
+                    ia_response = response.choices[0].message.content.strip()
+                    
+                    if not ia_response:
+                        return jsonify({"error": "La respuesta de la IA está vacía"}), 500
+                    
+                    return jsonify({"response": to_ascii(ia_response)})
+
+                except Exception as e:
+                    return jsonify({"error": f"Error al generar la respuesta de la IA: {str(e)}"}), 500
 
         except Exception as e:
-            return jsonify({"error": f"Error general al obtener resultados de búsqueda: {str(e)}"}), 500
-
-        try:
-            prompt = generate_prompt(query, search_results_data)
-            print(prompt)
-            response = openai.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{
-                    "role": "system",
-                    "content": "Eres un asistente útil el cual está conectado con diversas aplicaciones y automatizarás el proceso de buscar información en base a la query que se te envie, tomando toda la información necesaria"
-                }, {
-                    "role": "user",
-                    "content": prompt
-                }],
-                max_tokens=4096
-            )
-            ia_response = response.choices[0].message.content.strip()
-            print(ia_response)
-            if not ia_response:
-                return jsonify({"error": "La respuesta de la IA está vacía"}), 500
-            search_results_data = {
-            'gmail': [],
-            'slack': [],
-            'notion': [],
-            'outlook': [],
-            'hubspot': {}
-            }
-            return jsonify({"response": to_ascii(ia_response)})
-
-        except Exception as e:
-            return jsonify({"error": f"Error al generar la respuesta de la IA: {str(e)}"}), 500
-
+            return jsonify({"error": f"Error general: {str(e)}"}), 500
+    
     def generate_prompt(query, search_results):
-        # Extraer solo la información relevante de cada fuente
-        results = {}
+        # Detectar si la consulta está relacionada con contactos o empresas
+        contact_keywords = ['contacto', 'contactos', 'persona', 'personas', 'cliente', 'clientes', 'representante', 'email', 'correo', 'teléfono']
+        is_contact_query = any(keyword in query.lower() for keyword in contact_keywords)
+        
+        # Verificar si hay resultados en alguna plataforma
+        has_results = any(
+            search_results.get(platform, []) 
+            for platform in ['gmail', 'slack', 'notion', 'outlook', 'hubspot']
+        )
+        
+        if not has_results:
+            return """Lo siento, no encontré información relacionada con tu consulta. 
+            ¿Podrías reformular tu pregunta o proporcionar más detalles? 
+            Por ejemplo, puedes especificar:
+            - Un período de tiempo específico
+            - Nombres o correos electrónicos específicos
+            - Palabras clave más precisas
+            - O el contexto específico que estás buscando"""
 
-        # Gmail Results (extraer información relevante)
+        # Extraer información de cada fuente
         gmail_results = "\n".join([
             f"De: {email.get('from', 'Desconocido')} | Asunto: {email.get('subject', 'Sin asunto')} | Fecha: {email.get('date', 'Sin fecha')} | Body: {email.get('body', 'Sin cuerpo')}"
             for email in search_results.get('gmail', []) if isinstance(email, dict)
         ]) or "No se encontraron correos relacionados en Gmail."
 
-        # Slack Results (extraer información relevante)
         slack_results = "\n".join([
             f"Canal: {msg.get('channel', 'Desconocido')} | Usuario: {msg.get('user', 'Desconocido')} | Mensaje: {msg.get('text', 'Sin mensaje')} | Fecha: {msg.get('ts', 'Sin fecha')}"
             for msg in search_results.get('slack', []) if isinstance(msg, dict)
         ]) or "No se encontraron mensajes relacionados en Slack."
 
-        # Notion Results (extraer información relevante)
         notion_results = "\n".join([
             f"Página ID: {page.get('id', 'Sin ID')} | URL: {page.get('url', 'Sin URL')} | Estado: {page['properties'].get('Estado', 'Sin estado')} | Nombre del proyecto: {page['properties'].get('Nombre del proyecto', 'Sin título')} | Resumen: {', '.join(page['properties'].get('Resumen', ['Sin resumen']))}"
             for page in search_results.get('notion', []) if isinstance(page, dict)
         ]) or "No se encontraron notas relacionadas en Notion."
 
-        # Outlook Results (extraer información relevante)
         outlook_results = "\n".join([
             f"De: {email.get('sender', 'Desconocido')} | Asunto: {email.get('subject', 'Sin asunto')} | Fecha: {email.get('receivedDateTime', 'Sin fecha')}"
             for email in search_results.get('outlook', []) if isinstance(email, dict)
@@ -946,43 +971,97 @@ def setup_routes(app, mongo):
             if "contacts" in hubspot_data:
                 contacts = hubspot_data["contacts"]
                 if isinstance(contacts, list) and contacts:
-                    hubspot_results.append("Contactos:\n" + "\n".join([f"Nombre: {contact.get('firstname', 'N/A')} {contact.get('lastname', 'N/A')} | Correo: {contact.get('email', 'N/A')} | Compañía: {contact.get('company', 'N/A')}" for contact in contacts]))
+                    hubspot_results.append("Contactos:\n" + "\n".join([
+                        f"Nombre: {contact.get('firstname', 'N/A')} {contact.get('lastname', 'N/A')} | "
+                        f"Correo: {contact.get('email', 'N/A')} | "
+                        f"Compañía: {contact.get('company', 'N/A')} | "
+                        f"Teléfono: {contact.get('phone', 'N/A')} | "
+                        f"Cargo: {contact.get('jobtitle', 'N/A')}"
+                        for contact in contacts
+                    ]))
 
             if "companies" in hubspot_data:
                 companies = hubspot_data["companies"]
                 if isinstance(companies, list) and companies:
-                    hubspot_results.append("Compañías:\n" + "\n".join([f"Compañía: {company.get('company', 'N/A')} | Teléfono: {company.get('phone', 'N/A')}" for company in companies]))
+                    hubspot_results.append("Compañías:\n" + "\n".join([
+                        f"Compañía: {company.get('company', 'N/A')} | "
+                        f"Teléfono: {company.get('phone', 'N/A')} | "
+                        f"Industria: {company.get('industry', 'N/A')} | "
+                        f"Sitio web: {company.get('website', 'N/A')}"
+                        for company in companies
+                    ]))
 
             if "deals" in hubspot_data:
                 deals = hubspot_data["deals"]
                 if isinstance(deals, list) and deals:
-                    hubspot_results.append("Negocios:\n" + "\n".join([f"Negocio: {deal.get('name', 'N/A')} | Monto: {deal.get('price', 'N/A')} | Estado: {deal.get('stage', 'N/A')}" for deal in deals]))
+                    hubspot_results.append("Negocios:\n" + "\n".join([
+                        f"Negocio: {deal.get('name', 'N/A')} | "
+                        f"Monto: {deal.get('price', 'N/A')} | "
+                        f"Estado: {deal.get('stage', 'N/A')} | "
+                        f"Fecha cierre: {deal.get('closedate', 'N/A')}"
+                        for deal in deals
+                    ]))
 
         except Exception as e:
             hubspot_results.append(f"Error procesando datos de HubSpot: {str(e)}")
 
         hubspot_results = "\n".join(hubspot_results) or "No se encontraron resultados relacionados en HubSpot."
 
-        # Crear la respuesta final basada en la información obtenida
-        prompt = f"""Respuesta concisa a la consulta: "{query}"
+        # Ajustar el prompt según el tipo de consulta
+        if is_contact_query:
+            prompt = f"""Respuesta concisa a la consulta: "{query}"
 
-        Gmail:
-        {gmail_results}
+            Información principal de HubSpot:
+            {hubspot_results}
 
-        Notion:
-        {notion_results}
+            Información complementaria:
+            Gmail:
+            {gmail_results}
 
-        Slack:
-        {slack_results}
+            Outlook:
+            {outlook_results}
 
-        Outlook:
-        {outlook_results}
+            Slack:
+            {slack_results}
 
-        HubSpot:
-        {hubspot_results}
+            Notion:
+            {notion_results}
 
-        Responde de forma concisa y directa, enfocándote solo en la información más relevante sin repetir detalles innecesarios ni mencionar la query. Utiliza fechas, URLs y detalles clave, y asegúrate de que la respuesta sea fácilmente comprensible. En el caso de links solo colocalos una vez
-        """
+            Instrucciones de respuesta:
+            1. Prioriza la información de contactos y empresas de HubSpot
+            2. Complementa con información relevante de correos o mensajes si es necesario
+            3. Proporciona una respuesta directa y estructurada
+            4. Incluye detalles de contacto específicos cuando estén disponibles
+            5. No repitas información innecesariamente
+            6. Menciona URLs solo una vez
+            7. Si la información parece inconsistente o incompleta, indícalo
+            """
+        else:
+            prompt = f"""Respuesta concisa a la consulta: "{query}"
+
+            Gmail:
+            {gmail_results}
+
+            Notion:
+            {notion_results}
+
+            Slack:
+            {slack_results}
+
+            Outlook:
+            {outlook_results}
+
+            HubSpot:
+            {hubspot_results}
+
+            Instrucciones de respuesta:
+            1. Responde de forma concisa y directa
+            2. Enfócate solo en la información más relevante para la consulta
+            3. No repitas detalles innecesarios
+            4. Incluye fechas y URLs importantes (solo una vez)
+            5. Asegúrate de que la respuesta sea coherente y fácil de entender
+            6. Si la información parece incompleta o inconsistente, indícalo
+            """
 
         return prompt
 
@@ -1075,3 +1154,40 @@ def setup_routes(app, mongo):
             # Manejo de errores
             return jsonify({"error": str(e)}), 500
         
+
+    
+    @app.route("/api/chat", methods=["POST"])
+    def chat():
+        data = request.get_json()
+        user_messages = data.get("messages", [])
+        
+        # Mensaje del sistema para guiar las respuestas
+        system_message = """
+        Eres Shiffu, un asistente virtual amigable y útil en su versión alfa. 
+        Ayudas a los usuarios respondiendo preguntas de manera clara y humana. 
+        Si el usuario pregunta "¿Qué es Shiffu?" o menciona "tu propósito", explica lo siguiente:
+        "Soy Shiffu, un asistente en su versión alfa. Estoy diseñado para ayudar a automatizar procesos de búsqueda y conectar aplicaciones como Gmail, Notion, Slack, Outlook y HubSpot. Mi objetivo es simplificar la gestión de tareas y facilitar la integración entre herramientas para que los usuarios puedan iniciar sesión, gestionar datos y colaborar de forma eficiente."
+        Responde saludos como "Hola" o "Saludos" con algo cálido como "¡Hola! Soy Shiffu, tu asistente virtual. ¿En qué puedo ayudarte hoy? 😊".
+        Para cualquier otra consulta, proporciona una respuesta útil y adaptada al contexto del usuario y lo más importante siempre menciona que ingresen sesion con sus aplicaciones para ayudarlos de una mejor manera.
+        """
+        
+        ia_response = "Lo siento, no entendí tu mensaje. ¿Puedes reformularlo?"
+
+        if user_messages:
+            try:
+                # Llamada a OpenAI para procesar la conversación
+                response = openai.chat.completions.create(
+                    model="gpt-3.5-turbo",  # Cambiar si tienes acceso a otro modelo
+                    messages=[
+                        {"role": "system", "content": system_message},
+                        *user_messages  # Mensajes enviados por el usuario
+                    ],
+                    max_tokens=150  # Limita el tamaño de la respuesta
+                )
+                # Extraemos la respuesta de OpenAI
+                ia_response = response.choices[0].message.content.strip()
+            except Exception as e:
+                ia_response = f"Lo siento, ocurrió un error al procesar tu mensaje: {e}"
+        
+        # Retornamos la respuesta al frontend
+        return jsonify({"message": ia_response})

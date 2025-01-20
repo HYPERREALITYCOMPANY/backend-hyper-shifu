@@ -1231,7 +1231,7 @@ def setup_routes(app, mongo):
                                 # Generar el prompt usando los datos de búsqueda
                                 try:
                                     prompt = generate_prompt(last_message, search_results_data)
-                                    response = openai.ChatCompletion.create(
+                                    response = openai.chat.completions.create(
                                         model="gpt-4-turbo",
                                         messages=[{
                                             "role": "system",
@@ -1262,7 +1262,7 @@ def setup_routes(app, mongo):
                 
                 else:
                     # Llamada a OpenAI para procesar la conversación
-                    response = openai.ChatCompletion.create(
+                    response = openai.chat.completions.create(
                         model="gpt-3.5-turbo",
                         messages=[
                             {"role": "system", "content": system_message},

@@ -1118,9 +1118,8 @@ def setup_routes(app, mongo):
             # Manejo de errores
             return jsonify({"error": str(e)}), 500
         
-
     @app.route("/api/chatAi", methods=["POST"])
-    def chat():
+    def apiChat():
         data = request.get_json()
         user_messages = data.get("messages", [])
         
@@ -1280,7 +1279,6 @@ def setup_routes(app, mongo):
         
         # Retornamos la respuesta al frontend
         return jsonify({"message": ia_response})
-
 
     @app.route("/api/chat", methods=["POST"])
     def chat():

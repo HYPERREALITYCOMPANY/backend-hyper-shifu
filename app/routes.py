@@ -1119,7 +1119,169 @@ def setup_routes(app, mongo):
             return jsonify({"error": str(e)}), 500
         
 
-    
+    @app.route("/api/chatAi", methods=["POST"])
+    def chat():
+        data = request.get_json()
+        user_messages = data.get("messages", [])
+        
+        # Mensaje del sistema para guiar las respuestas
+        system_message = """
+        Eres Shiffu, un asistente virtual amigable y útil en su versión alfa. 
+        Ayudas a los usuarios respondiendo preguntas de manera clara y humana. 
+        Si el usuario pregunta "¿Qué es Shiffu?" o menciona "tu propósito" o algo parecido a tu funcionalidad, explica lo siguiente:
+        "Soy Shiffu, un asistente en su versión alfa. Estoy diseñado para ayudar a automatizar procesos de búsqueda y conectar aplicaciones como Gmail, Notion, Slack, Outlook y HubSpot. Mi objetivo es simplificar la gestión de tareas y facilitar la integración entre herramientas para que los usuarios puedan iniciar sesión, gestionar datos y colaborar de forma eficiente."
+        Responde saludos como "Hola" o "Saludos" con algo cálido como "¡Hola! Soy Shiffu, tu asistente virtual. ¿En qué puedo ayudarte hoy? 😊".
+        Para cualquier otra consulta, proporciona una respuesta útil y adaptada al contexto del usuario y lo más importante siempre menciona que ingresen sesión primero con Shiffu y luego con sus aplicaciones para ayudarlos de una mejor manera. Si te preguntan como iniciar sesión en shiffu menciona que arriba se encuentran dos botones y uno sirve para registrarse en Shiffu y el otro para iniciar sesión en Shiffu.
+        """
+        
+        # Palabras clave para detectar saludos y peticiones
+        saludos = ["hola", "buenos días", "buenas tardes", "saludos", "hey", "qué tal"]
+        peticiones = ["buscar", "necesito", "quiero", "ayúdame", "consulta", "pregunta"]
+        
+        # Respuesta predeterminada
+        ia_response = "Lo siento, no entendí tu mensaje. ¿Puedes reformularlo?"
+        
+        if user_messages:
+            try:
+                # Analizamos el último mensaje del usuario
+                last_message = user_messages[-1].get("content", "").lower()
+                
+                # Detectamos si es un saludo
+                if any(saludo in last_message for saludo in saludos):
+                    ia_response = "¡Hola! Soy Shiffu, tu asistente virtual. ¿En qué puedo ayudarte hoy? 😊"
+                
+                # Detectamos si es una petición
+                elif any(peticion in last_message for peticion in peticiones):
+                    # Validamos si menciona "api" o "apis"
+                    if "api" in last_message or "apis" in last_message:
+                        # Procesar envío de email (simulación)
+                        try:
+                            email = request.args.get('email')
+
+                            if not email:
+                                return jsonify({"error": "Se deben proporcionar tanto el email como la consulta"}), 400
+
+                            try:
+                                user = mongo.database.usuarios.find_one({'correo': email})
+                                if not user:
+                                    return jsonify({"error": "Usuario no encontrado"}), 404
+
+                                # Inicializar datos de resultados de búsqueda
+                                search_results_data = {
+                                    'gmail': [],
+                                    'slack': [],
+                                    'notion': [],
+                                    'outlook': [],
+                                    'hubspot': {}
+                                }
+
+                                # Consultar las APIs dependiendo de la consulta
+                                if "notion" in last_message.lower():
+                                    try:
+                                        notion_results = search_notion()
+                                        search_results_data['notion'] = (
+                                            notion_results.get_json() 
+                                            if hasattr(notion_results, 'get_json') 
+                                            else notion_results
+                                        )
+                                    except Exception as e:
+                                        search_results_data['notion'] = [f"Error al buscar en Notion: {str(e)}"]
+
+                                if "gmail" in last_message.lower():
+                                    try:
+                                        gmail_results = search_gmail()
+                                        search_results_data['gmail'] = (
+                                            gmail_results.get_json() 
+                                            if hasattr(gmail_results, 'get_json') 
+                                            else gmail_results
+                                        )
+                                    except Exception as e:
+                                        search_results_data['gmail'] = [f"Error al buscar en Gmail: {str(e)}"]
+
+                                if "slack" in last_message.lower():
+                                    try:
+                                        slack_results = search_slack()
+                                        search_results_data['slack'] = (
+                                            slack_results.get_json() 
+                                            if hasattr(slack_results, 'get_json') 
+                                            else slack_results
+                                        )
+                                    except Exception as e:
+                                        search_results_data['slack'] = [f"Error al buscar en Slack: {str(e)}"]
+
+                                if "outlook" in last_message.lower():
+                                    try:
+                                        outlook_results = search_outlook()
+                                        search_results_data['outlook'] = (
+                                            outlook_results.get_json() 
+                                            if hasattr(outlook_results, 'get_json') 
+                                            else outlook_results
+                                        )
+                                    except Exception as e:
+                                        search_results_data['outlook'] = [f"Error al buscar en Outlook: {str(e)}"]
+
+                                if "hubspot" in last_message.lower():
+                                    try:
+                                        hubspot_results = search_hubspot()
+                                        search_results_data['hubspot'] = (
+                                            hubspot_results.get_json() 
+                                            if hasattr(hubspot_results, 'get_json') 
+                                            else hubspot_results
+                                        )
+                                    except Exception as e:
+                                        search_results_data['hubspot'] = [f"Error al buscar en HubSpot: {str(e)}"]
+
+                                # Generar el prompt usando los datos de búsqueda
+                                try:
+                                    prompt = generate_prompt(last_message, search_results_data)
+                                    response = openai.ChatCompletion.create(
+                                        model="gpt-4-turbo",
+                                        messages=[{
+                                            "role": "system",
+                                            "content": "Eres un asistente útil el cual está conectado con diversas aplicaciones y automatizarás el proceso de buscar información en base a la query que se te envíe, tomando toda la información necesaria"
+                                        }, {
+                                            "role": "user",
+                                            "content": prompt
+                                        }],
+                                        max_tokens=4096
+                                    )
+                                    ia_response = response.choices[0].message.content.strip()
+
+                                    if not ia_response:
+                                        return jsonify({"error": "La respuesta de la IA está vacía"}), 500
+
+                                    return jsonify({"response": to_ascii(ia_response)})
+
+                                except Exception as e:
+                                    return jsonify({"error": f"Error al generar la respuesta de la IA: {str(e)}"}), 500
+
+                            except Exception as e:
+                                return jsonify({"error": f"Error general: {str(e)}"}), 500
+
+                        except Exception as e:
+                            ia_response = f"Lo siento, ocurrió un error al procesar tu solicitud: {e}"
+                    else:
+                        ia_response = "Por favor, indica cuáles son las APIs específicas que necesitas que busque información. 😊"
+                
+                else:
+                    # Llamada a OpenAI para procesar la conversación
+                    response = openai.ChatCompletion.create(
+                        model="gpt-3.5-turbo",
+                        messages=[
+                            {"role": "system", "content": system_message},
+                            *user_messages  # Mensajes enviados por el usuario
+                        ],
+                        max_tokens=150
+                    )
+                    # Extraemos la respuesta de OpenAI
+                    ia_response = response.choices[0].message.content.strip()
+            except Exception as e:
+                ia_response = f"Lo siento, ocurrió un error al procesar tu mensaje: {e}"
+        
+        # Retornamos la respuesta al frontend
+        return jsonify({"message": ia_response})
+
+
     @app.route("/api/chat", methods=["POST"])
     def chat():
         data = request.get_json()

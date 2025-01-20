@@ -249,7 +249,12 @@ def setup_routes(app, mongo):
                 return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
             
             # Filtrar la query para eliminar términos que no son relevantes para la búsqueda (ej. "mandame", "enviame")
-            palabras_ignoradas = ["mandame", "enviame", "enviar", "enviame", "mandar", "recibir", "dame"]
+            palabras_ignoradas = [
+            "buscar", "necesito", "quiero", "ayúdame", "consulta", "pregunta",
+            "mándame", "envíame", "proporciona", "dame", "podrías", "serías tan amable",
+            "hazme", "indica", "muéstrame", "explícame", "recomiéndame", "ayuda",
+            "tráeme", "obtén", "encuentra", "infórmame", "pasame", "mandame", "muestrame", "explicame", "recomiendame", "obten", "informame", "buscame", "busca"
+            ]
             query_filtrada = " ".join([palabra for palabra in query.lower().split() if palabra not in palabras_ignoradas])
 
             # Si la query está vacía después de filtrar, devolvemos un error
@@ -291,6 +296,7 @@ def setup_routes(app, mongo):
                     subject = next((header['value'] for header in message_headers if header['name'] == 'Subject'), "Sin asunto")
 
                     body = ""
+                    # Decodificar el cuerpo del mensaje
                     if 'parts' in message_data['payload']:
                         for part in message_data['payload']['parts']:
                             if part['mimeType'] == 'text/html':
@@ -302,10 +308,19 @@ def setup_routes(app, mongo):
                             html_body = decode_message_body(message_data['payload']['body']['data'])
                             body = extract_text_from_html(html_body)
 
-                # Crear la URL del correo
-                mail_url = f"https://mail.google.com/mail/u/0/#inbox/{message_id}"
-                # Añadir los detalles del mensaje a la lista
-                if any(palabra in request.args.get('solicitud').lower() for palabra in ["buscar", "busca", "buscame", "ultimo", "último", "mi", "mí"]):
+                    # Crear la URL del correo
+                    mail_url = f"https://mail.google.com/mail/u/0/#inbox/{message_id}"
+
+                    # Depuración del mensaje procesado
+                    print({
+                        'from': sender,
+                        'date': date,
+                        'subject': subject,
+                        'body': body[:50],  # Muestra solo los primeros 50 caracteres
+                        'link': mail_url
+                    })
+
+                    # Añadir a los resultados (removí filtros problemáticos)
                     search_results.append({
                         'from': sender,
                         'date': date,
@@ -313,14 +328,6 @@ def setup_routes(app, mongo):
                         'body': body,
                         'link': mail_url
                     })
-                if any(keyword in subject.lower() for keyword in keywords):
-                        search_results.append({
-                            'from': sender,
-                            'date': date,
-                            'subject': subject,
-                            'body': body,
-                            'link': mail_url
-                        })
 
             if not search_results:
                 return jsonify({"message": "No se encontraron resultados que coincidan con la solicitud"}), 200
@@ -347,6 +354,7 @@ def setup_routes(app, mongo):
             if not notion_token:
                 return jsonify({"error": "Token de Notion no disponible"}), 400
 
+            # Limpiar el query
             if "proyecto" in query:
                 query = query.split("proyecto", 1)[1].strip() 
             if "compañia" in query:
@@ -366,13 +374,14 @@ def setup_routes(app, mongo):
                 'Content-Type': 'application/json'
             }
             data = {"query": query}
-
+            
             # Realizar solicitud a Notion
             response = requests.post(url, headers=headers, json=data)
             response.raise_for_status()
+            notion_response = response.json()
 
             # Procesar resultados
-            results = response.json().get("results", [])
+            results = notion_response.get("results", [])
             if not results:
                 return jsonify({"error": "No se encontraron resultados en Notion"}), 404
 
@@ -385,57 +394,22 @@ def setup_routes(app, mongo):
 
                 properties = result.get("properties", {})
                 for property_name, property_value in properties.items():
-                    # Verificar y extraer status de configuraciones complejas
+                    # Procesar propiedades relevantes
                     if property_value.get("type") == "status":
                         page_info["properties"][property_name] = property_value["status"].get("name", None)
-                    elif property_value.get("type") == "table" or property_value.get("type") == "collection":
-                        # Procesar tablas o bloques anidados
-                        table_results = property_value.get("results", [])
-                        for table_entry in table_results:
-                            if "status" in table_entry.get("properties", {}):
-                                page_info["properties"][property_name] = table_entry["properties"]["status"].get("name", None)
-                    elif property_name in ["Nombre de tarea", "Nombre del proyecto"] and property_value.get("title"):
+                    elif property_name == "Nombre" and property_value.get("title"):
                         page_info["properties"][property_name] = property_value["title"][0]["plain_text"]
-                    elif property_name == "Estado" and property_value.get("status"):
-                        page_info["properties"]["Estado"] = property_value["status"].get("name", None)
-                    elif property_name == "Etiquetas" and property_value.get("multi_select"):
-                        page_info["properties"]["Etiquetas"] = [tag["name"] for tag in property_value.get("multi_select", [])]
-                    elif property_name == "Fecha límite" and property_value.get("date"):
-                        page_info["properties"]["Fecha límite"] = property_value.get("date")
-                    elif property_name == "Prioridad" and property_value.get("select"):
-                        page_info["properties"]["Prioridad"] = property_value["select"].get("name")
-                    elif property_name == "Proyecto" and property_value.get("relation"):
-                        page_info["properties"]["Proyecto"] = [relation["id"] for relation in property_value.get("relation", [])]
-                    elif property_name == "Responsable" and property_value.get("people"):
-                        page_info["properties"]["Responsable"] = [person["id"] for person in property_value.get("people", [])]
-                    elif property_name == "Resumen" and property_value.get("rich_text"):
-                        page_info["properties"]["Resumen"] = [text["text"]["content"] for text in property_value.get("rich_text", [])]
-                    elif property_name == "Subtareas" and property_value.get("relation"):
-                        page_info["properties"]["Subtareas"] = [subtask["id"] for subtask in property_value.get("relation", [])]
-                    elif property_name == "Tarea principal" and property_value.get("relation"):
-                        page_info["properties"]["Tarea principal"] = [parent_task["id"] for parent_task in property_value.get("relation", [])]
 
                 # Filtrar resultados relevantes
                 if (
-                    'Resumen' in page_info["properties"]
-                    and page_info["properties"]["Resumen"]
-                    and query.lower() in page_info["properties"]["Resumen"][0].lower()
-                ):
-                    simplified_results.append(page_info)
-                elif (
-                    'Nombre de tarea' in page_info["properties"]
-                    and query.lower() in page_info["properties"]["Nombre de tarea"].lower()
-                ):
-                    simplified_results.append(page_info)
-                elif (
-                    'Nombre del proyecto' in page_info["properties"]
-                    and query.lower() in page_info["properties"]["Nombre del proyecto"].lower()
+                    'Nombre' in page_info["properties"]
+                    and query.lower() in page_info["properties"]["Nombre"].lower()
                 ):
                     simplified_results.append(page_info)
 
-            # Si no hay resultados simplificados
+            # Verificar si hay resultados simplificados
             if not simplified_results:
-                return jsonify({"error": "No se encontraron resultados en Notion"}), 404
+                return jsonify({"error": "No se encontraron resultados relevantes en Notion"}), 404
 
             return jsonify(simplified_results)
 
@@ -447,7 +421,6 @@ def setup_routes(app, mongo):
     @app.route('/search/slack', methods=['GET'])
     def search_slack(query):
         email = request.args.get('email')
-
         try:
             # Verificar existencia de usuario
             user = mongo.database.usuarios.find_one({'correo': email})
@@ -460,6 +433,7 @@ def setup_routes(app, mongo):
                 slack_token = slack_integration.get('token', None)
             else:
                 slack_token = None
+
             if not slack_token:
                 return jsonify({"error": "No se encuentra integración con Slack"}), 404
 
@@ -483,19 +457,20 @@ def setup_routes(app, mongo):
 
             # Validar respuesta de Slack
             if not data.get('ok'):
-                return jsonify({"error": "Error al buscar en Slack", "details": data}), response.status_code
+                return jsonify({"error": "Error al buscar en Slack", "details": data.get('error', 'Desconocido')}), response.status_code
 
-            # Extraer y procesar resultados
+            # Asegurarse de que los mensajes existen y son válidos
             messages = data.get("messages", {}).get("matches", [])
             if not messages:
                 return jsonify({"message": "No se encontraron resultados en Slack"}), 200
 
+            # Procesar los resultados
             slack_results = [
                 {
-                    "channel": message.get("channel", {}).get("name"),
-                    "user": message.get("username"),
-                    "text": message.get("text"),
-                    "ts": message.get("ts"),
+                    "channel": message.get("channel", {}).get("name", "Sin canal"),
+                    "user": message.get("username", "Desconocido"),
+                    "text": message.get("text", "Sin texto"),
+                    "ts": message.get("ts", "Sin timestamp"),
                     "link": f"https://slack.com/archives/{message.get('channel')}/p{message.get('ts').replace('.', '')}"
                 }
                 for message in messages
@@ -507,7 +482,7 @@ def setup_routes(app, mongo):
             return jsonify({"error": "Error al conectarse a Slack", "details": str(e)}), 500
         except Exception as e:
             return jsonify({"error": "Error inesperado", "details": str(e)}), 500
-        
+
     def parse_fecha_relativa(fecha_str):
         """
         Parsea una fecha relativa como '1 mes', '2 días', etc., y devuelve un objeto datetime.
@@ -874,43 +849,38 @@ def setup_routes(app, mongo):
             return jsonify({"error": f"Error general: {str(e)}"}), 500
     
     def generate_prompt(query, search_results):
-        contact_keywords = ['contacto', 'contactos', 'persona', 'personas', 'cliente', 'clientes', 'representante','teléfono']
-        is_contact_query = any(keyword in query.lower() for keyword in contact_keywords)
+        # Extraer solo la información relevante de cada fuente
+        results = {}
 
-        has_results = any(
-            search_results.get(platform, []) 
-            for platform in ['gmail', 'slack', 'notion', 'outlook', 'hubspot']
-        )
-        
-        if not has_results:
-            return """Lo siento, no encontré información relacionada con tu consulta. 
-            ¿Podrías reformular tu pregunta o proporcionar más detalles? 
-            Por ejemplo, puedes especificar:
-            - Un período de tiempo específico
-            - Nombres o correos electrónicos específicos
-            - Palabras clave más precisas
-            - O el contexto específico que estás buscando"""
-
+        # Gmail Results (extraer información relevante)
         gmail_results = "\n".join([
             f"De: {email.get('from', 'Desconocido')} | Asunto: {email.get('subject', 'Sin asunto')} | Fecha: {email.get('date', 'Sin fecha')} | Body: {email.get('body', 'Sin cuerpo')}"
             for email in search_results.get('gmail', []) if isinstance(email, dict)
         ]) or "No se encontraron correos relacionados en Gmail."
 
+        # Slack Results (extraer información relevante)
         slack_results = "\n".join([
             f"Canal: {msg.get('channel', 'Desconocido')} | Usuario: {msg.get('user', 'Desconocido')} | Mensaje: {msg.get('text', 'Sin mensaje')} | Fecha: {msg.get('ts', 'Sin fecha')}"
             for msg in search_results.get('slack', []) if isinstance(msg, dict)
         ]) or "No se encontraron mensajes relacionados en Slack."
 
+        # Notion Results (extraer información relevante)
         notion_results = "\n".join([
-            f"Página ID: {page.get('id', 'Sin ID')} | URL: {page.get('url', 'Sin URL')} | Estado: {page['properties'].get('Estado', 'Sin estado')} | Nombre del proyecto: {page['properties'].get('Nombre del proyecto', 'Sin título')} | Resumen: {', '.join(page['properties'].get('Resumen', ['Sin resumen']))}"
+            f"Página ID: {page.get('id', 'Sin ID')} | "
+            f"Nombre: {page.get('properties', {}).get('Nombre', 'Sin Nombre')} | "
+            f"Estado: {page.get('properties', {}).get('Estado', 'Sin Estado')} | "
+            f"URL: {page.get('url', 'Sin URL')} | "
+            f"Última edición: {page.get('last_edited_time', 'Sin edición')}"
             for page in search_results.get('notion', []) if isinstance(page, dict)
         ]) or "No se encontraron notas relacionadas en Notion."
 
+        # Outlook Results (extraer información relevante)
         outlook_results = "\n".join([
             f"De: {email.get('sender', 'Desconocido')} | Asunto: {email.get('subject', 'Sin asunto')} | Fecha: {email.get('receivedDateTime', 'Sin fecha')}"
             for email in search_results.get('outlook', []) if isinstance(email, dict)
         ]) or "No se encontraron correos relacionados en Outlook."
 
+        # HubSpot Results (extraer información relevante)
         hubspot_results = []
         hubspot_data = search_results.get("hubspot", {})
 
@@ -918,98 +888,43 @@ def setup_routes(app, mongo):
             if "contacts" in hubspot_data:
                 contacts = hubspot_data["contacts"]
                 if isinstance(contacts, list) and contacts:
-                    hubspot_results.append("Contactos:\n" + "\n".join([
-                        f"Nombre: {contact.get('firstname', 'N/A')} {contact.get('lastname', 'N/A')} | "
-                        f"Correo: {contact.get('email', 'N/A')} | "
-                        f"Compañía: {contact.get('company', 'N/A')} | "
-                        f"Teléfono: {contact.get('phone', 'N/A')} | "
-                        f"Cargo: {contact.get('jobtitle', 'N/A')}"
-                        for contact in contacts
-                    ]))
+                    hubspot_results.append("Contactos:\n" + "\n".join([f"Nombre: {contact.get('name', 'N/A')} | Correo: {contact.get('email', 'N/A')} | Teléfono: {contact.get('phone', 'N/A')}" for contact in contacts]))
 
             if "companies" in hubspot_data:
                 companies = hubspot_data["companies"]
                 if isinstance(companies, list) and companies:
-                    hubspot_results.append("Compañías:\n" + "\n".join([
-                        f"Compañía: {company.get('company', 'N/A')} | "
-                        f"Teléfono: {company.get('phone', 'N/A')} | "
-                        f"Industria: {company.get('industry', 'N/A')} | "
-                        f"Sitio web: {company.get('website', 'N/A')}"
-                        for company in companies
-                    ]))
+                    hubspot_results.append("Compañías:\n" + "\n".join([f"Compañía: {company.get('company', 'N/A')} | Teléfono: {company.get('phone', 'N/A')}" for company in companies]))
 
             if "deals" in hubspot_data:
                 deals = hubspot_data["deals"]
                 if isinstance(deals, list) and deals:
-                    hubspot_results.append("Negocios:\n" + "\n".join([
-                        f"Negocio: {deal.get('name', 'N/A')} | "
-                        f"Monto: {deal.get('price', 'N/A')} | "
-                        f"Estado: {deal.get('stage', 'N/A')} | "
-                        f"Fecha cierre: {deal.get('closedate', 'N/A')}"
-                        for deal in deals
-                    ]))
+                    hubspot_results.append("Negocios:\n" + "\n".join([f"Negocio: {deal.get('name', 'N/A')} | Monto: {deal.get('price', 'N/A')} | Estado: {deal.get('stage', 'N/A')}" for deal in deals]))
 
         except Exception as e:
             hubspot_results.append(f"Error procesando datos de HubSpot: {str(e)}")
 
         hubspot_results = "\n".join(hubspot_results) or "No se encontraron resultados relacionados en HubSpot."
+        prompt = f"""Respuesta concisa a la consulta: "{query}"
 
-        # Ajustar el prompt según el tipo de consulta
-        if is_contact_query:
-            prompt = f"""Respuesta concisa a la consulta: "{query}"
+        Gmail:
+        {gmail_results}
 
-            Información principal de HubSpot:
-            {hubspot_results}
+        Notion:
+        {notion_results}
 
-            Información complementaria:
-            Gmail:
-            {gmail_results}
+        Slack:
+        {slack_results}
 
-            Outlook:
-            {outlook_results}
+        Outlook:
+        {outlook_results}
 
-            Slack:
-            {slack_results}
+        HubSpot:
+        {hubspot_results}
 
-            Notion:
-            {notion_results}
+        Responde de forma concisa y directa, enfocándote solo en la información más relevante sin repetir detalles innecesarios ni mencionar la query. Utiliza fechas, URLs y detalles clave, y asegúrate de que la respuesta sea fácilmente comprensible. En el caso de links solo colocalos una vez
+        """
 
-            Instrucciones de respuesta:
-            1. Prioriza la información de contactos y empresas de HubSpot
-            2. Complementa con información relevante de correos o mensajes si es necesario
-            3. Proporciona una respuesta directa y estructurada
-            4. Incluye detalles de contacto específicos cuando estén disponibles
-            5. No repitas información innecesariamente
-            6. Menciona URLs solo una vez
-            7. Si la información parece inconsistente o incompleta, indícalo
-            """
-        else:
-            prompt = f"""Respuesta concisa a la consulta: "{query}"
-
-            Gmail:
-            {gmail_results}
-
-            Notion:
-            {notion_results}
-
-            Slack:
-            {slack_results}
-
-            Outlook:
-            {outlook_results}
-
-            HubSpot:
-            {hubspot_results}
-
-            Instrucciones de respuesta:
-            1. Responde de forma concisa y directa
-            2. Enfócate solo en la información más relevante para la consulta
-            3. No repitas detalles innecesarios
-            4. Incluye fechas y URLs importantes (solo una vez)
-            5. Asegúrate de que la respuesta sea coherente y fácil de entender
-            6. Si la información parece incompleta o inconsistente, indícalo
-            """
-
+        print(prompt)
         return prompt
 
     def clean_body(body):
@@ -1113,6 +1028,7 @@ def setup_routes(app, mongo):
         Responde saludos como "Hola" o "Saludos" con algo cálido como "¡Hola! Soy Shiffu, tu asistente virtual. ¿En qué puedo ayudarte hoy? 😊".
         Si el usuario quiere ser tratado de una forma especial hazlo (sin faltar el respeto) al igual si cuenta algo interesante sobre como se siente responde de manera gentil y haciendo ver que te importa
         Para cualquier otra consulta, proporciona una respuesta útil y adaptada al contexto del usuario.
+        Si es una petición ayudate de toda la informacion proporcionada por el usuario y la informacion dada por generate_prompt
         """
         
         # Palabras clave para detectar saludos y peticiones
@@ -1123,10 +1039,10 @@ def setup_routes(app, mongo):
         ]
 
         peticiones = [
-            "buscar", "necesito", "quiero", "ayúdame", "consulta", "pregunta",
+            "buscar","puedes", "necesito", "quiero", "ayúdame", "consulta", "pregunta",
             "mándame", "envíame", "proporciona", "dame", "podrías", "serías tan amable",
             "hazme", "indica", "muéstrame", "explícame", "recomiéndame", "ayuda",
-            "tráeme", "obtén", "encuentra", "infórmame"
+            "tráeme", "obtén", "encuentra", "infórmame", "pasame", "mandame", "muestrame", "explicame", "recomiendame", "obten", "informame", "buscame", "busca"
         ]
 
         # Respuesta predeterminada
@@ -1166,64 +1082,71 @@ def setup_routes(app, mongo):
                                     'slack': [],
                                     'notion': [],
                                     'outlook': [],
-                                    'hubspot': {}
+                                    'hubspot': []
                                 }
 
                                 try:
                                     notion_results = search_notion(query)
+                                    time.sleep(4)
                                     search_results_data['notion'] = (
                                         notion_results.get_json() 
                                         if hasattr(notion_results, 'get_json') 
                                         else notion_results
                                     )
-                                except Exception as e:
-                                    search_results_data['notion'] = [f"Error al buscar en Notion: {str(e)}"]
+                                except Exception:
+                                    search_results_data['notion'] = ["No se encontró ningún valor en Notion"]
 
                                 try:
                                     gmail_results = search_gmail(query)
+                                    time.sleep(4)
                                     search_results_data['gmail'] = (
                                         gmail_results.get_json() 
                                         if hasattr(gmail_results, 'get_json') 
                                         else gmail_results
                                     )
-                                except Exception as e:
-                                    search_results_data['gmail'] = [f"Error al buscar en Gmail: {str(e)}"]
+                                except Exception:
+                                    search_results_data['gmail'] = ["No se encontró ningún valor en Gmail"]
 
                                 try:
                                     slack_results = search_slack(query)
+                                    time.sleep(4)
                                     search_results_data['slack'] = (
                                         slack_results.get_json() 
                                         if hasattr(slack_results, 'get_json') 
                                         else slack_results
                                     )
-                                except Exception as e:
-                                    search_results_data['slack'] = [f"Error al buscar en Slack: {str(e)}"]
+                                except Exception:
+                                    search_results_data['slack'] = ["No se encontró ningún valor en Slack"]
 
                                 try:
                                     outlook_results = search_outlook(query)
+                                    time.sleep(4)
                                     search_results_data['outlook'] = (
                                         outlook_results.get_json() 
                                         if hasattr(outlook_results, 'get_json') 
                                         else outlook_results
                                     )
-                                except Exception as e:
-                                    search_results_data['outlook'] = [f"Error al buscar en Outlook: {str(e)}"]
+                                except Exception:
+                                    search_results_data['outlook'] = ["No se encontró ningún valor en Outlook"]
 
                                 try:
                                     hubspot_results = search_hubspot()
+                                    time.sleep(4)
                                     search_results_data['hubspot'] = (
                                         hubspot_results.get_json() 
                                         if hasattr(hubspot_results, 'get_json') 
                                         else hubspot_results
                                     )
-                                except Exception as e:
-                                    search_results_data['hubspot'] = [f"Error al buscar en HubSpot: {str(e)}"]
+                                except Exception:
+                                    search_results_data['hubspot'] = ["No se encontró ningún valor en HubSpot"]
 
                                 # Generar el prompt usando los datos de búsqueda
                                 try:
+                                    print(search_results_data)
                                     prompt = generate_prompt(last_message, search_results_data)
+                                    print(prompt)
                                     response = openai.chat.completions.create(
-                                        model="gpt-4-turbo",
+                                        model="gpt-3.5-turbo",
                                         messages=[{
                                             "role": "system",
                                             "content": "Eres un asistente útil el cual está conectado con diversas aplicaciones y automatizarás el proceso de buscar información en base a la query que se te envíe, tomando toda la información necesaria"
@@ -1233,12 +1156,13 @@ def setup_routes(app, mongo):
                                         }],
                                         max_tokens=4096
                                     )
-                                    ia_response = response.choices[0].message.content.strip()
+                                    responses = response.choices[0].message.content.strip()
+                                    print(responses)
 
                                     if not ia_response:
                                         return jsonify({"error": "La respuesta de la IA está vacía"}), 500
 
-                                    return jsonify({"response": to_ascii(ia_response)})
+                                    return jsonify({"message": responses})
 
                                 except Exception as e:
                                     return jsonify({"error": f"Error al generar la respuesta de la IA: {str(e)}"}), 500

@@ -225,13 +225,9 @@ def setup_routes(app, mongo):
         return decoded_body
 
     @app.route('/search/gmail', methods=["GET"])
-    def search_gmail():
+    def search_gmail(query):
         time.sleep(4)
         email = request.args.get('email')
-        query = request.args.get('solicitud')
-        proyecto = request.args.get('proyecto')
-        persona = request.args.get('persona')
-        company = request.args.get('company')
 
         try:
             user = mongo.database.usuarios.find_one({'correo': email})
@@ -251,23 +247,25 @@ def setup_routes(app, mongo):
 
             if not query:
                 return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
-
-            if company:
-                query += f'" {company}"' 
             
-            if any(palabra in query.lower() for palabra in ["ultimo", "último"]):    
-                if any(palabra in query.lower() for palabra in ["mi", "mí", "mis"]):
-                    query = "is:inbox"
+            # Filtrar la query para eliminar términos que no son relevantes para la búsqueda (ej. "mandame", "enviame")
+            palabras_ignoradas = ["mandame", "enviame", "enviar", "enviame", "mandar", "recibir", "dame"]
+            query_filtrada = " ".join([palabra for palabra in query.lower().split() if palabra not in palabras_ignoradas])
 
-            if any(palabra in query.lower() for palabra in ["buscar", "busca", "buscame"]):
-                query = f'from:"{persona}"'
-                    
+            # Si la query está vacía después de filtrar, devolvemos un error
+            if not query_filtrada:
+                return jsonify({"error": "No se proporcionó un término de búsqueda válido"}), 400
+
+            if any(palabra in query_filtrada for palabra in ["ultimo", "último"]):    
+                if any(palabra in query_filtrada for palabra in ["mi", "mí", "mis"]):
+                    query_filtrada = "is:inbox"
+            
             url = "https://www.googleapis.com/gmail/v1/users/me/messages"
             headers = {
                 'Authorization': f"Bearer {gmail_token}"
             }
-            print("ANTES DEL RESPONSE",query)
-            params = {"q": query, "maxResults": 5 }
+            print("ANTES DEL RESPONSE", query_filtrada)
+            params = {"q": query_filtrada, "maxResults": 5 }
             response = requests.get(url, headers=headers, params=params)
             response.raise_for_status()
 
@@ -276,7 +274,7 @@ def setup_routes(app, mongo):
             if not messages:
                 return jsonify({"message": "No se encontraron resultados en Gmail"}), 200
 
-            keywords = query.lower().split()
+            keywords = query_filtrada.split()
             print(keywords)
             search_results = []
             for message in messages:
@@ -304,18 +302,10 @@ def setup_routes(app, mongo):
                             html_body = decode_message_body(message_data['payload']['body']['data'])
                             body = extract_text_from_html(html_body)
 
-            # Crear la URL del correo
-            mail_url = f"https://mail.google.com/mail/u/0/#inbox/{message_id}"
-            # Añadir los detalles del mensaje a la lista
-            if any(palabra in request.args.get('solicitud').lower() for palabra in ["buscar", "busca", "buscame", "ultimo", "último", "mi", "mí"]):
-                search_results.append({
-                    'from': sender,
-                    'date': date,
-                    'subject': subject,
-                    'body': body,
-                    'link': mail_url
-                })
-            if any(keyword in subject.lower() for keyword in keywords):
+                # Crear la URL del correo
+                mail_url = f"https://mail.google.com/mail/u/0/#inbox/{message_id}"
+                # Añadir los detalles del mensaje a la lista
+                if any(palabra in request.args.get('solicitud').lower() for palabra in ["buscar", "busca", "buscame", "ultimo", "último", "mi", "mí"]):
                     search_results.append({
                         'from': sender,
                         'date': date,
@@ -323,6 +313,14 @@ def setup_routes(app, mongo):
                         'body': body,
                         'link': mail_url
                     })
+                if any(keyword in subject.lower() for keyword in keywords):
+                        search_results.append({
+                            'from': sender,
+                            'date': date,
+                            'subject': subject,
+                            'body': body,
+                            'link': mail_url
+                        })
 
             if not search_results:
                 return jsonify({"message": "No se encontraron resultados que coincidan con la solicitud"}), 200
@@ -333,16 +331,10 @@ def setup_routes(app, mongo):
         except Exception as e:
             return jsonify({"error": "Error inesperado", "details": str(e)}), 500
 
-
     @app.route('/search/notion', methods=['GET'])
-    def search_notion():
+    def search_notion(query):
         email = request.args.get('email')
-        proyecto = request.args.get('proyecto')
-        compañia= request.args.get('company')
-        empresa = request.args.get('empresa')
-        query = ""
         simplified_results = []
-
         try:
             # Verificar usuario en la base de datos
             user = mongo.database.usuarios.find_one({'correo': email})
@@ -355,12 +347,12 @@ def setup_routes(app, mongo):
             if not notion_token:
                 return jsonify({"error": "Token de Notion no disponible"}), 400
 
-            if proyecto:
-                query = proyecto
-            if compañia:
-                query = compañia
-            if empresa:
-                query = empresa
+            if "proyecto" in query:
+                query = query.split("proyecto", 1)[1].strip() 
+            if "compañia" in query:
+                query = query.split("compañia", 1)[1].strip()
+            if "empresa" in query:
+                query = query.split("empresa", 1)[1].strip()
 
             # Verificar término de búsqueda
             if not query:
@@ -453,9 +445,8 @@ def setup_routes(app, mongo):
             return jsonify({"error": "Error inesperado", "details": str(e)}), 500
 
     @app.route('/search/slack', methods=['GET'])
-    def search_slack():
+    def search_slack(query):
         email = request.args.get('email')
-        query = request.args.get('solicitud')
 
         try:
             # Verificar existencia de usuario
@@ -548,11 +539,8 @@ def setup_routes(app, mongo):
         raise ValueError("Formato de fecha relativa no válido.")
 
     @app.route('/search/outlook', methods=['GET'])
-    def search_outlook():
+    def search_outlook(query):
         email = request.args.get('email')
-        query = request.args.get('solicitud')
-        persona = request.args.get('persona')
-        fecha = request.args.get('fecha')
 
         try:
             user = mongo.database.usuarios.find_one({'correo': email})
@@ -577,18 +565,18 @@ def setup_routes(app, mongo):
             search_query = f'"{query}"'
 
             # Si se especifica una persona (debe ser una dirección de correo electrónico)
-            if persona:
-                search_query += f' from{persona}'
+            # if persona:
+            #     search_query += f' from{persona}'
 
-            # Si se especifica una fecha, filtrar por fecha de recepción
-            if fecha:
-                try:
-                    fecha_relativa = parse_fecha_relativa(fecha)
-                    # Formatear la fecha a ISO 8601
-                    fecha_formateada = fecha_relativa.strftime('%Y-%m-%dT%H:%M:%SZ')
-                    search_query += f' received ge {fecha_formateada}'
-                except ValueError:
-                    return jsonify({"error": "Formato de fecha relativa inválido"}), 400
+            # # Si se especifica una fecha, filtrar por fecha de recepción
+            # if fecha:
+            #     try:
+            #         fecha_relativa = parse_fecha_relativa(fecha)
+            #         # Formatear la fecha a ISO 8601
+            #         fecha_formateada = fecha_relativa.strftime('%Y-%m-%dT%H:%M:%SZ')
+            #         search_query += f' received ge {fecha_formateada}'
+            #     except ValueError:
+            #         return jsonify({"error": "Formato de fecha relativa inválido"}), 400
 
             url = 'https://graph.microsoft.com/v1.0/me/messages'
             headers = {
@@ -642,16 +630,11 @@ def setup_routes(app, mongo):
         }
 
     @app.route('/search/hubspot', methods=['GET'])
-    def search_hubspot():
+    def search_hubspot(query):
         time.sleep(4)
         # Obtener los parámetros del cuerpo de la solicitud
-        solicitud =  request.args.get("solicitud")
+        solicitud =  query
         print(solicitud)
-        empresa = request.args.get("empresa")
-        compania =  request.args.get("compañia")
-        persona =  request.args.get("persona")
-        datos_adicionales =  request.args.get("datos_adicionales")
-
         # Si no se proporcionó solicitud, retornar error
         if not solicitud:
             return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
@@ -706,11 +689,11 @@ def setup_routes(app, mongo):
         elif "contactos" in solicitud.lower():
             print("HOLALALA SOLICITUD")
             # Si no se proporcionó compañía, buscar todos los contactos
-            if compania:
-                print(compania)
+            if "compañia" in solicitud.lower():
+                print(solicitud.split("compañia", 1)[1].strip())
                 # Buscar contactos de una compañía específica
                 search_data = {
-                    "filters": [{"propertyName": "company", "operator": "EQ", "value": compania}],
+                    "filters": [{"propertyName": "company", "operator": "EQ", "value": solicitud.split("compañia", 1)[1].strip()}],
                     "properties": ["firstname", "lastname", "email", "company", "hubspot_owner_id"]
                 }
             else:
@@ -738,55 +721,55 @@ def setup_routes(app, mongo):
                     for contact in contacts
                 ]
                 if not search_results["contacts"]:
-                    search_results["contacts"] = {"message": f"No se encontraron contactos{(' para ' + compania) if compania else ''}."}
+                    search_results["contacts"] = {"message": f"No se encontraron contactos{(' para ' + solicitud.split("compañia", 1)[1].strip()) if solicitud.split("compañia", 1)[1].strip() else ''}."}
             else:
                 return jsonify({"error": f"Error al buscar en HubSpot: {response.status_code} {response.text}"}), response.status_code
-        elif "empresa" in solicitud.lower() or "company" in solicitud.lower() and persona:
-            print("HOLAAA")
-            # Verificar si se proporcionó el nombre de la persona
-            if not persona:
-                return jsonify({"error": "Persona no proporcionada"}), 400
+        # elif "empresa" in solicitud.lower() or "compañia" or "company" in solicitud.lower() and persona:
+        #     print("HOLAAA")
+        #     # Verificar si se proporcionó el nombre de la persona
+        #     if not persona:
+        #         return jsonify({"error": "Persona no proporcionada"}), 400
 
-            # Dividir el nombre completo de la persona en primer nombre y apellido
-            persona_nombre = persona.split()
-            if len(persona_nombre) < 2:
-                return jsonify({"error": "Nombre completo de la persona no válido"}), 400
+        #     # Dividir el nombre completo de la persona en primer nombre y apellido
+        #     persona_nombre = persona.split()
+        #     if len(persona_nombre) < 2:
+        #         return jsonify({"error": "Nombre completo de la persona no válido"}), 400
 
-            search_data = {
-                "filters": [
-                    {"propertyName": "firstname", "operator": "EQ", "value": persona_nombre[0]},  # Primer nombre
-                    {"propertyName": "lastname", "operator": "EQ", "value": persona_nombre[1]}   # Apellido
-                ],
-                "properties": ["firstname", "lastname", "company", "hubspot_owner_id"]
-            }
+        #     search_data = {
+        #         "filters": [
+        #             {"propertyName": "firstname", "operator": "EQ", "value": persona_nombre[0]},  # Primer nombre
+        #             {"propertyName": "lastname", "operator": "EQ", "value": persona_nombre[1]}   # Apellido
+        #         ],
+        #         "properties": ["firstname", "lastname", "company", "hubspot_owner_id"]
+        #     }
 
-            response = requests.post(
-                "https://api.hubapi.com/crm/v3/objects/contacts/search",
-                headers=headers,
-                json=search_data
-            )
+        #     response = requests.post(
+        #         "https://api.hubapi.com/crm/v3/objects/contacts/search",
+        #         headers=headers,
+        #         json=search_data
+        #     )
 
-            print(response)
-            print(response.status_code)
+        #     print(response)
+        #     print(response.status_code)
 
 
-            if response.status_code == 200:
-                contacts = response.json().get("results", [])
-                search_results["contacts"] = [
-                    {
-                        "firstname": contact["properties"].get("firstname", "N/A"),
-                        "lastname": contact["properties"].get("lastname", "N/A"),
-                        "company": contact["properties"].get("company", "N/A"),
-                        "owner": contact["properties"].get("hubspot_owner_id", "N/A")
-                    }
-                    for contact in contacts
-                ]
+        #     if response.status_code == 200:
+        #         contacts = response.json().get("results", [])
+        #         search_results["contacts"] = [
+        #             {
+        #                 "firstname": contact["properties"].get("firstname", "N/A"),
+        #                 "lastname": contact["properties"].get("lastname", "N/A"),
+        #                 "company": contact["properties"].get("company", "N/A"),
+        #                 "owner": contact["properties"].get("hubspot_owner_id", "N/A")
+        #             }
+        #             for contact in contacts
+        #         ]
                 
-                # Si no se encuentran contactos, se envía un mensaje indicando que no se encontraron empresas
-                if not search_results["contacts"]:
-                    search_results["contacts"] = {"message": f"No se encontraron empresas para {persona}."}
-            else:
-                return jsonify({"error": f"Error al buscar en HubSpot: {response.status_code} {response.text}"}), response.status_code
+        #         # Si no se encuentran contactos, se envía un mensaje indicando que no se encontraron empresas
+        #         if not search_results["contacts"]:
+        #             search_results["contacts"] = {"message": f"No se encontraron empresas para {persona}."}
+        #     else:
+        #         return jsonify({"error": f"Error al buscar en HubSpot: {response.status_code} {response.text}"}), response.status_code
 
         else:
             return jsonify({"error": "Tipo de solicitud no soportado"}), 400
@@ -1117,7 +1100,7 @@ def setup_routes(app, mongo):
         except Exception as e:
             # Manejo de errores
             return jsonify({"error": str(e)}), 500
-        
+            
     @app.route("/api/chatAi", methods=["POST"])
     def apiChat():
         data = request.get_json()
@@ -1128,16 +1111,27 @@ def setup_routes(app, mongo):
         Eres Shiffu, un asistente virtual amigable y útil en su versión alfa. 
         Ayudas a los usuarios respondiendo preguntas de manera clara y humana. 
         Responde saludos como "Hola" o "Saludos" con algo cálido como "¡Hola! Soy Shiffu, tu asistente virtual. ¿En qué puedo ayudarte hoy? 😊".
+        Si el usuario quiere ser tratado de una forma especial hazlo (sin faltar el respeto) al igual si cuenta algo interesante sobre como se siente responde de manera gentil y haciendo ver que te importa
         Para cualquier otra consulta, proporciona una respuesta útil y adaptada al contexto del usuario.
         """
         
         # Palabras clave para detectar saludos y peticiones
-        saludos = ["hola", "buenos días", "buenas tardes", "saludos", "hey", "qué tal"]
-        peticiones = ["buscar", "necesito", "quiero", "ayúdame", "consulta", "pregunta"]
-        
+        saludos = [
+            "hola", "buenos días", "buenas tardes", "saludos", "hey", "qué tal",
+            "buenas noches", "hola qué tal", "cómo estás", "qué hay", "cómo va",
+            "hola hola", "qué onda", "saluditos", "buen día", "alo"
+        ]
+
+        peticiones = [
+            "buscar", "necesito", "quiero", "ayúdame", "consulta", "pregunta",
+            "mándame", "envíame", "proporciona", "dame", "podrías", "serías tan amable",
+            "hazme", "indica", "muéstrame", "explícame", "recomiéndame", "ayuda",
+            "tráeme", "obtén", "encuentra", "infórmame"
+        ]
+
         # Respuesta predeterminada
         ia_response = "Lo siento, no entendí tu mensaje. ¿Puedes reformularlo?"
-        
+
         if user_messages:
             try:
                 # Analizamos el último mensaje del usuario
@@ -1149,11 +1143,14 @@ def setup_routes(app, mongo):
                 
                 # Detectamos si es una petición
                 elif any(peticion in last_message for peticion in peticiones):
-                    # Validamos si menciona "api" o "apis"
-                    if "api" in last_message or "apis" in last_message:
-                        # Procesar envío de email (simulación)
+                    query = last_message.lower()
+                    print(f"QUERY: {query}")
+                    
+                    # Detectar si el mensaje menciona alguna API y procesar según corresponda
+                    if query:
                         try:
                             email = request.args.get('email')
+                            print(email)
 
                             if not email:
                                 return jsonify({"error": "Se deben proporcionar tanto el email como la consulta"}), 400
@@ -1172,61 +1169,55 @@ def setup_routes(app, mongo):
                                     'hubspot': {}
                                 }
 
-                                # Consultar las APIs dependiendo de la consulta
-                                if "notion" in last_message.lower():
-                                    try:
-                                        notion_results = search_notion()
-                                        search_results_data['notion'] = (
-                                            notion_results.get_json() 
-                                            if hasattr(notion_results, 'get_json') 
-                                            else notion_results
-                                        )
-                                    except Exception as e:
-                                        search_results_data['notion'] = [f"Error al buscar en Notion: {str(e)}"]
+                                try:
+                                    notion_results = search_notion(query)
+                                    search_results_data['notion'] = (
+                                        notion_results.get_json() 
+                                        if hasattr(notion_results, 'get_json') 
+                                        else notion_results
+                                    )
+                                except Exception as e:
+                                    search_results_data['notion'] = [f"Error al buscar en Notion: {str(e)}"]
 
-                                if "gmail" in last_message.lower():
-                                    try:
-                                        gmail_results = search_gmail()
-                                        search_results_data['gmail'] = (
-                                            gmail_results.get_json() 
-                                            if hasattr(gmail_results, 'get_json') 
-                                            else gmail_results
-                                        )
-                                    except Exception as e:
-                                        search_results_data['gmail'] = [f"Error al buscar en Gmail: {str(e)}"]
+                                try:
+                                    gmail_results = search_gmail(query)
+                                    search_results_data['gmail'] = (
+                                        gmail_results.get_json() 
+                                        if hasattr(gmail_results, 'get_json') 
+                                        else gmail_results
+                                    )
+                                except Exception as e:
+                                    search_results_data['gmail'] = [f"Error al buscar en Gmail: {str(e)}"]
 
-                                if "slack" in last_message.lower():
-                                    try:
-                                        slack_results = search_slack()
-                                        search_results_data['slack'] = (
-                                            slack_results.get_json() 
-                                            if hasattr(slack_results, 'get_json') 
-                                            else slack_results
-                                        )
-                                    except Exception as e:
-                                        search_results_data['slack'] = [f"Error al buscar en Slack: {str(e)}"]
+                                try:
+                                    slack_results = search_slack(query)
+                                    search_results_data['slack'] = (
+                                        slack_results.get_json() 
+                                        if hasattr(slack_results, 'get_json') 
+                                        else slack_results
+                                    )
+                                except Exception as e:
+                                    search_results_data['slack'] = [f"Error al buscar en Slack: {str(e)}"]
 
-                                if "outlook" in last_message.lower():
-                                    try:
-                                        outlook_results = search_outlook()
-                                        search_results_data['outlook'] = (
-                                            outlook_results.get_json() 
-                                            if hasattr(outlook_results, 'get_json') 
-                                            else outlook_results
-                                        )
-                                    except Exception as e:
-                                        search_results_data['outlook'] = [f"Error al buscar en Outlook: {str(e)}"]
+                                try:
+                                    outlook_results = search_outlook(query)
+                                    search_results_data['outlook'] = (
+                                        outlook_results.get_json() 
+                                        if hasattr(outlook_results, 'get_json') 
+                                        else outlook_results
+                                    )
+                                except Exception as e:
+                                    search_results_data['outlook'] = [f"Error al buscar en Outlook: {str(e)}"]
 
-                                if "hubspot" in last_message.lower():
-                                    try:
-                                        hubspot_results = search_hubspot()
-                                        search_results_data['hubspot'] = (
-                                            hubspot_results.get_json() 
-                                            if hasattr(hubspot_results, 'get_json') 
-                                            else hubspot_results
-                                        )
-                                    except Exception as e:
-                                        search_results_data['hubspot'] = [f"Error al buscar en HubSpot: {str(e)}"]
+                                try:
+                                    hubspot_results = search_hubspot()
+                                    search_results_data['hubspot'] = (
+                                        hubspot_results.get_json() 
+                                        if hasattr(hubspot_results, 'get_json') 
+                                        else hubspot_results
+                                    )
+                                except Exception as e:
+                                    search_results_data['hubspot'] = [f"Error al buscar en HubSpot: {str(e)}"]
 
                                 # Generar el prompt usando los datos de búsqueda
                                 try:
@@ -1257,11 +1248,12 @@ def setup_routes(app, mongo):
 
                         except Exception as e:
                             ia_response = f"Lo siento, ocurrió un error al procesar tu solicitud: {e}"
+
                     else:
                         ia_response = "Por favor, indica cuáles son las APIs específicas que necesitas que busque información. 😊"
-                
+                    
                 else:
-                    # Llamada a OpenAI para procesar la conversación
+                    # Llamada a OpenAI para procesar la conversación si no es un saludo o petición
                     response = openai.chat.completions.create(
                         model="gpt-3.5-turbo",
                         messages=[
@@ -1270,13 +1262,13 @@ def setup_routes(app, mongo):
                         ],
                         max_tokens=150
                     )
-                    # Extraemos la respuesta de OpenAI
                     ia_response = response.choices[0].message.content.strip()
             except Exception as e:
                 ia_response = f"Lo siento, ocurrió un error al procesar tu mensaje: {e}"
         
         # Retornamos la respuesta al frontend
         return jsonify({"message": ia_response})
+
 
     @app.route("/api/chat", methods=["POST"])
     def chat():

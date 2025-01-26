@@ -11,6 +11,11 @@
           "dest": "main.py"
         }
       ],
+    "functions":{
+      "src/routes.py":{
+        "maxDuration": 30
+      }
+    },
       "env": {
         
       }

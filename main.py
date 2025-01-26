@@ -11,7 +11,7 @@ load_dotenv()
 def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
-    CORS(app, resources={r"/*": {"origins": "*"}})
+    CORS(app, resources={r"/*": {"origins": ["http://localhost:5173", "https://neuron-hyper.vercel.app/"]}})
     app.config['MONGO_URI'] = os.getenv('MONGO_URI')
     mongo = PyMongo(app)
     mongo = mongo.db.get_collection("Prueba")

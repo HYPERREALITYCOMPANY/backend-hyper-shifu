@@ -227,7 +227,6 @@ def setup_routes(app, mongo):
 
     @app.route('/search/gmail', methods=["GET"])
     def search_gmail(query):
-        time.sleep(4)
         print("HOLA GMAIL!")
         email = request.args.get('email')
         try:
@@ -640,7 +639,6 @@ def setup_routes(app, mongo):
 
     @app.route('/search/hubspot', methods=['GET'])
     def search_hubspot(query):
-        time.sleep(4)
         print("HUBSPOT")
         # Obtener los parámetros del cuerpo de la solicitud
         print(query)

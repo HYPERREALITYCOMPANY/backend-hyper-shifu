@@ -25,6 +25,7 @@ def setup_routes(app, mongo):
     idUser = ""
     notion_bp = Blueprint('notion', __name__)
     queryApis = ""
+    global last_searchs
 
     @app.route('/')
     def home():
@@ -640,14 +641,12 @@ def setup_routes(app, mongo):
     @app.route('/search/hubspot', methods=['GET'])
     def search_hubspot(query):
         print("HUBSPOT")
-        # Obtener los parámetros del cuerpo de la solicitud
         print(query)
-        # Si no se proporcionó solicitud, retornar error
         if not query:
             return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
 
         # Buscar usuario en la base de datos
-        email =  request.args.get("email")
+        email = request.args.get("email")
         user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
@@ -663,21 +662,21 @@ def setup_routes(app, mongo):
 
         headers = get_hubspot_headers(hubspot_token)
         search_results = {}
+
         if "n/a" in query:
             return jsonify({"message": "No hay resultados en HubSpot"}), 200
-        # Manejo de las solicitudes según el prompt
-        if query == "todos mis contactos":
-            # Realizar búsqueda de todos los contactos
+
+        # Buscar todos los contactos
+        if query.lower() == "todos mis contactos":
             search_data = {
                 "filters": [],
-                "properties": ["firstname", "lastname", "email", "hubspot_owner_id"]
+                "properties": ["firstname", "lastname", "email", "hubspot_owner_id", "company"]
             }
             response = requests.post(
                 "https://api.hubapi.com/crm/v3/objects/contacts/search",
                 headers=headers,
                 json=search_data
             )
-            print("HUBSPOT",response)
             if response.status_code == 200:
                 contacts = response.json().get("results", [])
                 search_results["contacts"] = [
@@ -685,7 +684,8 @@ def setup_routes(app, mongo):
                         "firstname": contact["properties"].get("firstname", "N/A"),
                         "lastname": contact["properties"].get("lastname", "N/A"),
                         "email": contact["properties"].get("email", "N/A"),
-                        "owner": contact["properties"].get("hubspot_owner_id", "N/A")
+                        "owner": contact["properties"].get("hubspot_owner_id", "N/A"),
+                        "company": contact["properties"].get("company", "N/A")
                     }
                     for contact in contacts
                 ]
@@ -694,19 +694,17 @@ def setup_routes(app, mongo):
             else:
                 return jsonify({"error": f"Error al buscar en HubSpot: {response.status_code} {response.text}"}), response.status_code
 
-        elif "contacto" or "contactos" in query.lower():
-            print("HOLALALA SOLICITUD")
+        # Búsqueda de contactos, negocios y empresas
+        elif "contacto" in query.lower() or "contactos" in query.lower():
             search_data = {
-                    "filters": [],
-                    "properties": ["firstname", "lastname", "email", "phone", "company",  "hubspot_owner_id"]
+                "filters": [],
+                "properties": ["firstname", "lastname", "email", "phone", "company", "hubspot_owner_id"]
             }
-
             response = requests.post(
                 "https://api.hubapi.com/crm/v3/objects/contacts/search",
                 headers=headers,
                 json=search_data
             )
-            print("HUBSPOT response", response)
             if response.status_code == 200:
                 contacts = response.json().get("results", [])
                 search_results["contacts"] = [
@@ -715,68 +713,82 @@ def setup_routes(app, mongo):
                         "lastname": contact["properties"].get("lastname", "N/A"),
                         "email": contact["properties"].get("email", "N/A"),
                         "company": contact["properties"].get("company", "N/A"),
-                        "owner": contact["properties"].get("hubspot_owner_id", "N/A"), 
+                        "owner": contact["properties"].get("hubspot_owner_id", "N/A"),
                         "phone": contact["properties"].get("phone", "N/A")
                     }
                     for contact in contacts
                 ]
-                print("HUBSPOT", search_results)
                 if not search_results["contacts"]:
-                    search_results["contacts"] = {"message": f"No se encontraron contactos{(' para ' + query.split("compañia", 1)[1].strip()) if query.split("compañia", 1)[1].strip() else ''}."}
+                    search_results["contacts"] = {"message": f"No se encontraron contactos{(' para ' + query.split('compañia', 1)[1].strip()) if query.split('compañia', 1)[1].strip() else ''}."}
             else:
                 return jsonify({"error": f"Error al buscar en HubSpot: {response.status_code} {response.text}"}), response.status_code
-        # elif "empresa" in solicitud.lower() or "compañia" or "company" in solicitud.lower() and persona:
-        #     print("HOLAAA")
-        #     # Verificar si se proporcionó el nombre de la persona
-        #     if not persona:
-        #         return jsonify({"error": "Persona no proporcionada"}), 400
 
-        #     # Dividir el nombre completo de la persona en primer nombre y apellido
-        #     persona_nombre = persona.split()
-        #     if len(persona_nombre) < 2:
-        #         return jsonify({"error": "Nombre completo de la persona no válido"}), 400
+        elif "negocio" in query.lower() or "negocios" in query.lower():
+            search_data = {
+                "filters": [],
+                "properties": ["dealname", "amount", "dealstage", "hubspot_owner_id", "company"]
+            }
+            response = requests.post(
+                "https://api.hubapi.com/crm/v3/objects/deals/search",
+                headers=headers,
+                json=search_data
+            )
+            stage_mapping = {
+                "qualifiedtobuy": "Calificado para comprar",
+                "appointmentscheduled": "Cita programada",
+                "noactivity": "Sin actividad",
+                "presentationscheduled": "Presentación programada",
+                "quoteaccepted": "Propuesta aceptada",
+                "contractsent": "Contrato enviado",
+                "closedwon": "Cierre ganado",
+                "closedlost": "Cierre perdido"
+            }
+            if response.status_code == 200:
+                deals = response.json().get("results", [])
+                search_results["deals"] = [{
+                    "dealname": deal["properties"].get("dealname", "N/A"),
+                    "amount": deal["properties"].get("amount", "N/A"),
+                    "dealstage": stage_mapping.get(deal["properties"].get("dealstage", "N/A"), "N/A"),
+                    "owner": deal["properties"].get("hubspot_owner_id", "N/A"),
+                    "company": deal["properties"].get("company", "N/A")
+                }
+                for deal in deals
+                ]
+            else:
+                return jsonify({"error": f"Error al buscar en HubSpot: {response.status_code} {response.text}"}), response.status_code
 
-        #     search_data = {
-        #         "filters": [
-        #             {"propertyName": "firstname", "operator": "EQ", "value": persona_nombre[0]},  # Primer nombre
-        #             {"propertyName": "lastname", "operator": "EQ", "value": persona_nombre[1]}   # Apellido
-        #         ],
-        #         "properties": ["firstname", "lastname", "company", "hubspot_owner_id"]
-        #     }
-
-        #     response = requests.post(
-        #         "https://api.hubapi.com/crm/v3/objects/contacts/search",
-        #         headers=headers,
-        #         json=search_data
-        #     )
-
-        #     print(response)
-        #     print(response.status_code)
-
-
-        #     if response.status_code == 200:
-        #         contacts = response.json().get("results", [])
-        #         search_results["contacts"] = [
-        #             {
-        #                 "firstname": contact["properties"].get("firstname", "N/A"),
-        #                 "lastname": contact["properties"].get("lastname", "N/A"),
-        #                 "company": contact["properties"].get("company", "N/A"),
-        #                 "owner": contact["properties"].get("hubspot_owner_id", "N/A")
-        #             }
-        #             for contact in contacts
-        #         ]
-                
-        #         # Si no se encuentran contactos, se envía un mensaje indicando que no se encontraron empresas
-        #         if not search_results["contacts"]:
-        #             search_results["contacts"] = {"message": f"No se encontraron empresas para {persona}."}
-        #     else:
-        #         return jsonify({"error": f"Error al buscar en HubSpot: {response.status_code} {response.text}"}), response.status_code
+        # Búsqueda de empresas
+        elif "empresa" in query.lower() or "compañia" in query.lower():
+            search_data = {
+                "filters": [],
+                "properties": ["name", "industry", "size", "hubspot_owner_id"]
+            }
+            response = requests.post(
+                "https://api.hubapi.com/crm/v3/objects/companies/search",
+                headers=headers,
+                json=search_data
+            )
+            if response.status_code == 200:
+                companies = response.json().get("results", [])
+                search_results["companies"] = [
+                    {
+                        "name": company["properties"].get("name", "N/A"),
+                        "industry": company["properties"].get("industry", "N/A"),
+                        "size": company["properties"].get("size", "N/A"),
+                        "owner": company["properties"].get("hubspot_owner_id", "N/A")
+                    }
+                    for company in companies
+                ]
+                if not search_results["companies"]:
+                    search_results["companies"] = {"message": "No se encontraron empresas."}
+            else:
+                return jsonify({"error": f"Error al buscar en HubSpot: {response.status_code} {response.text}"}), response.status_code
 
         else:
             return jsonify({"error": "Tipo de solicitud no soportado"}), 400
-        print ("RESPUESTA" , (search_results))
 
         return jsonify(search_results)
+
 
     @app.route('/askIa', methods=['GET'])
     def ask():
@@ -874,6 +886,12 @@ def setup_routes(app, mongo):
 
         except Exception as e:
             return jsonify({"error": f"Error general: {str(e)}"}), 500
+
+    def extract_links(results, key):
+        if isinstance(results, list):
+            return [item.get(key) for item in results if key in item]
+        return []
+
     
     def generate_prompt(query, search_results):
         # Extraer solo la información relevante de cada fuente
@@ -907,7 +925,6 @@ def setup_routes(app, mongo):
             for email in search_results.get('outlook', []) if isinstance(email, dict)
         ]) or "No se encontraron correos relacionados en Outlook."
 
-        # HubSpot Results (extraer información relevante)
         hubspot_results = []
         hubspot_data = search_results.get("hubspot", {})
 
@@ -916,7 +933,7 @@ def setup_routes(app, mongo):
                 contacts = hubspot_data["contacts"]
                 if isinstance(contacts, list) and contacts:
                     hubspot_results.append("Contactos:\n" + "\n".join([
-                    f"Nombre: {contact.get('firstname', 'N/A') or ''} {contact.get('lastname', 'N/A') or ''} | Correo: {contact.get('email', 'N/A') or ''} | Teléfono: {contact.get('phone', 'N/A') or ''}"
+                    f"Nombre: {contact.get('firstname', 'N/A') or ''} {contact.get('lastname', 'N/A') or ''} | Correo: {contact.get('email', 'N/A') or ''} | Teléfono: {contact.get('phone', 'N/A') or ''} | Company: {contact.get('company', 'N/A') or ''}"
                     for contact in contacts
                     ]))
 
@@ -929,13 +946,15 @@ def setup_routes(app, mongo):
             if "deals" in hubspot_data:
                 deals = hubspot_data["deals"]
                 if isinstance(deals, list) and deals:
-                    hubspot_results.append("Negocios:\n" + "\n".join([f"Negocio: {deal.get('name', 'N/A')} | Monto: {deal.get('price', 'N/A')} | Estado: {deal.get('stage', 'N/A')}" for deal in deals]))
+                    hubspot_results.append("Deals:\n" + "\n".join([f"Nombre: {deal.get('dealname', 'N/A')} | Estado: {deal.get('dealstage', 'N/A')}" for deal in deals]))
 
         except Exception as e:
             hubspot_results.append(f"Error procesando datos de HubSpot: {str(e)}")
 
         hubspot_results = "\n".join(hubspot_results) or "No se encontraron resultados relacionados en HubSpot."
         prompt = f"""Respuesta concisa a la consulta: "{query}"
+
+        Resultados de la búsqueda:
 
         Gmail:
         {gmail_results}
@@ -952,7 +971,17 @@ def setup_routes(app, mongo):
         HubSpot:
         {hubspot_results}
 
-        Responde de forma concisa y directa, enfocándote solo en la información más relevante sin repetir detalles innecesarios ni mencionar la query. Utiliza fechas, URLs y detalles clave, y asegúrate de que la respuesta sea fácilmente comprensible. En el caso de links solo colocalos una vez.
+        Responde de forma humana, concisa y en parrafo, SOLO RESPONDE LO QUE SE TE PIDE, Necesito que agregues especificaciones de la response: 
+        En Gmail: Responde con la persona que mando el correo, el asunto del correo, la fecha y el body SEGUN LOS RESULTADOS DE BUSQUEDA DE GMAIL
+        En Notion: Responde con el Nombre, el Estado, Y la URL SEGUN LOS RESULTADOS DE BUSQUEDA DE NOTION
+        En Hubspot: Responde con toda la informacion que se te envie SEGUN LOS RESULTADOS DE BUSQUEDA DE HUBSPOT
+        En Slack: Responde con toda la informacion que se te envie SEGUN LOS RESULTADOS DE BUSQUEDA DE SLACK
+        En Outlook: Responde con la persona que mando el correo, el asunto del correo, la fecha y el body SEGUN LOS RESULTADOS DE BUSQUEDA DE OUTLOOK 
+        Y quiero que respondas enfocándote solo en la información más relevante sin repetir detalles innecesarios ni mencionar la query. Utiliza fechas, URLs y detalles clave, y asegúrate de que la respuesta sea fácilmente comprensible. En el caso de links solo colocalos una vez.
+        SI SE MENCIONAN CONTACTOS BASATE EN LA INFORMACIÓN DE HUBSPOT
+        EN DADO CASO SOLO EXISTA INFORMACION DE UNA API, SOLO CONTESTA CON LA INFORMACION DE ESA API NO CONTESTES QUE NO HAY INFORMACION EN CADA API
+        Y SI NO SE ENCUENTRA INFORMACION EN NINGUNA API SOLO CONTESTA QUE NO SE ENCONTRO INFORMACION EN NINGUNO DE LOS SERVICIOS REGISTRADOS
+        ADEMÁS AL MOMENTO DE RESPONDER HAZ QUE LA RESPUESTA SEA NATURAL DE UN CHAT ES DECIR NO INCLUYAS SIMBOLOS PARA MARCAR LAS APIS, Y LO MAS IMPORTANTE SOLO RESPONDE POR LAS APIS QUE TE MANDAN INFORMACION!!!
         """
 
         print(prompt)
@@ -1046,12 +1075,53 @@ def setup_routes(app, mongo):
         except Exception as e:
             # Manejo de errores
             return jsonify({"error": str(e)}), 500
+    
+    def extract_links_from_datas(datas):
+        """Extrae los enlaces y los nombres (asunto/página/mensaje) de cada API según la estructura de datos recibida."""
+        print("DATA LINKS", datas)
+        results = {
+            'gmail': [],
+            'slack': [],
+            'notion': [],
+            'outlook': []
+        }
+
+        # Extraer links y asunto de Gmail (vienen en una lista de diccionarios)
+        if isinstance(datas.get('gmail'), list):  # Comprobamos si es una lista
+            results['gmail'] = [
+                {'link': item['link'], 'subject': item.get('subject', 'No subject')} 
+                for item in datas['gmail'] if 'link' in item
+            ]
+
+        # Extraer links y mensaje de Slack (viene en una lista dentro de una tupla)
+        if isinstance(datas.get('slack'), list):  # Cambié para verificar si es una lista
+            results['slack'] = [
+                {'link': item['link'], 'message': item.get('message', 'No message')}
+                for item in datas['slack'] if 'link' in item
+            ]
+
+        # Extraer links y nombre de página de Notion (viene en una lista)
+        if isinstance(datas.get('notion'), list):  # Verificamos que sea lista
+            results['notion'] = [
+                {'url': item['url'], 'page_name': item.get('properties', {}).get('Nombre', 'Sin Nombre')}
+                for item in datas['notion'] if 'url' in item
+            ]
+
+        # Extraer links y asunto de Outlook (viene en una lista dentro de una tupla)
+        if isinstance(datas.get('outlook'), list):  # Cambié para verificar si es lista
+            results['outlook'] = [
+                {'webLink': item['webLink'], 'subject': item.get('subject', 'No subject')}
+                for item in datas['outlook'] if 'webLink' in item
+            ]
+
+        return results
                 
     @app.route("/api/chatAi", methods=["POST"])
     def apiChat():
         data = request.get_json()
         user_messages = data.get("messages", [])
-
+        last_ai_response = ""
+        hoy = datetime.today().strftime('%Y-%m-%d')
         system_message = """
         Eres Shiffu, un asistente virtual amigable y útil en su versión alfa. 
         Ayudas a los usuarios respondiendo preguntas de manera clara y humana. 
@@ -1063,17 +1133,23 @@ def setup_routes(app, mongo):
         ia_response = "Lo siento, no entendí tu mensaje. ¿Puedes reformularlo?"
 
         if user_messages:
+            
             try:
                 last_message = user_messages[-1].get("content", "").lower()
                 prompt = (
                     f"Interpreta el siguiente mensaje del usuario: '{last_message}'. "
-                    f"LO MÁS IMPORTANTE: Identifica si es un saludo o una solicitud.\n"
-                    f"Si es un saludo, responde con 'Es un saludo'. Si es una solicitud, responde con 'Es una solicitud' y analiza los detalles. "
-                    f"En caso de ser una solicitud, desglosa las partes relevantes para cada API (Gmail, Notion, Slack, HubSpot, Outlook). "
-                    f"\nAsegúrate de lo siguiente:\n"
-                    f"- Si se menciona a una persona (Detecta esto interpretando si se menciona un nombre propio), incluye 'from:<Persona mencionada> (ACLARO ESTO SOLO SE USA SI HAY UN NOMBRE PROPIO O APELLIDO PROPIO DE UNA PERSONA EN LA SOLICITUD, DE LO CONTRARIO NO LO AGREGAS)' en la query para Gmail y Outlook.\n"
-                    f"- En Notion, si el usuario menciona 'status o estatus del proyecto <nombre del proyecto>', busca específicamente el proyecto mencionado.\n"
-                    f"- Si solo menciona 'status o estatus de <algo>' y no incluye la palabra 'proyecto', busca ese término general en Notion.\n"
+                    f"TEN EN CUENTA QUE LA FECHA DE HOY ES {hoy}"
+                    f"1. LO MÁS IMPORTANTE: Identifica si es un saludo, una solicitud o si se refiere a la respuesta anterior enviada por la IA.\n"
+                    f"   - Si es un saludo, responde con 'Es un saludo'.\n"
+                    f"   - Si es una solicitud, responde con 'Es una solicitud'.\n"
+                    f"   - Si hace referencia a la respuesta anterior, responde con 'Hace referencia a la respuesta anterior'.\n"
+                    f"En caso de ser una solicitud, desglosa las partes relevantes para cada API (Gmail, Notion, Slack, HubSpot, Outlook). \n"
+                    f"Asegúrate de lo siguiente:\n"
+                    f"- No coloques fechas en ninguna query, ni after ni before'.\n"
+                    f"- Si se menciona un nombre propio (detectado si hay una combinación de nombre y apellido), responde 'from: <nombre completo>'.\n"
+                    f"- Si se menciona un correo electrónico, responde 'from: <correo mencionado>'. Usa una expresión regular para verificar esto.\n"
+                    f"- En Notion, si el usuario menciona 'status o estatus de mi proyecto <nombre del proyecto>', busca específicamente ese nombre de proyecto.\n"
+                    f"  - Si la solicitud es solo 'status o estatus de <algo>', busca ese término general en Notion.\n"
                     f"- Usa la misma query de Gmail también para Outlook.\n"
                     f"- En HubSpot, identifica qué tipo de objeto busca el usuario (por ejemplo: contacto, compañía, negocio, tarea, etc.) y ajusta la query de forma precisa. "
                     f"El valor debe seguir esta estructura: \"<tipo de objeto> <query>\", como por ejemplo \"contacto osuna\" o \"compañía osuna\".\n\n"
@@ -1083,7 +1159,7 @@ def setup_routes(app, mongo):
                     f"    \"gmail\": \"<query para Gmail> Se conciso y evita palabras de solicitud y solo pon la query\",\n"
                     f"    \"notion\": \"<query para Notion o 'N/A' si no aplica>\",\n"
                     f"    \"slack\": \"<query para Slack o 'N/A' si no aplica, usa la de Gmail pero más redireccionada a como un mensaje, si es una solicitud, hazla más informal y directa>\",\n"
-                    f"    \"hubspot\": \"<tipo de objeto> <query>\",\n"
+                    f"    \"hubspot\": \"<tipo de objeto> <query> Por ejemplo: 'negocio Kinal Website'\",\n"
                     f"    \"outlook\": \"<query para Outlook, misma que Gmail>\"\n"
                     f"}}\n\n"
                     f"El JSON debe incluir solo información relevante extraída del mensaje del usuario y ser fácilmente interpretable por sistemas automatizados. "
@@ -1091,6 +1167,10 @@ def setup_routes(app, mongo):
                     f"Los saludos posibles que deberías detectar incluyen, pero no se limitan a: 'Hola', '¡Hola!', 'Buenos días', 'Buenas', 'Hey', 'Ciao', 'Bonjour', 'Hola a todos', '¡Qué tal!'. "
                     f"Si detectas un saludo, simplemente responde con 'Es un saludo'."
                 )
+                
+                if last_ai_response:
+                    prompt += f"\nLa última respuesta de la IA fue: '{last_ai_response}'.\n"
+
 
                 response = openai.chat.completions.create(
                     model="gpt-3.5-turbo",
@@ -1181,11 +1261,14 @@ def setup_routes(app, mongo):
 
                             try:
                                 hubspot_results = search_hubspot(hubspot_query)
+                                print(hubspot_results.get_json())
                                 search_results_data['hubspot'] = hubspot_results.get_json() if hasattr(hubspot_results, 'get_json') else hubspot_results
                             except Exception:
                                 search_results_data['hubspot'] = ["No se encontró ningún valor en HubSpot"]
-
+                            print("DATA", search_results_data)
+                            links = extract_links_from_datas(datas=search_results_data)
                             prompt = generate_prompt(last_message, search_results_data)
+                            last_ai_response = prompt
                             response = openai.chat.completions.create(
                                 model="gpt-3.5-turbo",
                                 messages=[{
@@ -1203,10 +1286,22 @@ def setup_routes(app, mongo):
                             if not ia_response:
                                 return jsonify({"error": "La respuesta de la IA está vacía"}), 500
 
-                            return jsonify({"message": responses})
+                            return jsonify({"message": responses, "links": links})
                         except Exception as e:
                             return jsonify({"error": f"Error al procesar la solicitud: {str(e)}"}), 500
+                elif 'hace referencia a la respuesta anterior' in ia_interpretation:
+                                # Si el usuario hace referencia a la respuesta anterior, inclúyela en el prompt
+                                reference_prompt = f"El usuario dijo: '{last_message}'\n"
+                                reference_prompt += f"La última respuesta de la IA fue: '{last_ai_response}'.\n"
+                                reference_prompt += "Responde al usuario considerando la respuesta anterior."
 
+                                response_reference = openai.chat.completions.create(
+                                    model="gpt-3.5-turbo",
+                                    messages=[{"role": "system", "content": "Eres un asistente que recuerda la última respuesta."},
+                                            {"role": "user", "content": reference_prompt}],
+                                    max_tokens=150
+                                )
+                                ia_response = response_reference.choices[0].message.content.strip()
                 else:
                     ia_response = "Lo siento, no entendí el mensaje. ¿Puedes especificar más sobre lo que necesitas?"
 

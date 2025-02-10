@@ -173,7 +173,7 @@ def setup_routes(app, mongo):
         }
 
         # Si no es Notion ni Slack, agregar el campo expires_in
-        if integration_name not in ["Notion", "Slack"]:
+        if integration_name not in ["Notion", "Slack", "ClickUp"]:
             if expires_in is None:
                 return jsonify({"error": "El campo 'expires_in' es obligatorio para esta integración"}), 400
             integration_data["expires_in"] = int(expires_in)
@@ -666,126 +666,57 @@ def setup_routes(app, mongo):
         if "n/a" in query:
             return jsonify({"message": "No hay resultados en HubSpot"}), 200
 
-        # Buscar todos los contactos
-        if query.lower() == "todos mis contactos":
-            search_data = {
-                "filters": [],
-                "properties": ["firstname", "lastname", "email", "hubspot_owner_id", "company"]
-            }
-            response = requests.post(
-                "https://api.hubapi.com/crm/v3/objects/contacts/search",
-                headers=headers,
-                json=search_data
-            )
-            if response.status_code == 200:
-                contacts = response.json().get("results", [])
-                search_results["contacts"] = [
-                    {
-                        "firstname": contact["properties"].get("firstname", "N/A"),
-                        "lastname": contact["properties"].get("lastname", "N/A"),
-                        "email": contact["properties"].get("email", "N/A"),
-                        "owner": contact["properties"].get("hubspot_owner_id", "N/A"),
-                        "company": contact["properties"].get("company", "N/A")
-                    }
-                    for contact in contacts
-                ]
-                if not search_results["contacts"]:
-                    search_results["contacts"] = {"message": "No se encontraron contactos."}
-            else:
-                return jsonify({"error": f"Error al buscar en HubSpot: {response.status_code} {response.text}"}), response.status_code
-
-        # Búsqueda de contactos, negocios y empresas
-        elif "contacto" in query.lower() or "contactos" in query.lower():
-            search_data = {
-                "filters": [],
+        # Mapeo de endpoints y propiedades para cada tipo de búsqueda
+        search_types = {
+            "contacto": {
+                "endpoint": "https://api.hubapi.com/crm/v3/objects/contacts/search",
                 "properties": ["firstname", "lastname", "email", "phone", "company", "hubspot_owner_id"]
-            }
-            response = requests.post(
-                "https://api.hubapi.com/crm/v3/objects/contacts/search",
-                headers=headers,
-                json=search_data
-            )
-            if response.status_code == 200:
-                contacts = response.json().get("results", [])
-                search_results["contacts"] = [
-                    {
-                        "firstname": contact["properties"].get("firstname", "N/A"),
-                        "lastname": contact["properties"].get("lastname", "N/A"),
-                        "email": contact["properties"].get("email", "N/A"),
-                        "company": contact["properties"].get("company", "N/A"),
-                        "owner": contact["properties"].get("hubspot_owner_id", "N/A"),
-                        "phone": contact["properties"].get("phone", "N/A")
-                    }
-                    for contact in contacts
-                ]
-                if not search_results["contacts"]:
-                    search_results["contacts"] = {"message": f"No se encontraron contactos{(' para ' + query.split('compañia', 1)[1].strip()) if query.split('compañia', 1)[1].strip() else ''}."}
-            else:
-                return jsonify({"error": f"Error al buscar en HubSpot: {response.status_code} {response.text}"}), response.status_code
-
-        elif "negocio" in query.lower() or "negocios" in query.lower():
-            search_data = {
-                "filters": [],
+            },
+            "negocio": {
+                "endpoint": "https://api.hubapi.com/crm/v3/objects/deals/search",
                 "properties": ["dealname", "amount", "dealstage", "hubspot_owner_id", "company"]
-            }
-            response = requests.post(
-                "https://api.hubapi.com/crm/v3/objects/deals/search",
-                headers=headers,
-                json=search_data
-            )
-            stage_mapping = {
-                "qualifiedtobuy": "Calificado para comprar",
-                "appointmentscheduled": "Cita programada",
-                "noactivity": "Sin actividad",
-                "presentationscheduled": "Presentación programada",
-                "quoteaccepted": "Propuesta aceptada",
-                "contractsent": "Contrato enviado",
-                "closedwon": "Cierre ganado",
-                "closedlost": "Cierre perdido"
-            }
-            if response.status_code == 200:
-                deals = response.json().get("results", [])
-                search_results["deals"] = [{
-                    "dealname": deal["properties"].get("dealname", "N/A"),
-                    "amount": deal["properties"].get("amount", "N/A"),
-                    "dealstage": stage_mapping.get(deal["properties"].get("dealstage", "N/A"), "N/A"),
-                    "owner": deal["properties"].get("hubspot_owner_id", "N/A"),
-                    "company": deal["properties"].get("company", "N/A")
-                }
-                for deal in deals
-                ]
-            else:
-                return jsonify({"error": f"Error al buscar en HubSpot: {response.status_code} {response.text}"}), response.status_code
-
-        # Búsqueda de empresas
-        elif "empresa" in query.lower() or "compañia" in query.lower():
-            search_data = {
-                "filters": [],
+            },
+            "empresa": {
+                "endpoint": "https://api.hubapi.com/crm/v3/objects/companies/search",
                 "properties": ["name", "industry", "size", "hubspot_owner_id"]
             }
-            response = requests.post(
-                "https://api.hubapi.com/crm/v3/objects/companies/search",
-                headers=headers,
-                json=search_data
-            )
-            if response.status_code == 200:
-                companies = response.json().get("results", [])
-                search_results["companies"] = [
-                    {
-                        "name": company["properties"].get("name", "N/A"),
-                        "industry": company["properties"].get("industry", "N/A"),
-                        "size": company["properties"].get("size", "N/A"),
-                        "owner": company["properties"].get("hubspot_owner_id", "N/A")
-                    }
-                    for company in companies
-                ]
-                if not search_results["companies"]:
-                    search_results["companies"] = {"message": "No se encontraron empresas."}
-            else:
-                return jsonify({"error": f"Error al buscar en HubSpot: {response.status_code} {response.text}"}), response.status_code
+        }
 
-        else:
+        # Determinar tipo de búsqueda
+        search_type = None
+        for key in search_types.keys():
+            if key in query:
+                search_type = key
+                break
+
+        if not search_type:
             return jsonify({"error": "Tipo de solicitud no soportado"}), 400
+
+        term = query.replace(search_type, "").strip()
+
+        search_data = {
+            "filters": [{"propertyName": "name", "operator": "CONTAINS_TOKEN", "value": term}] if term else [],
+            "properties": search_types[search_type]["properties"]
+        }
+
+        response = requests.post(
+            search_types[search_type]["endpoint"],
+            headers=headers,
+            json=search_data
+        )
+
+        if response.status_code != 200:
+            return jsonify({"error": f"Error al buscar en HubSpot: {response.status_code} {response.text}"}), response.status_code
+
+        results = response.json().get("results", [])
+
+        if not results:
+            return jsonify({"message": f"No se encontraron resultados para '{term}'"}), 200
+
+        search_results[search_type + "s"] = [
+            {prop: obj["properties"].get(prop, "N/A") for prop in search_types[search_type]["properties"]}
+            for obj in results
+        ]
 
         return jsonify(search_results)
 
@@ -982,6 +913,7 @@ def setup_routes(app, mongo):
         EN DADO CASO SOLO EXISTA INFORMACION DE UNA API, SOLO CONTESTA CON LA INFORMACION DE ESA API NO CONTESTES QUE NO HAY INFORMACION EN CADA API
         Y SI NO SE ENCUENTRA INFORMACION EN NINGUNA API SOLO CONTESTA QUE NO SE ENCONTRO INFORMACION EN NINGUNO DE LOS SERVICIOS REGISTRADOS
         ADEMÁS AL MOMENTO DE RESPONDER HAZ QUE LA RESPUESTA SEA NATURAL DE UN CHAT ES DECIR NO INCLUYAS SIMBOLOS PARA MARCAR LAS APIS, Y LO MAS IMPORTANTE SOLO RESPONDE POR LAS APIS QUE TE MANDAN INFORMACION!!!
+        Y TEN EN CUENTA QUE LA INFORMACION QUE TE LLEGA ES GENERAL Y EL USUARIO QUIERE UNA RESPUESTA ESPECIFICA A SU QUERY
         """
 
         print(prompt)
@@ -1128,6 +1060,7 @@ def setup_routes(app, mongo):
         Si el usuario saluda, responde de forma cálida y amigable como si estuvieras manteniendo una conversación fluida.
         Si el usuario cuenta algo sobre cómo se siente o alguna situación especial, responde de manera comprensiva.
         En general, responde con naturalidad y empatía a las interacciones.
+        Tambien eres un analizador de prompts para distintas apis (Gmail, Hubspot, Outlook, Slack, Notion, etc)
         """
 
         ia_response = "Lo siento, no entendí tu mensaje. ¿Puedes reformularlo?"
@@ -1151,7 +1084,7 @@ def setup_routes(app, mongo):
                     f"- En Notion, si el usuario menciona 'status o estatus de mi proyecto <nombre del proyecto>', busca específicamente ese nombre de proyecto.\n"
                     f"  - Si la solicitud es solo 'status o estatus de <algo>', busca ese término general en Notion.\n"
                     f"- Usa la misma query de Gmail también para Outlook.\n"
-                    f"- En HubSpot, identifica qué tipo de objeto busca el usuario (por ejemplo: contacto, compañía, negocio, tarea, etc.) y ajusta la query de forma precisa. "
+                    f"- En HubSpot, identifica qué tipo de objeto busca el usuario (por ejemplo: contacto, compañía, negocio, empresa, tarea, etc.) y ajusta la query de forma precisa. "
                     f"El valor debe seguir esta estructura: \"<tipo de objeto> <query>\", como por ejemplo \"contacto osuna\" o \"compañía osuna\".\n\n"
                     f"Para Slack, adapta la query de Gmail. \n\n"
                     f"Estructura del JSON:\n"
@@ -1159,7 +1092,7 @@ def setup_routes(app, mongo):
                     f"    \"gmail\": \"<query para Gmail> Se conciso y evita palabras de solicitud y solo pon la query\",\n"
                     f"    \"notion\": \"<query para Notion o 'N/A' si no aplica>\",\n"
                     f"    \"slack\": \"<query para Slack o 'N/A' si no aplica, usa la de Gmail pero más redireccionada a como un mensaje, si es una solicitud, hazla más informal y directa>\",\n"
-                    f"    \"hubspot\": \"<tipo de objeto> <query> Por ejemplo: 'negocio Kinal Website'\",\n"
+                    f"   \"hubspot\": \" Si el usuario menciona 'contactos de <empresa o nombre>', responde 'contacto <empresa o nombre>'. Si menciona 'empresas de <sector>', responde 'empresa <sector>'. Si menciona 'negocios de <sector>' o 'negocio de <empresa>', responde 'negocio <sector o empresa>'. Si menciona 'compañías de <sector>', responde 'compañía <sector>'. Si el usuario menciona un contacto específico con un nombre propio y pide información (como número, correo, etc.), responde 'contacto <nombre> (<campo solicitado>)'.\",\n"
                     f"    \"outlook\": \"<query para Outlook, misma que Gmail>\"\n"
                     f"}}\n\n"
                     f"El JSON debe incluir solo información relevante extraída del mensaje del usuario y ser fácilmente interpretable por sistemas automatizados. "
@@ -1346,3 +1279,73 @@ def setup_routes(app, mongo):
         
         # Retornamos la respuesta al frontend
         return jsonify({"message": ia_response})
+
+    @app.route("/clickup-proxy", methods=["POST"])
+    def clickup_proxy():
+        try:
+            print("hola")
+            data = request.json
+
+            client_id = data.get("client_id")
+            client_secret = data.get("client_secret")
+            code = data.get("code")
+            redirect_uri = data.get("redirect_uri")
+
+            if not all([client_id, client_secret, code, redirect_uri]):
+                return jsonify({"error": "Missing required fields"}), 400
+
+            token_url = "https://api.clickup.com/api/v2/oauth/token"
+            payload = {
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "code": code,
+                "redirect_uri": redirect_uri
+            }
+
+            response = requests.post(token_url, json=payload)
+            print(response)
+            data = response.json()
+
+            if "access_token" in data:
+                return jsonify({
+                    "access_token": data["access_token"],
+                    "expires_in": data.get("expires_in", "unknown")  # Retorna el tiempo de expiración si está disponible
+                })
+            else:
+                return jsonify({"error": "Failed to retrieve access token", "details": data}), 400
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/dropbox-proxy", methods=["POST"])
+    def dropbox_proxy():
+        try:
+            print("hola")
+            data = request.json
+
+            client_id = data.get("client_id")
+            client_secret = data.get("client_secret")
+            code = data.get("code")
+            redirect_uri = data.get("redirect_uri")
+
+            if not all([client_id, client_secret, code, redirect_uri]):
+                return jsonify({"error": "Missing required fields"}), 400
+
+            # URL para obtener el token de acceso
+            token_url = "https://api.dropbox.com/oauth2/token"
+            payload = {
+                "code": code,
+                "grant_type": "authorization_code",
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "redirect_uri": redirect_uri
+            }
+
+            response = requests.post(token_url, data=payload)
+            print(response)
+            data = response.json()
+
+            return jsonify({
+                    "access_token": data
+            })
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500

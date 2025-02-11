@@ -898,8 +898,8 @@ def setup_routes(app, mongo):
         results = {}
 
         # Gmail Results (extraer información relevante)
-        gmail_results = "\n".join([
-            f"De: {email.get('from', 'Desconocido')} | Asunto: {email.get('subject', 'Sin asunto')} | Fecha: {email.get('date', 'Sin fecha')} | Body: {email.get('body', 'Sin cuerpo')}"
+        gmail_results = "\n".join([ 
+            f"De: {email.get('from', 'Desconocido')} | Asunto: {email.get('subject', 'Sin asunto')} | Fecha: {email.get('date', 'Sin fecha')} | Body: {email.get('body', 'Sin cuerpo')}" 
             for email in search_results.get('gmail', []) if isinstance(email, dict)
         ]) or "No se encontraron correos relacionados en Gmail."
 
@@ -910,7 +910,7 @@ def setup_routes(app, mongo):
         ]) or "No se encontraron mensajes relacionados en Slack."
 
         # Notion Results (extraer información relevante)
-        notion_results = "\n".join([
+        notion_results = "\n".join([ 
             f"Página ID: {page.get('id', 'Sin ID')} | "
             f"Nombre: {page.get('properties', {}).get('Nombre', 'Sin Nombre')} | "
             f"Estado: {page.get('properties', {}).get('Estado', 'Sin Estado')} | "
@@ -925,6 +925,7 @@ def setup_routes(app, mongo):
             for email in search_results.get('outlook', []) if isinstance(email, dict)
         ]) or "No se encontraron correos relacionados en Outlook."
 
+        # HubSpot Results (extraer información relevante)
         hubspot_results = []
         hubspot_data = search_results.get("hubspot", {})
 
@@ -932,26 +933,65 @@ def setup_routes(app, mongo):
             if "contacts" in hubspot_data:
                 contacts = hubspot_data["contacts"]
                 if isinstance(contacts, list) and contacts:
-                    hubspot_results.append("Contactos:\n" + "\n".join([
-                    f"Nombre: {contact.get('firstname', 'N/A') or ''} {contact.get('lastname', 'N/A') or ''} | Correo: {contact.get('email', 'N/A') or ''} | Teléfono: {contact.get('phone', 'N/A') or ''} | Company: {contact.get('company', 'N/A') or ''}"
-                    for contact in contacts
+                    hubspot_results.append("Contactos:\n" + "\n".join([ 
+                        f"Nombre: {contact.get('firstname', 'N/A') or ''} {contact.get('lastname', 'N/A') or ''} | Correo: {contact.get('email', 'N/A') or ''} | Teléfono: {contact.get('phone', 'N/A') or ''} | Company: {contact.get('company', 'N/A')}"
+                        for contact in contacts
                     ]))
-
 
             if "companies" in hubspot_data:
                 companies = hubspot_data["companies"]
                 if isinstance(companies, list) and companies:
-                    hubspot_results.append("Compañías:\n" + "\n".join([f"Compañía: {company.get('company', 'N/A')} | Teléfono: {company.get('phone', 'N/A')}" for company in companies]))
+                    hubspot_results.append("Compañías:\n" + "\n".join([ 
+                        f"Compañía: {company.get('company', 'N/A')} | Teléfono: {company.get('phone', 'N/A')}"
+                        for company in companies
+                    ]))
 
             if "deals" in hubspot_data:
                 deals = hubspot_data["deals"]
                 if isinstance(deals, list) and deals:
-                    hubspot_results.append("Deals:\n" + "\n".join([f"Nombre: {deal.get('dealname', 'N/A')} | Estado: {deal.get('dealstage', 'N/A')}" for deal in deals]))
+                    hubspot_results.append("Deals:\n" + "\n".join([ 
+                        f"Nombre: {deal.get('dealname', 'N/A')} | Estado: {deal.get('dealstage', 'N/A')}"
+                        for deal in deals
+                    ]))
 
         except Exception as e:
             hubspot_results.append(f"Error procesando datos de HubSpot: {str(e)}")
 
         hubspot_results = "\n".join(hubspot_results) or "No se encontraron resultados relacionados en HubSpot."
+
+        # Nuevas APIs: ClickUp, Dropbox, Asana, OneDrive, Teams
+
+        # ClickUp Results
+        clickup_results = "\n".join([
+            f"Tarea: {task.get('name', 'Sin nombre')} | Estado: {task.get('status', 'Sin estado')} | Fecha de vencimiento: {task.get('due_date', 'Sin fecha')}"
+            for task in search_results.get('clickup', []) if isinstance(task, dict)
+        ]) or "No se encontraron tareas relacionadas en ClickUp."
+
+        # Dropbox Results
+        dropbox_results = "\n".join([
+            f"Archivo: {file.get('name', 'Sin nombre')} | Tamaño: {file.get('size', 'Desconocido')} | Fecha de modificación: {file.get('modified', 'Sin fecha')}"
+            for file in search_results.get('dropbox', []) if isinstance(file, dict)
+        ]) or "No se encontraron archivos relacionados en Dropbox."
+
+        # Asana Results
+        asana_results = "\n".join([
+            f"Tarea: {task.get('name', 'Sin nombre')} | Estado: {task.get('status', 'Sin estado')} | Fecha de vencimiento: {task.get('due_date', 'Sin fecha')}"
+            for task in search_results.get('asana', []) if isinstance(task, dict)
+        ]) or "No se encontraron tareas relacionadas en Asana."
+
+        # OneDrive Results
+        onedrive_results = "\n".join([
+            f"Archivo: {file.get('name', 'Sin nombre')} | Tamaño: {file.get('size', 'Desconocido')} | Fecha de modificación: {file.get('modified', 'Sin fecha')}"
+            for file in search_results.get('onedrive', []) if isinstance(file, dict)
+        ]) or "No se encontraron archivos relacionados en OneDrive."
+
+        # Teams Results
+        teams_results = "\n".join([
+            f"Canal: {msg.get('channel', 'Desconocido')} | Usuario: {msg.get('user', 'Desconocido')} | Mensaje: {msg.get('text', 'Sin mensaje')} | Fecha: {msg.get('ts', 'Sin fecha')}"
+            for msg in search_results.get('teams', []) if isinstance(msg, dict)
+        ]) or "No se encontraron mensajes relacionados en Teams."
+
+        # Crear el prompt final
         prompt = f"""Respuesta concisa a la consulta: "{query}"
 
         Resultados de la búsqueda:
@@ -971,22 +1011,43 @@ def setup_routes(app, mongo):
         HubSpot:
         {hubspot_results}
 
-        Responde de forma humana, concisa y en parrafo, SOLO RESPONDE LO QUE SE TE PIDE, Necesito que agregues especificaciones de la response: 
-        En Gmail: Responde con la persona que mando el correo, el asunto del correo, la fecha y el body SEGUN LOS RESULTADOS DE BUSQUEDA DE GMAIL
-        En Notion: Responde con el Nombre, el Estado, Y la URL SEGUN LOS RESULTADOS DE BUSQUEDA DE NOTION
-        En Hubspot: Responde con toda la informacion que se te envie SEGUN LOS RESULTADOS DE BUSQUEDA DE HUBSPOT
-        En Slack: Responde con toda la informacion que se te envie SEGUN LOS RESULTADOS DE BUSQUEDA DE SLACK
-        En Outlook: Responde con la persona que mando el correo, el asunto del correo, la fecha y el body SEGUN LOS RESULTADOS DE BUSQUEDA DE OUTLOOK 
-        Y quiero que respondas enfocándote solo en la información más relevante sin repetir detalles innecesarios ni mencionar la query. Utiliza fechas, URLs y detalles clave, y asegúrate de que la respuesta sea fácilmente comprensible. En el caso de links solo colocalos una vez.
-        SI SE MENCIONAN CONTACTOS BASATE EN LA INFORMACIÓN DE HUBSPOT
-        EN DADO CASO SOLO EXISTA INFORMACION DE UNA API, SOLO CONTESTA CON LA INFORMACION DE ESA API NO CONTESTES QUE NO HAY INFORMACION EN CADA API
-        Y SI NO SE ENCUENTRA INFORMACION EN NINGUNA API SOLO CONTESTA QUE NO SE ENCONTRO INFORMACION EN NINGUNO DE LOS SERVICIOS REGISTRADOS
-        ADEMÁS AL MOMENTO DE RESPONDER HAZ QUE LA RESPUESTA SEA NATURAL DE UN CHAT ES DECIR NO INCLUYAS SIMBOLOS PARA MARCAR LAS APIS, Y LO MAS IMPORTANTE SOLO RESPONDE POR LAS APIS QUE TE MANDAN INFORMACION!!!
-        Y TEN EN CUENTA QUE LA INFORMACION QUE TE LLEGA ES GENERAL Y EL USUARIO QUIERE UNA RESPUESTA ESPECIFICA A SU QUERY
+        ClickUp:
+        {clickup_results}
+
+        Dropbox:
+        {dropbox_results}
+
+        Asana:
+        {asana_results}
+
+        OneDrive:
+        {onedrive_results}
+
+        Teams:
+        {teams_results}
+
+        Responde de forma humana, concisa y en parrafo, SOLO RESPONDE LO QUE SE TE PIDE, Necesito que agregues especificaciones de la respuesta:
+        En Gmail: Responde con la persona que mandó el correo, el asunto del correo, la fecha y el body SEGÚN LOS RESULTADOS DE BUSQUEDA DE GMAIL
+        En Notion: Responde con el Nombre, el Estado, Y la URL SEGÚN LOS RESULTADOS DE BUSQUEDA DE NOTION
+        En HubSpot: Responde con toda la información que se te envíe SEGÚN LOS RESULTADOS DE BUSQUEDA DE HUBSPOT
+        En Slack: Responde con toda la información que se te envíe SEGÚN LOS RESULTADOS DE BUSQUEDA DE SLACK
+        En Outlook: Responde con la persona que mandó el correo, el asunto del correo, la fecha y el body SEGÚN LOS RESULTADOS DE BUSQUEDA DE OUTLOOK
+        En ClickUp: Responde con el nombre de la tarea, el estado y la fecha de vencimiento SEGÚN LOS RESULTADOS DE BUSQUEDA DE CLICKUP
+        En Dropbox: Responde con el nombre del archivo, el tamaño y la fecha de modificación SEGÚN LOS RESULTADOS DE BUSQUEDA DE DROPBOX
+        En Asana: Responde con el nombre de la tarea, el estado y la fecha de vencimiento SEGÚN LOS RESULTADOS DE BUSQUEDA DE ASANA
+        En OneDrive: Responde con el nombre del archivo, el tamaño y la fecha de modificación SEGÚN LOS RESULTADOS DE BUSQUEDA DE ONEDRIVE
+        En Teams: Responde con la información del canal, el usuario, el mensaje y la fecha SEGÚN LOS RESULTADOS DE BUSQUEDA DE TEAMS
+
+        Y quiero que respondas enfocándote solo en la información más relevante sin repetir detalles innecesarios ni mencionar la query. Utiliza fechas, URLs y detalles clave, y asegúrate de que la respuesta sea fácilmente comprensible. En el caso de links solo colócalos una vez.
+        SI SE MENCIONAN CONTACTOS, BÁSATE EN LA INFORMACIÓN DE HUBSPOT.
+        EN DADO CASO SOLO EXISTA INFORMACIÓN DE UNA API, SOLO CONTESTA CON LA INFORMACIÓN DE ESA API. NO CONTESTES QUE NO HAY INFORMACIÓN EN CADA API.
+        Y SI NO SE ENCUENTRA INFORMACIÓN EN NINGUNA API, SOLO CONTESTA QUE NO SE ENCONTRÓ INFORMACIÓN EN NINGUNO DE LOS SERVICIOS REGISTRADOS.
+        ADEMÁS, AL MOMENTO DE RESPONDER, HAZ QUE LA RESPUESTA SEA NATURAL, COMO UNA CONVERSACIÓN DE CHAT. NO INCLUYAS SIMBOLOS PARA MARCAR LAS APIS. Y LO MÁS IMPORTANTE, SOLO RESPONDE POR LAS APIS QUE TE MANDAN INFORMACIÓN.
         """
 
         print(prompt)
         return prompt
+
 
     def clean_body(body):
         normalized_text = unicodedata.normalize('NFD', body)

@@ -666,57 +666,126 @@ def setup_routes(app, mongo):
         if "n/a" in query:
             return jsonify({"message": "No hay resultados en HubSpot"}), 200
 
-        # Mapeo de endpoints y propiedades para cada tipo de búsqueda
-        search_types = {
-            "contacto": {
-                "endpoint": "https://api.hubapi.com/crm/v3/objects/contacts/search",
+        # Buscar todos los contactos
+        if query.lower() == "todos mis contactos":
+            search_data = {
+                "filters": [],
+                "properties": ["firstname", "lastname", "email", "hubspot_owner_id", "company"]
+            }
+            response = requests.post(
+                "https://api.hubapi.com/crm/v3/objects/contacts/search",
+                headers=headers,
+                json=search_data
+            )
+            if response.status_code == 200:
+                contacts = response.json().get("results", [])
+                search_results["contacts"] = [
+                    {
+                        "firstname": contact["properties"].get("firstname", "N/A"),
+                        "lastname": contact["properties"].get("lastname", "N/A"),
+                        "email": contact["properties"].get("email", "N/A"),
+                        "owner": contact["properties"].get("hubspot_owner_id", "N/A"),
+                        "company": contact["properties"].get("company", "N/A")
+                    }
+                    for contact in contacts
+                ]
+                if not search_results["contacts"]:
+                    search_results["contacts"] = {"message": "No se encontraron contactos."}
+            else:
+                return jsonify({"error": f"Error al buscar en HubSpot: {response.status_code} {response.text}"}), response.status_code
+
+        # Búsqueda de contactos, negocios y empresas
+        elif "contacto" in query.lower() or "contactos" in query.lower():
+            search_data = {
+                "filters": [],
                 "properties": ["firstname", "lastname", "email", "phone", "company", "hubspot_owner_id"]
-            },
-            "negocio": {
-                "endpoint": "https://api.hubapi.com/crm/v3/objects/deals/search",
+            }
+            response = requests.post(
+                "https://api.hubapi.com/crm/v3/objects/contacts/search",
+                headers=headers,
+                json=search_data
+            )
+            if response.status_code == 200:
+                contacts = response.json().get("results", [])
+                search_results["contacts"] = [
+                    {
+                        "firstname": contact["properties"].get("firstname", "N/A"),
+                        "lastname": contact["properties"].get("lastname", "N/A"),
+                        "email": contact["properties"].get("email", "N/A"),
+                        "company": contact["properties"].get("company", "N/A"),
+                        "owner": contact["properties"].get("hubspot_owner_id", "N/A"),
+                        "phone": contact["properties"].get("phone", "N/A")
+                    }
+                    for contact in contacts
+                ]
+                if not search_results["contacts"]:
+                    search_results["contacts"] = {"message": f"No se encontraron contactos{(' para ' + query.split('compañia', 1)[1].strip()) if query.split('compañia', 1)[1].strip() else ''}."}
+            else:
+                return jsonify({"error": f"Error al buscar en HubSpot: {response.status_code} {response.text}"}), response.status_code
+
+        elif "negocio" in query.lower() or "negocios" in query.lower():
+            search_data = {
+                "filters": [],
                 "properties": ["dealname", "amount", "dealstage", "hubspot_owner_id", "company"]
-            },
-            "empresa": {
-                "endpoint": "https://api.hubapi.com/crm/v3/objects/companies/search",
+            }
+            response = requests.post(
+                "https://api.hubapi.com/crm/v3/objects/deals/search",
+                headers=headers,
+                json=search_data
+            )
+            stage_mapping = {
+                "qualifiedtobuy": "Calificado para comprar",
+                "appointmentscheduled": "Cita programada",
+                "noactivity": "Sin actividad",
+                "presentationscheduled": "Presentación programada",
+                "quoteaccepted": "Propuesta aceptada",
+                "contractsent": "Contrato enviado",
+                "closedwon": "Cierre ganado",
+                "closedlost": "Cierre perdido"
+            }
+            if response.status_code == 200:
+                deals = response.json().get("results", [])
+                search_results["deals"] = [{
+                    "dealname": deal["properties"].get("dealname", "N/A"),
+                    "amount": deal["properties"].get("amount", "N/A"),
+                    "dealstage": stage_mapping.get(deal["properties"].get("dealstage", "N/A"), "N/A"),
+                    "owner": deal["properties"].get("hubspot_owner_id", "N/A"),
+                    "company": deal["properties"].get("company", "N/A")
+                }
+                for deal in deals
+                ]
+            else:
+                return jsonify({"error": f"Error al buscar en HubSpot: {response.status_code} {response.text}"}), response.status_code
+
+        # Búsqueda de empresas
+        elif "empresa" in query.lower() or "compañia" in query.lower():
+            search_data = {
+                "filters": [],
                 "properties": ["name", "industry", "size", "hubspot_owner_id"]
             }
-        }
+            response = requests.post(
+                "https://api.hubapi.com/crm/v3/objects/companies/search",
+                headers=headers,
+                json=search_data
+            )
+            if response.status_code == 200:
+                companies = response.json().get("results", [])
+                search_results["companies"] = [
+                    {
+                        "name": company["properties"].get("name", "N/A"),
+                        "industry": company["properties"].get("industry", "N/A"),
+                        "size": company["properties"].get("size", "N/A"),
+                        "owner": company["properties"].get("hubspot_owner_id", "N/A")
+                    }
+                    for company in companies
+                ]
+                if not search_results["companies"]:
+                    search_results["companies"] = {"message": "No se encontraron empresas."}
+            else:
+                return jsonify({"error": f"Error al buscar en HubSpot: {response.status_code} {response.text}"}), response.status_code
 
-        # Determinar tipo de búsqueda
-        search_type = None
-        for key in search_types.keys():
-            if key in query:
-                search_type = key
-                break
-
-        if not search_type:
+        else:
             return jsonify({"error": "Tipo de solicitud no soportado"}), 400
-
-        term = query.replace(search_type, "").strip()
-
-        search_data = {
-            "filters": [{"propertyName": "name", "operator": "CONTAINS_TOKEN", "value": term}] if term else [],
-            "properties": search_types[search_type]["properties"]
-        }
-
-        response = requests.post(
-            search_types[search_type]["endpoint"],
-            headers=headers,
-            json=search_data
-        )
-
-        if response.status_code != 200:
-            return jsonify({"error": f"Error al buscar en HubSpot: {response.status_code} {response.text}"}), response.status_code
-
-        results = response.json().get("results", [])
-
-        if not results:
-            return jsonify({"message": f"No se encontraron resultados para '{term}'"}), 200
-
-        search_results[search_type + "s"] = [
-            {prop: obj["properties"].get(prop, "N/A") for prop in search_types[search_type]["properties"]}
-            for obj in results
-        ]
 
         return jsonify(search_results)
 
@@ -1071,12 +1140,12 @@ def setup_routes(app, mongo):
                 last_message = user_messages[-1].get("content", "").lower()
                 prompt = (
                     f"Interpreta el siguiente mensaje del usuario: '{last_message}'. "
-                    f"TEN EN CUENTA QUE LA FECHA DE HOY ES {hoy}"
+                    f"TEN EN CUENTA QUE LA FECHA DE HOY ES {hoy}\n"
                     f"1. LO MÁS IMPORTANTE: Identifica si es un saludo, una solicitud o si se refiere a la respuesta anterior enviada por la IA.\n"
                     f"   - Si es un saludo, responde con 'Es un saludo'.\n"
                     f"   - Si es una solicitud, responde con 'Es una solicitud'.\n"
                     f"   - Si hace referencia a la respuesta anterior, responde con 'Hace referencia a la respuesta anterior'.\n"
-                    f"En caso de ser una solicitud, desglosa las partes relevantes para cada API (Gmail, Notion, Slack, HubSpot, Outlook). \n"
+                    f"En caso de ser una solicitud, desglosa las partes relevantes para cada API (Gmail, Notion, Slack, HubSpot, Outlook, ClickUp, Dropbox, Asana, Google Drive, OneDrive, Teams).\n"
                     f"Asegúrate de lo siguiente:\n"
                     f"- No coloques fechas en ninguna query, ni after ni before'.\n"
                     f"- Si se menciona un nombre propio (detectado si hay una combinación de nombre y apellido), responde 'from: <nombre completo>'.\n"
@@ -1087,13 +1156,25 @@ def setup_routes(app, mongo):
                     f"- En HubSpot, identifica qué tipo de objeto busca el usuario (por ejemplo: contacto, compañía, negocio, empresa, tarea, etc.) y ajusta la query de forma precisa. "
                     f"El valor debe seguir esta estructura: \"<tipo de objeto> <query>\", como por ejemplo \"contacto osuna\" o \"compañía osuna\".\n\n"
                     f"Para Slack, adapta la query de Gmail. \n\n"
+                    f"En ClickUp, si el usuario menciona tareas o proyectos, ajusta la consulta a su nombre o identificador específico.\n"
+                    f"En Dropbox, si menciona un archivo o carpeta, ajusta la consulta a ese archivo o carpeta de acuerdo con su nombre o ubicación.\n"
+                    f"En Asana, si menciona un proyecto o tarea, ajusta la consulta a ese nombre específico.\n"
+                    f"En Google Drive, si menciona un archivo, carpeta o documento, ajusta la consulta a su nombre o ubicación.\n"
+                    f"En OneDrive, si menciona un archivo o carpeta, ajusta la consulta a ese archivo o carpeta de acuerdo con su nombre o ubicación.\n"
+                    f"En Teams, si menciona una conversación o canal, ajusta la consulta a ese canal o conversación.\n\n"
                     f"Estructura del JSON:\n"
                     f"{{\n"
                     f"    \"gmail\": \"<query para Gmail> Se conciso y evita palabras de solicitud y solo pon la query\",\n"
                     f"    \"notion\": \"<query para Notion o 'N/A' si no aplica>\",\n"
                     f"    \"slack\": \"<query para Slack o 'N/A' si no aplica, usa la de Gmail pero más redireccionada a como un mensaje, si es una solicitud, hazla más informal y directa>\",\n"
-                    f"   \"hubspot\": \" Si el usuario menciona 'contactos de <empresa o nombre>', responde 'contacto <empresa o nombre>'. Si menciona 'empresas de <sector>', responde 'empresa <sector>'. Si menciona 'negocios de <sector>' o 'negocio de <empresa>', responde 'negocio <sector o empresa>'. Si menciona 'compañías de <sector>', responde 'compañía <sector>'. Si el usuario menciona un contacto específico con un nombre propio y pide información (como número, correo, etc.), responde 'contacto <nombre> (<campo solicitado>)'.\",\n"
-                    f"    \"outlook\": \"<query para Outlook, misma que Gmail>\"\n"
+                    f"    \"hubspot\": \"Si el usuario menciona 'contactos de <empresa o nombre>', responde 'contacto <empresa o nombre>'. Si menciona 'empresas de <sector>', responde 'empresa <sector>'. Si menciona 'negocios de <sector>' o 'negocio de <empresa>', responde 'negocio <sector o empresa>'. Si menciona 'compañías de <sector>', responde 'compañía <sector>'. Si el usuario menciona un contacto específico con un nombre propio y pide información (como número, correo, etc.), responde 'contacto <nombre> (<campo solicitado>)'.\",\n"
+                    f"    \"outlook\": \"<query para Outlook, misma que Gmail>\",\n"
+                    f"    \"clickup\": \"<query para ClickUp o 'N/A' si no aplica>\",\n"
+                    f"    \"dropbox\": \"<query para Dropbox o 'N/A' si no aplica>\",\n"
+                    f"    \"asana\": \"<query para Asana o 'N/A' si no aplica>\",\n"
+                    f"    \"googledrive\": \"<query para Google Drive o 'N/A' si no aplica>\",\n"
+                    f"    \"onedrive\": \"<query para OneDrive o 'N/A' si no aplica>\",\n"
+                    f"    \"teams\": \"<query para Teams o 'N/A' si no aplica>\"\n"
                     f"}}\n\n"
                     f"El JSON debe incluir solo información relevante extraída del mensaje del usuario y ser fácilmente interpretable por sistemas automatizados. "
                     f"Usa 'N/A' si una API no aplica a la solicitud.\n"
@@ -1147,6 +1228,12 @@ def setup_routes(app, mongo):
                             slack_query = queries.get('slack', 'n/a')
                             hubspot_query = queries.get('hubspot', 'n/a')
                             outlook_query = queries.get('outlook', 'n/a')
+                            clickup_query = queries.get('clickup', 'n/a')
+                            dropbox_query = queries.get('dropbox', 'n/a')
+                            asana_query = queries.get('asana', 'n/a')
+                            googledrive_query = queries.get('googledrive', 'n/a')
+                            onedrive_query = queries.get('onedrive', 'n/a')
+                            teams_query = queries.get('teams', 'n/a')
 
                             email = request.args.get('email')
                             if not email:
@@ -1159,15 +1246,19 @@ def setup_routes(app, mongo):
                             except Exception as e:
                                 return jsonify({"error": f"Error al procesar la solicitud: {str(e)}"}), 500
 
-                            # Realizar búsquedas usando las queries específicas
                             search_results_data = {
                                 'gmail': [],
                                 'slack': [],
                                 'notion': [],
                                 'outlook': [],
-                                'hubspot': []
+                                'hubspot': [],
+                                'clickup': [],
+                                'dropbox': [],
+                                'asana': [],
+                                'onedrive': [],
+                                'teams': []
                             }
-                        
+
                             try:
                                 gmail_results = search_gmail(gmail_query)
                                 search_results_data['gmail'] = gmail_results.get_json() if hasattr(gmail_results, 'get_json') else gmail_results
@@ -1194,10 +1285,39 @@ def setup_routes(app, mongo):
 
                             try:
                                 hubspot_results = search_hubspot(hubspot_query)
-                                print(hubspot_results.get_json())
                                 search_results_data['hubspot'] = hubspot_results.get_json() if hasattr(hubspot_results, 'get_json') else hubspot_results
                             except Exception:
                                 search_results_data['hubspot'] = ["No se encontró ningún valor en HubSpot"]
+
+                            try:
+                                clickup_results = search_clickup(clickup_query)
+                                search_results_data['clickup'] = clickup_results.get_json() if hasattr(clickup_results, 'get_json') else clickup_results
+                            except Exception:
+                                search_results_data['clickup'] = ["No se encontró ningún valor en ClickUp"]
+
+                            try:
+                                dropbox_results = search_dropbox(dropbox_query)
+                                search_results_data['dropbox'] = dropbox_results.get_json() if hasattr(dropbox_results, 'get_json') else dropbox_results
+                            except Exception:
+                                search_results_data['dropbox'] = ["No se encontró ningún valor en Dropbox"]
+
+                            try:
+                                asana_results = search_asana(asana_query)
+                                search_results_data['asana'] = asana_results.get_json() if hasattr(asana_results, 'get_json') else asana_results
+                            except Exception:
+                                search_results_data['asana'] = ["No se encontró ningún valor en Asana"]
+
+                            try:
+                                onedrive_results = search_onedrive(onedrive_query)
+                                search_results_data['onedrive'] = onedrive_results.get_json() if hasattr(onedrive_results, 'get_json') else onedrive_results
+                            except Exception:
+                                search_results_data['onedrive'] = ["No se encontró ningún valor en OneDrive"]
+
+                            try:
+                                teams_results = search_teams(teams_query)
+                                search_results_data['teams'] = teams_results.get_json() if hasattr(teams_results, 'get_json') else teams_results
+                            except Exception:
+                                search_results_data['teams'] = ["No se encontró ningún valor en Teams"]
                             print("DATA", search_results_data)
                             links = extract_links_from_datas(datas=search_results_data)
                             prompt = generate_prompt(last_message, search_results_data)
@@ -1349,3 +1469,308 @@ def setup_routes(app, mongo):
             })
         except Exception as e:
             return jsonify({"error": str(e)}), 500
+        
+    @app.route("/asana-proxy", methods=["POST"])
+    def asana():
+        print("hola")
+        try:
+            data = request.json
+            client_id = data.get("client_id")
+            client_secret = data.get("client_secret")
+            code = data.get("code")
+            redirect_uri = data.get("redirect_uri")
+
+            if not all([client_id, client_secret, code, redirect_uri]):
+                return jsonify({"error": "Missing required fields"}), 400
+
+            token_url = "https://app.asana.com/-/oauth_token"
+
+            payload = {
+                "grant_type": "authorization_code",
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "code": code,
+                "redirect_uri": redirect_uri
+            }
+
+            headers = {"Content-Type": "application/x-www-form-urlencoded"}
+
+            response = requests.post(token_url, data=payload, headers=headers)
+            data = response.json()
+            print(data)
+
+            access_token = data.get("access_token")
+            expires_in = data.get("expires_in")
+
+            return jsonify({
+                "access_token": access_token,
+                "expires_in": expires_in
+            })
+
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route('/search/clickup', methods=["GET"])
+    def search_clickup(query):
+        print("HOLA CLICKUP!")
+        email = request.args.get('email')
+        try:
+            user = mongo.database.usuarios.find_one({'correo': email})
+            if not user:
+                return jsonify({"error": "Usuario no encontrado"}), 404
+
+            clickup_integration = user.get('integrations', {}).get('ClickUp', None)
+            if clickup_integration:
+                clickup_token = clickup_integration.get('token', None)
+            else:
+                clickup_token = None
+            
+            if not clickup_token:
+                return jsonify({"error": "Token de ClickUp no disponible"}), 400
+            
+            if not query:
+                return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
+            
+            # Buscar en ClickUp (ajusta la API de ClickUp según tus necesidades)
+            url = "https://api.clickup.com/api/v2/search/task"
+            headers = {
+                'Authorization': f"Bearer {clickup_token}"
+            }
+            params = {
+                "query": query,
+                "space_ids[]": "your_space_id"  # Si tienes un espacio específico
+            }
+            
+            response = requests.get(url, headers=headers, params=params)
+            response.raise_for_status()
+            
+            results = response.json().get('tasks', [])
+            
+            if not results:
+                return jsonify({"message": "No se encontraron resultados en ClickUp"}), 200
+            
+            search_results = []
+            for result in results:
+                search_results.append({
+                    'task_name': result.get('name', 'Sin título'),
+                    'status': result.get('status', {}).get('status', 'Sin estado'),
+                    'url': f"https://app.clickup.com/t/{result.get('id')}"
+                })
+            
+            return jsonify(search_results)
+
+        except requests.RequestException as e:
+            return jsonify({"error": "Error al realizar la solicitud a ClickUp", "details": str(e)}), 500
+        except Exception as e:
+            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+
+    @app.route('/search/dropbox', methods=["GET"])
+    def search_dropbox(query):
+        print("HOLA DROPBOX!")
+        email = request.args.get('email')
+        try:
+            user = mongo.database.usuarios.find_one({'correo': email})
+            if not user:
+                return jsonify({"error": "Usuario no encontrado"}), 404
+
+            dropbox_integration = user.get('integrations', {}).get('Dropbox', None)
+            if dropbox_integration:
+                dropbox_token = dropbox_integration.get('token', None)
+            else:
+                dropbox_token = None
+            
+            if not dropbox_token:
+                return jsonify({"error": "Token de Dropbox no disponible"}), 400
+            
+            if not query:
+                return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
+            
+            # Buscar en Dropbox (ajusta la API de Dropbox según tus necesidades)
+            url = "https://api.dropboxapi.com/2/files/search_v2"
+            headers = {
+                'Authorization': f"Bearer {dropbox_token}",
+                'Content-Type': 'application/json'
+            }
+            params = {
+                "query": query,
+                "options": {
+                    "max_results": 5
+                }
+            }
+            
+            response = requests.post(url, headers=headers, json=params)
+            response.raise_for_status()
+            
+            results = response.json().get('matches', [])
+            
+            if not results:
+                return jsonify({"message": "No se encontraron resultados en Dropbox"}), 200
+            
+            search_results = []
+            for result in results:
+                search_results.append({
+                    'file_name': result.get('metadata', {}).get('name', 'Sin nombre'),
+                    'path': result.get('metadata', {}).get('path_display', 'Sin ruta')
+                })
+            
+            return jsonify(search_results)
+
+        except requests.RequestException as e:
+            return jsonify({"error": "Error al realizar la solicitud a Dropbox", "details": str(e)}), 500
+        except Exception as e:
+            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+
+    @app.route('/search/asana', methods=["GET"])
+    def search_asana(query):
+        print("HOLA ASANA!")
+        email = request.args.get('email')
+        try:
+            user = mongo.database.usuarios.find_one({'correo': email})
+            if not user:
+                return jsonify({"error": "Usuario no encontrado"}), 404
+
+            asana_integration = user.get('integrations', {}).get('Asana', None)
+            if asana_integration:
+                asana_token = asana_integration.get('token', None)
+            else:
+                asana_token = None
+            
+            if not asana_token:
+                return jsonify({"error": "Token de Asana no disponible"}), 400
+            
+            if not query:
+                return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
+            
+            # Buscar en Asana (ajusta la API de Asana según tus necesidades)
+            url = "https://app.asana.com/api/1.0/tasks"
+            headers = {
+                'Authorization': f"Bearer {asana_token}"
+            }
+            params = {
+                "search": query
+            }
+            
+            response = requests.get(url, headers=headers, params=params)
+            response.raise_for_status()
+            
+            results = response.json().get('data', [])
+            
+            if not results:
+                return jsonify({"message": "No se encontraron resultados en Asana"}), 200
+            
+            search_results = []
+            for result in results:
+                search_results.append({
+                    'task_name': result.get('name', 'Sin título'),
+                    'status': result.get('status', 'Sin estado'),
+                    'url': f"https://app.asana.com/0/{result.get('gid')}/list"
+                })
+            
+            return jsonify(search_results)
+
+        except requests.RequestException as e:
+            return jsonify({"error": "Error al realizar la solicitud a Asana", "details": str(e)}), 500
+        except Exception as e:
+            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+
+    @app.route('/search/onedrive', methods=["GET"])
+    def search_onedrive(query):
+        print("HOLA ONEDRIVE!")
+        email = request.args.get('email')
+        try:
+            user = mongo.database.usuarios.find_one({'correo': email})
+            if not user:
+                return jsonify({"error": "Usuario no encontrado"}), 404
+
+            onedrive_integration = user.get('integrations', {}).get('OneDrive', None)
+            if onedrive_integration:
+                onedrive_token = onedrive_integration.get('token', None)
+            else:
+                onedrive_token = None
+            
+            if not onedrive_token:
+                return jsonify({"error": "Token de OneDrive no disponible"}), 400
+            
+            if not query:
+                return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
+            
+            # Buscar en OneDrive (ajusta la API de OneDrive según tus necesidades)
+            url = "https://graph.microsoft.com/v1.0/me/drive/root/search(q='{query}')"
+            headers = {
+                'Authorization': f"Bearer {onedrive_token}"
+            }
+            
+            response = requests.get(url.format(query=query), headers=headers)
+            response.raise_for_status()
+            
+            results = response.json().get('value', [])
+            
+            if not results:
+                return jsonify({"message": "No se encontraron resultados en OneDrive"}), 200
+            
+            search_results = []
+            for result in results:
+                search_results.append({
+                    'file_name': result.get('name', 'Sin nombre'),
+                    'url': result.get('@microsoft.graph.downloadUrl', 'Sin URL')
+                })
+            
+            return jsonify(search_results)
+
+        except requests.RequestException as e:
+            return jsonify({"error": "Error al realizar la solicitud a OneDrive", "details": str(e)}), 500
+        except Exception as e:
+            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+
+    @app.route('/search/teams', methods=["GET"])
+    def search_teams(query):
+        print("HOLA TEAMS!")
+        email = request.args.get('email')
+        try:
+            user = mongo.database.usuarios.find_one({'correo': email})
+            if not user:
+                return jsonify({"error": "Usuario no encontrado"}), 404
+
+            teams_integration = user.get('integrations', {}).get('Teams', None)
+            if teams_integration:
+                teams_token = teams_integration.get('token', None)
+            else:
+                teams_token = None
+            
+            if not teams_token:
+                return jsonify({"error": "Token de Teams no disponible"}), 400
+            
+            if not query:
+                return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
+            
+            # Buscar en Teams (ajusta la API de Teams según tus necesidades)
+            url = "https://graph.microsoft.com/v1.0/me/messages"
+            headers = {
+                'Authorization': f"Bearer {teams_token}"
+            }
+            params = {
+                "search": query
+            }
+            
+            response = requests.get(url, headers=headers, params=params)
+            response.raise_for_status()
+            
+            results = response.json().get('value', [])
+            
+            if not results:
+                return jsonify({"message": "No se encontraron resultados en Teams"}), 200
+            
+            search_results = []
+            for result in results:
+                search_results.append({
+                    'message_subject': result.get('subject', 'Sin asunto'),
+                    'from': result.get('from', {}).get('emailAddress', {}).get('address', 'Sin remitente'),
+                    'url': f"https://teams.microsoft.com/l/message/{result.get('id')}"
+                })
+            
+            return jsonify(search_results)
+
+        except requests.RequestException as e:
+            return jsonify({"error": "Error al realizar la solicitud a Teams", "details": str(e)}), 500
+        except Exception as e:
+            return jsonify({"error": "Error inesperado", "details": str(e)}), 500

@@ -961,12 +961,16 @@ def setup_routes(app, mongo):
 
         # Nuevas APIs: ClickUp, Dropbox, Asana, OneDrive, Teams
 
-        # ClickUp Results
         clickup_results = "\n".join([
-            f"Tarea: {task.get('name', 'Sin nombre')} | Estado: {task.get('status', 'Sin estado')} | Fecha de vencimiento: {task.get('due_date', 'Sin fecha')}"
+            f"Tarea: {task.get('task_name', 'Sin nombre')} | "
+            f"Estado: {task.get('status', 'Sin estado')} | "
+            f"Prioridad: {task.get('priority', 'Sin prioridad')} | "
+            f"Asignado a: {', '.join([assignee.get('username', 'Desconocido') for assignee in task.get('assignees', [])]) or 'Sin asignar'} | "
+            f"Fecha de vencimiento: {task.get('due_date', 'Sin fecha')} | "
+            f"Lista: {task.get('list_name', 'Sin lista')} | "
+            f"URL: {task.get('url', 'Sin URL')}"
             for task in search_results.get('clickup', []) if isinstance(task, dict)
         ]) or "No se encontraron tareas relacionadas en ClickUp."
-
         # Dropbox Results
         dropbox_results = "\n".join([
             f"Archivo: {file.get('name', 'Sin nombre')} | Tamaño: {file.get('size', 'Desconocido')} | Fecha de modificación: {file.get('modified', 'Sin fecha')}"
@@ -1026,23 +1030,14 @@ def setup_routes(app, mongo):
         Teams:
         {teams_results}
 
-        Responde de forma humana, concisa y en parrafo, SOLO RESPONDE LO QUE SE TE PIDE, Necesito que agregues especificaciones de la respuesta:
-        En Gmail: Responde con la persona que mandó el correo, el asunto del correo, la fecha y el body SEGÚN LOS RESULTADOS DE BUSQUEDA DE GMAIL
-        En Notion: Responde con el Nombre, el Estado, Y la URL SEGÚN LOS RESULTADOS DE BUSQUEDA DE NOTION
-        En HubSpot: Responde con toda la información que se te envíe SEGÚN LOS RESULTADOS DE BUSQUEDA DE HUBSPOT
-        En Slack: Responde con toda la información que se te envíe SEGÚN LOS RESULTADOS DE BUSQUEDA DE SLACK
-        En Outlook: Responde con la persona que mandó el correo, el asunto del correo, la fecha y el body SEGÚN LOS RESULTADOS DE BUSQUEDA DE OUTLOOK
-        En ClickUp: Responde con el nombre de la tarea, el estado y la fecha de vencimiento SEGÚN LOS RESULTADOS DE BUSQUEDA DE CLICKUP
-        En Dropbox: Responde con el nombre del archivo, el tamaño y la fecha de modificación SEGÚN LOS RESULTADOS DE BUSQUEDA DE DROPBOX
-        En Asana: Responde con el nombre de la tarea, el estado y la fecha de vencimiento SEGÚN LOS RESULTADOS DE BUSQUEDA DE ASANA
-        En OneDrive: Responde con el nombre del archivo, el tamaño y la fecha de modificación SEGÚN LOS RESULTADOS DE BUSQUEDA DE ONEDRIVE
-        En Teams: Responde con la información del canal, el usuario, el mensaje y la fecha SEGÚN LOS RESULTADOS DE BUSQUEDA DE TEAMS
-
-        Y quiero que respondas enfocándote solo en la información más relevante sin repetir detalles innecesarios ni mencionar la query. Utiliza fechas, URLs y detalles clave, y asegúrate de que la respuesta sea fácilmente comprensible. En el caso de links solo colócalos una vez.
-        SI SE MENCIONAN CONTACTOS, BÁSATE EN LA INFORMACIÓN DE HUBSPOT.
-        EN DADO CASO SOLO EXISTA INFORMACIÓN DE UNA API, SOLO CONTESTA CON LA INFORMACIÓN DE ESA API. NO CONTESTES QUE NO HAY INFORMACIÓN EN CADA API.
-        Y SI NO SE ENCUENTRA INFORMACIÓN EN NINGUNA API, SOLO CONTESTA QUE NO SE ENCONTRÓ INFORMACIÓN EN NINGUNO DE LOS SERVICIOS REGISTRADOS.
-        ADEMÁS, AL MOMENTO DE RESPONDER, HAZ QUE LA RESPUESTA SEA NATURAL, COMO UNA CONVERSACIÓN DE CHAT. NO INCLUYAS SIMBOLOS PARA MARCAR LAS APIS. Y LO MÁS IMPORTANTE, SOLO RESPONDE POR LAS APIS QUE TE MANDAN INFORMACIÓN.
+        Responde de forma humana, concisa y en parrafo:
+        Quiero que respondas a la query que mando el usuario en base a la informacion que se te agrego por cada api, solo puedes y debes usar esa información para contestar
+        - En dado caso que no exista información en ninguna api, contesta de manera amable que si puede mejorar su prompt o lo que desea encontrar
+        - En dado caso exista la información en una api y en unas no, solo contesta con la que si existe la información.
+        Necesito que tu respuesta sea concisa a la query enviada por el usuario (toma el formato de "Suggested Answers" de Guru para guiarte) incluye emojis de ser posible para hacer mas amigable la interacción con el usuario.
+        No respondas 'Respuesta:' si no que responde de manera natural como si fuese una conversación, tampoco agregues enlaces.
+        Analiza antes de responder ya que algunas apis te devuelven información general, si tu piensas que no se responde de manera amena la pregunta contesta de manera amable si puede mejorar su prompt o que desea encontrar
+        Información relevante a tomar en cuenta bodys de correos, fechas y Remitente (De:)
         """
 
         print(prompt)
@@ -1145,7 +1140,13 @@ def setup_routes(app, mongo):
             'gmail': [],
             'slack': [],
             'notion': [],
-            'outlook': []
+            'outlook': [],
+            'clickup': [],
+            'hubspot': [],
+            'dropbox': [],
+            'asana': [],
+            'onedrive': [],
+            'teams': []  # Añadimos Teams al diccionario de resultados
         }
 
         # Extraer links y asunto de Gmail (vienen en una lista de diccionarios)
@@ -1174,6 +1175,12 @@ def setup_routes(app, mongo):
             results['outlook'] = [
                 {'webLink': item['webLink'], 'subject': item.get('subject', 'No subject')}
                 for item in datas['outlook'] if 'webLink' in item
+            ]
+
+        if isinstance(datas.get("clickup"), list):
+            results['clickup'] = [
+                {'url': item['url'], 'task_name': item.get('task_name', 'Sin Nombre')}
+                for item in datas.get("clickup") if 'url' in item
             ]
 
         return results
@@ -1205,32 +1212,36 @@ def setup_routes(app, mongo):
                     f"1. LO MÁS IMPORTANTE: Identifica si es un saludo, una solicitud o si se refiere a la respuesta anterior enviada por la IA.\n"
                     f"   - Si es un saludo, responde con 'Es un saludo'.\n"
                     f"   - Si es una solicitud, responde con 'Es una solicitud'.\n"
-                    f"   - Si hace referencia a la respuesta anterior, responde con 'Hace referencia a la respuesta anterior'.\n"
                     f"En caso de ser una solicitud, desglosa las partes relevantes para cada API (Gmail, Notion, Slack, HubSpot, Outlook, ClickUp, Dropbox, Asana, Google Drive, OneDrive, Teams).\n"
                     f"Asegúrate de lo siguiente:\n"
                     f"- No coloques fechas en ninguna query, ni after ni before'.\n"
                     f"- Si se menciona un nombre propio (detectado si hay una combinación de nombre y apellido), responde 'from: <nombre completo>'.\n"
                     f"- Si se menciona un correo electrónico, responde 'from: <correo mencionado>'. Usa una expresión regular para verificar esto.\n"
-                    f"- En Notion, si el usuario menciona 'status o estatus de mi proyecto <nombre del proyecto>', busca específicamente ese nombre de proyecto.\n"
-                    f"  - Si la solicitud es solo 'status o estatus de <algo>', busca ese término general en Notion.\n"
                     f"- Usa la misma query de Gmail también para Outlook.\n"
                     f"- En HubSpot, identifica qué tipo de objeto busca el usuario (por ejemplo: contacto, compañía, negocio, empresa, tarea, etc.) y ajusta la query de forma precisa. "
                     f"El valor debe seguir esta estructura: \"<tipo de objeto> <query>\", como por ejemplo \"contacto osuna\" o \"compañía osuna\".\n\n"
                     f"Para Slack, adapta la query de Gmail. \n\n"
-                    f"En ClickUp, si el usuario menciona tareas o proyectos, ajusta la consulta a su nombre o identificador específico.\n"
-                    f"En Dropbox, si menciona un archivo o carpeta, ajusta la consulta a ese archivo o carpeta de acuerdo con su nombre o ubicación.\n"
+                    f"En ClickUp, si el usuario menciona tareas o proyectos (tambien toma en cuenta siempre la query de notion (es decir si existe query de notion, existe query de clickup) para hacer esta), ajusta la consulta a su nombre o identificador específico.\n"
+                    f"""
+                        Genera una consulta para Dropbox basada en el mensaje del usuario.
+                            
+                            - Si menciona un archivo: "archivo:<nombre>"
+                            - Si menciona una carpeta: "carpeta:<nombre>"
+                            - Si menciona un archivo dentro de una carpeta: "archivo:<nombre> en carpeta:<ubicación>"
+                            - Si no se puede interpretar una búsqueda para Dropbox, devuelve "N/A"
+                    \n"""
                     f"En Asana, si menciona un proyecto o tarea, ajusta la consulta a ese nombre específico.\n"
                     f"En Google Drive, si menciona un archivo, carpeta o documento, ajusta la consulta a su nombre o ubicación.\n"
                     f"En OneDrive, si menciona un archivo o carpeta, ajusta la consulta a ese archivo o carpeta de acuerdo con su nombre o ubicación.\n"
                     f"En Teams, si menciona una conversación o canal, ajusta la consulta a ese canal o conversación.\n\n"
                     f"Estructura del JSON:\n"
                     f"{{\n"
-                    f"    \"gmail\": \"<query para Gmail> Se conciso y evita palabras de solicitud y solo pon la query\",\n"
-                    f"    \"notion\": \"<query para Notion o 'N/A' si no aplica>\",\n"
+                    f"    \"gmail\": \"<query para Gmail> Se conciso y evita palabras de solicitud y solo pon la query y evita los is:unread\",\n"
+                    f"    \"notion\": \"<query para Notion o 'N/A' si no aplica, siempre existira mediante se mencionen status de proyectos o tareas. O se mencionen compañias, empresas o proyectos en la query>\",\n"
                     f"    \"slack\": \"<query para Slack o 'N/A' si no aplica, usa la de Gmail pero más redireccionada a como un mensaje, si es una solicitud, hazla más informal y directa>\",\n"
                     f"    \"hubspot\": \"Si el usuario menciona 'contactos de <empresa o nombre>', responde 'contacto <empresa o nombre>'. Si menciona 'empresas de <sector>', responde 'empresa <sector>'. Si menciona 'negocios de <sector>' o 'negocio de <empresa>', responde 'negocio <sector o empresa>'. Si menciona 'compañías de <sector>', responde 'compañía <sector>'. Si el usuario menciona un contacto específico con un nombre propio y pide información (como número, correo, etc.), responde 'contacto <nombre> (<campo solicitado>)'.\",\n"
                     f"    \"outlook\": \"<query para Outlook, misma que Gmail>\",\n"
-                    f"    \"clickup\": \"<query para ClickUp o 'N/A' si no aplica>\",\n"
+                    f"    \"clickup\": \"<query para ClickUp, o 'N/A' si no aplica. Siempre existira si y solo si se mencionan status de proyectos, tareas, compañías, empresas, proyectos específicos o fechas en la query. Además, se realizará la búsqueda en tareas, calendarios, diagramas de Gantt y tablas relacionadas con el equipo y las tareas asociadas, dependiendo de los elementos presentes en la consulta.>"
                     f"    \"dropbox\": \"<query para Dropbox o 'N/A' si no aplica>\",\n"
                     f"    \"asana\": \"<query para Asana o 'N/A' si no aplica>\",\n"
                     f"    \"googledrive\": \"<query para Google Drive o 'N/A' si no aplica>\",\n"
@@ -1381,6 +1392,7 @@ def setup_routes(app, mongo):
                                 search_results_data['teams'] = ["No se encontró ningún valor en Teams"]
                             print("DATA", search_results_data)
                             links = extract_links_from_datas(datas=search_results_data)
+                            print("LINKS", links)
                             prompt = generate_prompt(last_message, search_results_data)
                             last_ai_response = prompt
                             response = openai.chat.completions.create(
@@ -1591,39 +1603,66 @@ def setup_routes(app, mongo):
             
             if not query:
                 return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
-            
-            # Buscar en ClickUp (ajusta la API de ClickUp según tus necesidades)
-            url = "https://api.clickup.com/api/v2/search/task"
+
+            if not query or query.lower() == "n/a":
+                        return jsonify({"message": "No se encontraron resultados en ClickUp"}), 200
+
+            team_url = "https://api.clickup.com/api/v2/team"
             headers = {
                 'Authorization': f"Bearer {clickup_token}"
             }
+            team_response = requests.get(team_url, headers=headers)
+
+            if team_response.status_code != 200:
+                return jsonify({"error": "No se pudo obtener el team_id", "details": team_response.text}), team_response.status_code
+
+            teams = team_response.json().get('teams', [])
+            if not teams:
+                return jsonify({"error": "El usuario no pertenece a ningún equipo en ClickUp"}), 400
+
+            team_id = teams[0].get('id')  # Usamos el primer equipo disponible
+
+            # ✅ 2. Buscar tareas en ClickUp
+            task_url = f"https://api.clickup.com/api/v2/team/{team_id}/task"
             params = {
-                "query": query,
-                "space_ids[]": "your_space_id"  # Si tienes un espacio específico
+                "query": query
             }
-            
-            response = requests.get(url, headers=headers, params=params)
-            response.raise_for_status()
-            
+
+            print(f"Haciendo solicitud a ClickUp con {params}")
+
+            response = requests.get(task_url, headers=headers, params=params)
+            print(f"Response Status: {response.status_code}")
+            print(f"Response Content: {response.text}")
+
+            if response.status_code == 404:
+                return jsonify({"error": "No se encontró la ruta en ClickUp. Verifica la URL y el team_id."}), 404
+
+            response.raise_for_status()  # Lanzará error si el código de estado es 4xx o 5xx
             results = response.json().get('tasks', [])
-            
+
             if not results:
                 return jsonify({"message": "No se encontraron resultados en ClickUp"}), 200
-            
-            search_results = []
-            for result in results:
-                search_results.append({
-                    'task_name': result.get('name', 'Sin título'),
-                    'status': result.get('status', {}).get('status', 'Sin estado'),
-                    'url': f"https://app.clickup.com/t/{result.get('id')}"
-                })
-            
-            return jsonify(search_results)
+
+            # ✅ 3. Filtrar manualmente las tareas basadas en el query (Filtro más flexible)
+            filtered_results = [
+                {
+                    'task_name': task.get('name', 'Sin título'),
+                    'status': task.get('status', {}).get('status', 'Sin estado'),
+                    'url': f"https://app.clickup.com/t/{task.get('id')}"
+                }
+                for task in results
+            ]
+
+            if not filtered_results:
+                return jsonify({"message": "No se encontraron tareas que coincidan con el término de búsqueda."}), 200
+
+            return jsonify(filtered_results)
 
         except requests.RequestException as e:
             return jsonify({"error": "Error al realizar la solicitud a ClickUp", "details": str(e)}), 500
         except Exception as e:
             return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+
 
     @app.route('/search/dropbox', methods=["GET"])
     def search_dropbox(query):
@@ -1635,51 +1674,133 @@ def setup_routes(app, mongo):
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
             dropbox_integration = user.get('integrations', {}).get('Dropbox', None)
-            if dropbox_integration:
-                dropbox_token = dropbox_integration.get('token', None)
-            else:
-                dropbox_token = None
-            
+            dropbox_token = dropbox_integration.get('token') if dropbox_integration else None
+
             if not dropbox_token:
                 return jsonify({"error": "Token de Dropbox no disponible"}), 400
-            
-            if not query:
-                return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
-            
-            # Buscar en Dropbox (ajusta la API de Dropbox según tus necesidades)
+
+            if not query or query.lower() == "n/a":
+                return jsonify({"message": "No se encontraron resultados en Dropbox"}), 200
+
+            # 🔍 **Extraer filtros de la query**
+            search_term = None
+            search_type = None  # Puede ser "file" o "folder"
+
+            parts = query.split()
+            for part in parts:
+                if part.startswith("carpeta:"):
+                    search_term = part.replace("carpeta:", "").strip()
+                    search_type = "folder"
+                elif part.startswith("archivo:"):
+                    search_term = part.replace("archivo:", "").strip()
+                    search_type = "file"
+                elif part.startswith("tipo:"):
+                    tipo = part.replace("tipo:", "").strip().lower()
+                    if tipo in ["file", "folder"]:
+                        search_type = tipo
+
+            if not search_term:
+                return jsonify({"error": "El término de búsqueda es inválido"}), 400
+
+            # 🔎 **Buscar en Dropbox**
             url = "https://api.dropboxapi.com/2/files/search_v2"
             headers = {
                 'Authorization': f"Bearer {dropbox_token}",
                 'Content-Type': 'application/json'
             }
             params = {
-                "query": query,
+                "query": search_term,
                 "options": {
-                    "max_results": 5
+                    "max_results": 10,
+                    "file_status": "active"
                 }
             }
-            
+
             response = requests.post(url, headers=headers, json=params)
+            print("PRINT DROPBOX", response)
             response.raise_for_status()
-            
+
             results = response.json().get('matches', [])
-            
+            print(results)
             if not results:
                 return jsonify({"message": "No se encontraron resultados en Dropbox"}), 200
-            
-            search_results = []
+
+            # 🎯 **Procesar resultados**
+            filtered_results = []
+
             for result in results:
-                search_results.append({
-                    'file_name': result.get('metadata', {}).get('name', 'Sin nombre'),
-                    'path': result.get('metadata', {}).get('path_display', 'Sin ruta')
-                })
-            
-            return jsonify(search_results)
+                raw_metadata = result.get('metadata', {})
+                metadata = raw_metadata.get('metadata', {})  # Extraer el diccionario interno correcto
+
+                name = metadata.get('name', 'Sin nombre')
+                path = metadata.get('path_display', 'Sin ruta')
+                tag = metadata.get('.tag', '')  # Puede ser "file" o "folder"
+
+                if search_type == "folder" and tag == "folder":
+                    # 📂 Si es una carpeta, listar su contenido
+                    list_folder_url = "https://api.dropboxapi.com/2/files/list_folder"
+                    list_folder_headers = {
+                        'Authorization': f"Bearer {dropbox_token}",
+                        'Content-Type': 'application/json'
+                    }
+                    list_folder_params = {
+                        "path": path
+                    }
+
+                    try:
+                        list_response = requests.post(list_folder_url, headers=list_folder_headers, json=list_folder_params)
+                        list_response.raise_for_status()
+                        folder_contents = list_response.json().get('entries', [])
+
+                        # Agregar solo archivos dentro de la carpeta
+                        for item in folder_contents:
+                            if item['.tag'] == 'file':  # Solo archivos
+                                file_link = generate_dropbox_link(dropbox_token, item['path_display'])
+                                filtered_results.append({
+                                    'name': item['name'],
+                                    'path': item['path_display'],
+                                    'type': 'file',
+                                    'download_link': file_link
+                                })
+                    except requests.RequestException as e:
+                        return jsonify({"error": "Error al listar los archivos dentro de la carpeta", "details": str(e)}), 500
+                else:
+                    # Agregar archivos/carpetas que coincidan con la búsqueda
+                    if not search_type or tag == search_type:
+                        file_link = generate_dropbox_link(dropbox_token, path) if tag == "file" else None
+                        filtered_results.append({
+                            'name': name,
+                            'path': path,
+                            'type': tag,
+                            'download_link': file_link
+                        })
+
+            if not filtered_results:
+                return jsonify({"message": "No se encontraron archivos o carpetas que coincidan con el término de búsqueda."}), 200
+
+            return jsonify(filtered_results)
 
         except requests.RequestException as e:
             return jsonify({"error": "Error al realizar la solicitud a Dropbox", "details": str(e)}), 500
         except Exception as e:
             return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+    
+    def generate_dropbox_link(token, file_path):
+        """Genera un link de descarga temporal para un archivo en Dropbox"""
+        url = "https://api.dropboxapi.com/2/files/get_temporary_link"
+        headers = {
+            'Authorization': f"Bearer {token}",
+            'Content-Type': 'application/json'
+        }
+        params = {"path": file_path}
+
+        try:
+            response = requests.post(url, headers=headers, json=params)
+            response.raise_for_status()
+            return response.json().get("link")
+        except requests.RequestException as e:
+            print(f"Error al generar link para {file_path}: {e}")
+            return None
 
     @app.route('/search/asana', methods=["GET"])
     def search_asana(query):

@@ -789,104 +789,6 @@ def setup_routes(app, mongo):
 
         return jsonify(search_results)
 
-
-    @app.route('/askIa', methods=['GET'])
-    def ask():
-        email = request.args.get('email')
-        query = request.args.get('query')
-        datos_adicionales = request.args.get('datos_adicionales')
-
-        if not email or not query:
-            return jsonify({"error": "Se deben proporcionar tanto el email como la consulta"}), 400
-
-        try:
-            user = mongo.database.usuarios.find_one({'correo': email})
-            if not user:
-                return jsonify({"error": "Usuario no encontrado"}), 404
-            search_results_data = {
-                'gmail': [],
-                'slack': [],
-                'notion': [],
-                'outlook': [],
-                'hubspot': {}
-            }
-
-            try:
-                notion_results = search_notion()
-                search_results_data['notion'] = (
-                    notion_results.get_json() 
-                    if hasattr(notion_results, 'get_json') 
-                    else notion_results
-                )
-            except Exception as e:
-                search_results_data['notion'] = [f"Error al buscar en Notion: {str(e)}"]
-            
-            try:
-                gmail_results = search_gmail()
-                search_results_data['gmail'] = (
-                    gmail_results.get_json() 
-                    if hasattr(gmail_results, 'get_json') 
-                    else gmail_results
-                )
-            except Exception as e:
-                search_results_data['gmail'] = [f"Error al buscar en Gmail: {str(e)}"]
-
-            try:
-                slack_results = search_slack()
-                search_results_data['slack'] = (
-                    slack_results.get_json() 
-                    if hasattr(slack_results, 'get_json') 
-                    else slack_results
-                )
-            except Exception as e:
-                search_results_data['slack'] = [f"Error al buscar en Slack: {str(e)}"]
-
-            try:
-                outlook_results = search_outlook()
-                search_results_data['outlook'] = (
-                    outlook_results.get_json() 
-                    if hasattr(outlook_results, 'get_json') 
-                    else outlook_results
-                )
-            except Exception as e:
-                search_results_data['outlook'] = [f"Error al buscar en Outlook: {str(e)}"]
-
-            try:
-                hubspot_results = search_hubspot()
-                search_results_data['hubspot'] = (
-                    hubspot_results.get_json() 
-                    if hasattr(hubspot_results, 'get_json') 
-                    else hubspot_results
-                )
-            except Exception as e:
-                search_results_data['hubspot'] = [f"Error al buscar en HubSpot: {str(e)}"]
-
-            try:
-                prompt = generate_prompt(query, search_results_data)
-                response = openai.chat.completions.create(
-                    model="gpt-4-turbo",
-                    messages=[{
-                        "role": "system",
-                        "content": "Eres un asistente útil el cual está conectado con diversas aplicaciones y automatizarás el proceso de buscar información en base a la query que se te envie, tomando toda la información necesaria"
-                    }, {
-                        "role": "user",
-                        "content": prompt
-                    }],
-                    max_tokens=4096
-                )
-                ia_response = response.choices[0].message.content.strip()
-                
-                if not ia_response:
-                    return jsonify({"error": "La respuesta de la IA está vacía"}), 500
-                
-                return jsonify({"response": to_ascii(ia_response)})
-
-            except Exception as e:
-                return jsonify({"error": f"Error al generar la respuesta de la IA: {str(e)}"}), 500
-
-        except Exception as e:
-            return jsonify({"error": f"Error general: {str(e)}"}), 500
-
     def extract_links(results, key):
         if isinstance(results, list):
             return [item.get(key) for item in results if key in item]
@@ -965,12 +867,13 @@ def setup_routes(app, mongo):
             f"Tarea: {task.get('task_name', 'Sin nombre')} | "
             f"Estado: {task.get('status', 'Sin estado')} | "
             f"Prioridad: {task.get('priority', 'Sin prioridad')} | "
-            f"Asignado a: {', '.join([assignee.get('username', 'Desconocido') for assignee in task.get('assignees', [])]) or 'Sin asignar'} | "
-            f"Fecha de vencimiento: {task.get('due_date', 'Sin fecha')} | "
-            f"Lista: {task.get('list_name', 'Sin lista')} | "
+            f"Asignado a: {', '.join(task.get('assignees', ['Sin asignar']))} | "
+            f"Fecha de vencimiento: {task.get('due_date') if task.get('due_date') else 'Sin fecha'} | "
+            f"Lista: {task.get('list', 'Sin lista')} | "
             f"URL: {task.get('url', 'Sin URL')}"
             for task in search_results.get('clickup', []) if isinstance(task, dict)
         ]) or "No se encontraron tareas relacionadas en ClickUp."
+
         # Dropbox Results
         dropbox_results = "\n".join([
             f"Archivo: {file.get('name', 'Sin nombre')} | Tamaño: {file.get('size', 'Desconocido')} | Fecha de modificación: {file.get('modified', 'Sin fecha')}"
@@ -979,7 +882,12 @@ def setup_routes(app, mongo):
 
         # Asana Results
         asana_results = "\n".join([
-            f"Tarea: {task.get('name', 'Sin nombre')} | Estado: {task.get('status', 'Sin estado')} | Fecha de vencimiento: {task.get('due_date', 'Sin fecha')}"
+            f"Tarea: {task.get('task_name', 'Sin nombre')} | "
+            f"Estado: {task.get('status', 'Sin estado')} | "
+            f"Fecha de vencimiento: {task.get('due_date', 'Sin fecha')} | "
+            f"Asignado a: {task.get('assignee', 'Sin asignar')} | "
+            f"Proyectos: {task.get('projects', 'Sin proyectos asignados')} | "
+            f"URL: {task.get('url', 'Sin URL')}"
             for task in search_results.get('asana', []) if isinstance(task, dict)
         ]) or "No se encontraron tareas relacionadas en Asana."
 
@@ -1223,7 +1131,7 @@ def setup_routes(app, mongo):
                     f"Para Slack, adapta la query de Gmail. \n\n"
                     f"En ClickUp, si el usuario menciona tareas o proyectos (tambien toma en cuenta siempre la query de notion (es decir si existe query de notion, existe query de clickup) para hacer esta), ajusta la consulta a su nombre o identificador específico.\n"
                     f"""
-                        Genera una consulta para Dropbox basada en el mensaje del usuario.
+                        Genera una consulta para Dropbox, OneDrive y Google Drive basada en el mensaje del usuario.
                             
                             - Si menciona un archivo: "archivo:<nombre>"
                             - Si menciona una carpeta: "carpeta:<nombre>"
@@ -1232,8 +1140,13 @@ def setup_routes(app, mongo):
                     \n"""
                     f"En Asana, si menciona un proyecto o tarea, ajusta la consulta a ese nombre específico.\n"
                     f"En Google Drive, si menciona un archivo, carpeta o documento, ajusta la consulta a su nombre o ubicación.\n"
-                    f"En OneDrive, si menciona un archivo o carpeta, ajusta la consulta a ese archivo o carpeta de acuerdo con su nombre o ubicación.\n"
-                    f"En Teams, si menciona una conversación o canal, ajusta la consulta a ese canal o conversación.\n\n"
+                    f"En Teams, ajusta la consulta según lo que menciona el usuario:\n"
+                    f"- Si menciona un canal (ejemplo: 'en el canal de proyectos', 'en #soporte'): usa \"channel:<nombre del canal>\".\n"
+                    f"- Si el usuario menciona que está 'hablando con', 'conversando con', 'chateando con' o términos similares seguidos de un nombre propio o usuario como: 'pvasquez-2018044', usa: \"conversation with:<nombre> <palabras clave>\", asegurándote de incluir cualquier referencia a temas mencionados.\n"
+                    f"- Si menciona un tema específico sin un contacto, pero da detalles del contenido, usa \"message:<palabras clave>\".\n"
+                    f"- Si el usuario usa términos como 'mensaje sobre', 'hablamos de', 'tema de conversación', extrae las palabras clave y úsalas en \"message:<palabras clave>\".\n"
+                    f"- Si no se puede interpretar una búsqueda específica para Teams, devuelve \"N/A\".\n"
+                    f"- SI EL USUARIO MENCIONA EXPLICITAMENTE 'TEAMS' O 'MICROSOFT TEAMS' HAZ LA QUERY"
                     f"Estructura del JSON:\n"
                     f"{{\n"
                     f"    \"gmail\": \"<query para Gmail> Se conciso y evita palabras de solicitud y solo pon la query y evita los is:unread\",\n"
@@ -1259,12 +1172,12 @@ def setup_routes(app, mongo):
 
 
                 response = openai.chat.completions.create(
-                    model="gpt-3.5-turbo",
+                    model="gpt-4o-mini",
                     messages=[
                         {"role": "system", "content": "Eres un asistente que identifica saludos o solicitudes."},
                         {"role": "user", "content": prompt}
                     ],
-                    max_tokens=150
+                    max_tokens=700
                 )
                 ia_interpretation = response.choices[0].message.content.strip().lower()
                 print(ia_interpretation)
@@ -1328,7 +1241,8 @@ def setup_routes(app, mongo):
                                 'dropbox': [],
                                 'asana': [],
                                 'onedrive': [],
-                                'teams': []
+                                'teams': [], 
+                                'googledrive': [],
                             }
 
                             try:
@@ -1386,11 +1300,17 @@ def setup_routes(app, mongo):
                                 search_results_data['onedrive'] = ["No se encontró ningún valor en OneDrive"]
 
                             try:
+                                googledrive = search_google_drive(googledrive_query)
+                                search_results_data['googledrive'] = googledrive.get_json() if hasattr(googledrive, 'get_json') else googledrive
+                            except Exception:
+                                search_results_data['onedrive'] = ["No se encontró ningún valor en OneDrive"]
+
+                            try:
                                 teams_results = search_teams(teams_query)
                                 search_results_data['teams'] = teams_results.get_json() if hasattr(teams_results, 'get_json') else teams_results
                             except Exception:
                                 search_results_data['teams'] = ["No se encontró ningún valor en Teams"]
-                            print("DATA", search_results_data)
+                            print("DATA", search_results_data["googledrive"])
                             links = extract_links_from_datas(datas=search_results_data)
                             print("LINKS", links)
                             prompt = generate_prompt(last_message, search_results_data)
@@ -1648,6 +1568,11 @@ def setup_routes(app, mongo):
                 {
                     'task_name': task.get('name', 'Sin título'),
                     'status': task.get('status', {}).get('status', 'Sin estado'),
+                    'priority': task.get('priority', 'Sin prioridad'),
+                    'assignees': [assignee.get('username', 'Desconocido') for assignee in task.get('assignees', [])] or ['Sin asignar'],
+                    'due_date': task.get('due_date', 'Sin fecha'),
+                    'project': task.get('project', {}).get('name', 'Sin proyecto'),
+                    'list': task.get('list', {}).get('name', 'Sin lista'),
                     'url': f"https://app.clickup.com/t/{task.get('id')}"
                 }
                 for task in results
@@ -1812,42 +1737,76 @@ def setup_routes(app, mongo):
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
             asana_integration = user.get('integrations', {}).get('Asana', None)
-            if asana_integration:
-                asana_token = asana_integration.get('token', None)
-            else:
-                asana_token = None
-            
+            asana_token = asana_integration.get('token') if asana_integration else None
+
             if not asana_token:
                 return jsonify({"error": "Token de Asana no disponible"}), 400
-            
-            if not query:
-                return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
-            
-            # Buscar en Asana (ajusta la API de Asana según tus necesidades)
-            url = "https://app.asana.com/api/1.0/tasks"
-            headers = {
-                'Authorization': f"Bearer {asana_token}"
-            }
+
+            # ✅ 1. Obtener el Workspace ID
+            workspace_url = "https://app.asana.com/api/1.0/workspaces"
+            headers = {'Authorization': f"Bearer {asana_token}"}
+            workspace_response = requests.get(workspace_url, headers=headers)
+
+            if workspace_response.status_code != 200:
+                return jsonify({"error": "No se pudieron obtener los espacios de trabajo", "details": workspace_response.text}), workspace_response.status_code
+
+            workspaces = workspace_response.json().get('data', [])
+            if not workspaces:
+                return jsonify({"error": "El usuario no tiene espacios de trabajo en Asana"}), 400
+
+            workspace_id = workspaces[0].get('gid')  # Tomamos el primer workspace disponible
+
+            # ✅ 2. Configurar la consulta según el tipo de búsqueda
             params = {
-                "search": query
+                "opt_fields": "name,gid,completed,assignee.name,due_on,projects.name"
             }
-            
-            response = requests.get(url, headers=headers, params=params)
+
+            from datetime import datetime, timedelta
+
+            today = datetime.today().strftime('%Y-%m-%d')
+            tomorrow = (datetime.today() + timedelta(days=1)).strftime('%Y-%m-%d')
+
+            if "hoy" in query:  # Buscar tareas con fecha de hoy
+                params["due_on"] = today
+            elif "mañana" in query:  # Buscar tareas con fecha de mañana
+                params["due_on"] = tomorrow
+            elif "pendientes" in query:  # Buscar solo tareas no completadas
+                params["completed"] = False
+            else:  # Búsqueda por texto (nombre o descripción)
+                params["text"] = query  
+
+            # ✅ 3. Realizar la búsqueda
+            search_url = f"https://app.asana.com/api/1.0/workspaces/{workspace_id}/tasks/search"
+            response = requests.get(search_url, headers=headers, params=params)
+
+            if response.status_code == 404:
+                return jsonify({"error": "No se encontró la ruta en Asana. Verifica la URL y el workspace_id."}), 404
+
             response.raise_for_status()
-            
             results = response.json().get('data', [])
-            
+            print("ASANA",results)
+
             if not results:
                 return jsonify({"message": "No se encontraron resultados en Asana"}), 200
-            
+
             search_results = []
-            for result in results:
+            for task in results:
+                task_name = task.get('name', 'Sin título')
+                status = 'Completada' if task.get('completed') else 'Pendiente'
+                assignee = task.get('assignee', {}).get('name', 'Sin asignar')
+                due_date = task.get('due_on', 'Sin fecha')
+                projects = ', '.join([p.get('name', 'Sin nombre') for p in task.get('projects', [])]) if task.get('projects') else "Sin proyectos asignados"
+                task_url = f"https://app.asana.com/0/{workspace_id}/{task.get('gid')}"
+
                 search_results.append({
-                    'task_name': result.get('name', 'Sin título'),
-                    'status': result.get('status', 'Sin estado'),
-                    'url': f"https://app.asana.com/0/{result.get('gid')}/list"
+                    'task_name': task_name,
+                    'status': status,
+                    'assignee': assignee,
+                    'due_date': due_date,
+                    'projects': projects,
+                    'url': task_url
                 })
-            
+
             return jsonify(search_results)
 
         except requests.RequestException as e:
@@ -1873,31 +1832,70 @@ def setup_routes(app, mongo):
             if not onedrive_token:
                 return jsonify({"error": "Token de OneDrive no disponible"}), 400
             
-            if not query:
-                return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
+            if not query or query.lower() == "n/a":
+                return jsonify({"message": "No se proporcionaron términos de búsqueda"}), 400
+
+            # 🔍 **Extraer filtros de la query**
+            search_term = None
+            search_type = None  # Puede ser "file" o "folder"
+
+            parts = query.split()
+            for part in parts:
+                if part.startswith("carpeta:"):
+                    search_term = part.replace("carpeta:", "").strip()
+                    search_type = "folder"
+                elif part.startswith("archivo:"):
+                    search_term = part.replace("archivo:", "").strip()
+                    search_type = "file"
+                elif part.startswith("tipo:"):
+                    tipo = part.replace("tipo:", "").strip().lower()
+                    if tipo in ["file", "folder"]:
+                        search_type = tipo
             
-            # Buscar en OneDrive (ajusta la API de OneDrive según tus necesidades)
-            url = "https://graph.microsoft.com/v1.0/me/drive/root/search(q='{query}')"
+            if not search_term:
+                return jsonify({"error": "El término de búsqueda es inválido"}), 400
+
+            # 🔎 **Buscar la carpeta específica "Prueba" en OneDrive**
+            url = f"https://graph.microsoft.com/v1.0/me/drive/root/children"
             headers = {
                 'Authorization': f"Bearer {onedrive_token}"
             }
-            
-            response = requests.get(url.format(query=query), headers=headers)
+
+            response = requests.get(url, headers=headers)
             response.raise_for_status()
-            
+
             results = response.json().get('value', [])
-            
-            if not results:
-                return jsonify({"message": "No se encontraron resultados en OneDrive"}), 200
-            
-            search_results = []
+            folder_found = None
+
             for result in results:
-                search_results.append({
-                    'file_name': result.get('name', 'Sin nombre'),
-                    'url': result.get('@microsoft.graph.downloadUrl', 'Sin URL')
-                })
+                if result.get('name').lower() == search_term.lower() and result.get('folder'):
+                    folder_found = result
+                    break
             
-            return jsonify(search_results)
+            if not folder_found:
+                return jsonify({"error": f"No se encontró la carpeta '{search_term}' en OneDrive."}), 404
+
+            # Ahora que encontramos la carpeta "Prueba", buscar los archivos dentro de ella
+            folder_id = folder_found.get('id')
+            files_url = f"https://graph.microsoft.com/v1.0/me/drive/items/{folder_id}/children"
+            
+            response = requests.get(files_url, headers=headers)
+            response.raise_for_status()
+
+            files = response.json().get('value', [])
+
+            if not files:
+                return jsonify({"message": f"No se encontraron archivos en la carpeta '{search_term}'."}), 200
+
+            # 🎯 **Procesar resultados (archivos dentro de la carpeta)**
+            filtered_results = []
+            for file in files:
+                filtered_results.append({
+                    'name': file.get('name', 'Sin nombre'),
+                    'url': file.get('@microsoft.graph.downloadUrl', None)
+                })
+
+            return jsonify(filtered_results)
 
         except requests.RequestException as e:
             return jsonify({"error": "Error al realizar la solicitud a OneDrive", "details": str(e)}), 500
@@ -1909,50 +1907,1189 @@ def setup_routes(app, mongo):
         print("HOLA TEAMS!")
         email = request.args.get('email')
         try:
+            # Obtener el usuario desde la base de datos
             user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
             teams_integration = user.get('integrations', {}).get('Teams', None)
-            if teams_integration:
-                teams_token = teams_integration.get('token', None)
-            else:
-                teams_token = None
-            
+            teams_token = teams_integration.get('token', None) if teams_integration else None
+
             if not teams_token:
                 return jsonify({"error": "Token de Teams no disponible"}), 400
-            
+
             if not query:
                 return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
+
+            # Determinar tipo de búsqueda
+            headers = {'Authorization': f"Bearer {teams_token}"}
             
-            # Buscar en Teams (ajusta la API de Teams según tus necesidades)
-            url = "https://graph.microsoft.com/v1.0/me/messages"
-            headers = {
-                'Authorization': f"Bearer {teams_token}"
-            }
-            params = {
-                "search": query
-            }
-            
+            if query.startswith("conversation with:"):
+                print("conversation")
+                # Buscar un chat con el usuario especificado
+                name, keywords = extract_conversation_query(query)
+                chat_id = get_chat_id(name, headers)
+                print(f"💬 Chat ID encontrado: {chat_id}")
+                if not chat_id:
+                    return jsonify({"error": f"No se encontró una conversación con {name}"}), 404
+                
+                url = f"https://graph.microsoft.com/v1.0/me/chats/{chat_id}/messages"
+                params = {"search": keywords}
+
+            elif query.startswith("channel:"):
+                # Buscar mensajes en un canal específico
+                channel_name, keywords = extract_channel_query(query)
+                team_id, channel_id = get_channel_id(channel_name, headers)
+                if not channel_id:
+                    return jsonify({"error": f"No se encontró el canal {channel_name}"}), 404
+                
+                url = f"https://graph.microsoft.com/v1.0/teams/{team_id}/channels/{channel_id}/messages"
+                params = {"search": keywords}
+
+            elif query.startswith("message:"):
+                # Buscar en todos los mensajes del usuario
+                keywords = extract_message_query(query)
+                url = "https://graph.microsoft.com/v1.0/me/messages"
+                params = {"search": keywords}
+
+            else:
+                return jsonify({"error": "Formato de query no válido"}), 400
+
+            # Hacer la solicitud a la API de Teams
             response = requests.get(url, headers=headers, params=params)
             response.raise_for_status()
-            
+
             results = response.json().get('value', [])
-            
+            print(results)
             if not results:
                 return jsonify({"message": "No se encontraron resultados en Teams"}), 200
-            
+
+            # Formatear resultados
             search_results = []
             for result in results:
                 search_results.append({
                     'message_subject': result.get('subject', 'Sin asunto'),
-                    'from': result.get('from', {}).get('emailAddress', {}).get('address', 'Sin remitente'),
+                    'from': result.get('from', {}).get('user', {}).get('displayName', 'Sin remitente'),
+                    'content': result.get('body', {}).get('content', 'Sin contenido'),
                     'url': f"https://teams.microsoft.com/l/message/{result.get('id')}"
                 })
-            
+
             return jsonify(search_results)
 
         except requests.RequestException as e:
             return jsonify({"error": "Error al realizar la solicitud a Teams", "details": str(e)}), 500
         except Exception as e:
             return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+
+    # Funciones auxiliares
+    def extract_conversation_query(query):
+        """ Extrae el nombre y palabras clave de 'conversation with:<nombre> <keywords>' """
+        parts = query.replace("conversation with:", "").strip().split(" ", 1)
+        name = parts[0]
+        keywords = parts[1] if len(parts) > 1 else ""
+        return name, keywords
+
+    def extract_channel_query(query):
+        """ Extrae el nombre del canal y palabras clave de 'channel:<nombre> <keywords>' """
+        parts = query.replace("channel:", "").strip().split(" ", 1)
+        channel_name = parts[0]
+        keywords = parts[1] if len(parts) > 1 else ""
+        return channel_name, keywords
+
+    def extract_message_query(query):
+        """ Extrae las palabras clave de 'message:<keywords>' """
+        return query.replace("message:", "").strip()
+
+    def get_chat_id(name, headers):
+        """ Busca el chat ID de un usuario por su nombre en Teams. """
+        url_chats = "https://graph.microsoft.com/v1.0/me/chats"
+        response_chats = requests.get(url_chats, headers=headers)
+        response_chats.raise_for_status()
+
+        chats = response_chats.json().get('value', [])
+        
+        for chat in chats:
+            members = chat.get('members', [])
+            for member in members:
+                if name.lower() in member.get('displayName', '').lower():
+                    return chat.get('id')
+
+        return None  # Si no se encontró el chat
+
+    def get_channel_id(channel_name, headers):
+        """ Busca el team ID y channel ID de un canal por su nombre en Teams """
+        teams_url = "https://graph.microsoft.com/v1.0/me/joinedTeams"
+        teams_response = requests.get(teams_url, headers=headers)
+        teams_response.raise_for_status()
+
+        teams = teams_response.json().get('value', [])
+        for team in teams:
+            team_id = team.get('id')
+            channels_url = f"https://graph.microsoft.com/v1.0/teams/{team_id}/channels"
+            channels_response = requests.get(channels_url, headers=headers)
+            channels_response.raise_for_status()
+
+            channels = channels_response.json().get('value', [])
+            for channel in channels:
+                if channel.get('displayName', '').lower() == channel_name.lower():
+                    return team_id, channel.get('id')
+            return None, None
+        
+    @app.route('/search/google_drive', methods=["GET"])
+    def search_google_drive():
+        print("HOLA GOOGLE DRIVE!")
+        email = request.args.get('email')
+        query = request.args.get('query')  # Asegúrate de que la query sea pasada como un parámetro
+        
+        if not query:
+            return jsonify({"error": "No se proporcionaron términos de búsqueda"}), 400
+        
+        try:
+            # Recuperar el token de Google Drive desde la base de datos
+            user = mongo.database.usuarios.find_one({'correo': email})
+            if not user:
+                return jsonify({"error": "Usuario no encontrado"}), 404
+
+            google_drive_integration = user.get('integrations', {}).get('GoogleDrive', None)
+            if google_drive_integration:
+                google_drive_token = google_drive_integration.get('token', None)
+            else:
+                google_drive_token = None
+            
+            if not google_drive_token:
+                return jsonify({"error": "Token de Google Drive no disponible"}), 400
+            
+            # 🔍 **Extraer filtros de la query**
+            search_term = None
+            folder_name = None
+            search_type = None  # Puede ser "file" o "folder"
+
+            # Asegurarnos de que los parámetros "archivo:" y "carpeta:" estén presentes
+            if 'archivo:' in query:
+                search_term = query.split('archivo:')[1].split(' ')[0].strip()  # Toma el término después de "archivo:"
+                search_type = "file"
+
+            if 'carpeta:' in query:
+                folder_name = query.split('carpeta:')[1].strip()  # Toma la carpeta después de "carpeta:"
+                search_type = "folder"
+
+            # Validar que tenemos al menos uno de los dos parámetros
+            if not search_term and not folder_name:
+                return jsonify({"error": "El término de búsqueda es inválido, se debe proporcionar 'archivo:' o 'carpeta:'"}), 400
+
+            # Si tenemos carpeta, buscarla primero
+            if folder_name:
+                url = f"https://www.googleapis.com/drive/v3/files?q=name='{folder_name}' and mimeType='application/vnd.google-apps.folder'"
+                headers = {'Authorization': f"Bearer {google_drive_token}"}
+                
+                response = requests.get(url, headers=headers)
+                response.raise_for_status()
+
+                results = response.json().get('files', [])
+                folder_found = None
+
+                for result in results:
+                    if result.get('name').lower() == folder_name.lower() and result.get('mimeType') == 'application/vnd.google-apps.folder':
+                        folder_found = result
+                        break
+
+                if not folder_found:
+                    return jsonify({"error": f"No se encontró la carpeta '{folder_name}' en Google Drive."}), 404
+
+                # Ahora que encontramos la carpeta, buscar el archivo dentro de ella
+                folder_id = folder_found.get('id')
+                if search_term:
+                    files_url = f"https://www.googleapis.com/drive/v3/files?q=name='{search_term}' and '{folder_id}' in parents"
+                    
+                    response = requests.get(files_url, headers=headers)
+                    response.raise_for_status()
+
+                    files = response.json().get('files', [])
+                    if not files:
+                        return jsonify({"message": f"No se encontraron archivos con el nombre '{search_term}' en la carpeta '{folder_name}'."}), 200
+
+                    filtered_results = []
+                    for file in files:
+                        file_url = f"https://drive.google.com/file/d/{file['id']}/view"
+                        filtered_results.append({
+                            'name': file.get('name', 'Sin nombre'),
+                            'url': file_url
+                        })
+
+                    return jsonify(filtered_results)
+                else:
+                    return jsonify({"error": "No se proporcionó el nombre del archivo."}), 400
+            else:
+                # Si no se menciona la carpeta, buscamos el archivo directamente
+                if not search_term:
+                    return jsonify({"error": "No se proporcionó el nombre del archivo."}), 400
+                
+                url = f"https://www.googleapis.com/drive/v3/files?q=name='{search_term}' and mimeType!='application/vnd.google-apps.folder'"
+                headers = {'Authorization': f"Bearer {google_drive_token}"}
+                response = requests.get(url, headers=headers)
+                response.raise_for_status()
+
+                results = response.json().get('files', [])
+                if not results:
+                    return jsonify({"message": f"No se encontraron archivos con el nombre '{search_term}' en Google Drive."}), 200
+
+                filtered_results = []
+                for file in results:
+                    file_url = f"https://drive.google.com/file/d/{file['id']}/view"
+                    filtered_results.append({
+                        'name': file.get('name', 'Sin nombre'),
+                        'url': file_url
+                    })
+
+                return jsonify(filtered_results)
+
+        except requests.RequestException as e:
+            return jsonify({"error": "Error al realizar la solicitud a Google Drive", "details": str(e)}), 500
+        except Exception as e:
+            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+
+# SECRETARIA
+    def get_gmail_headers(token):
+        return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+
+    def get_outlook_headers(token):
+        return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+
+    def get_slack_headers(token):
+        return {"Authorization": f"Bearer {token}"}
+
+    def get_hubspot_headers(api_key):
+        return {
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "application/json"
+        }
+
+    def get_notion_headers(token):
+        return {
+            "Authorization": f"Bearer {token}",
+            'Notion-Version': '2022-06-28',
+            'Content-Type': 'application/json'
+        }
+
+    def get_clickup_headers(token):
+        return {
+            "Authorization": token,
+            "Content-Type": "application/json"
+        }
+
+    def get_dropbox_headers(token):
+        return {"Authorization": f"Bearer {token}"}
+
+    def get_google_drive_headers(token):
+        return {"Authorization": f"Bearer {token}"}
+
+    def get_onedrive_headers(token):
+        return {"Authorization": f"Bearer {token}"}
+
+    def get_teams_headers(token):
+        return {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+
+    def get_asana_headers(token):
+        return {
+            "Authorization": f"Bearer {token}",
+        }
+
+
+    def interpretar_accion_email(texto):
+        prompt = f"El usuario dijo: '{texto}'. Determina si quiere 'delete' (eliminar), 'reply' (responder) o 'spam' (mover a spam). Si no está claro, responde 'unknown'."
+        response = openai.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "system", "content": "Eres un asistente que analiza intenciones en correos electrónicos."},
+                    {"role": "user", "content": prompt}]
+        )
+        return response.choices[0].message.content.strip().lower()
+
+    def interpretar_accion_productividad(texto):
+        prompt = f"El usuario dijo: '{texto}'. Determina si quiere 'mark_done' (marcar como completado), 'assign' (asignar a alguien más) o 'comment' (comentar en la tarea) o 'delete' (eliminar la tarea). Si no está claro, responde 'unknown'."
+        response = openai.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "system", "content": "Eres un asistente que analiza intenciones en plataformas de productividad."},
+                    {"role": "user", "content": prompt}]
+        )
+        return response.choices[0].message.content.strip().lower()
+    
+    def interpretar_accion_hubspot(texto):
+        prompt = f"El usuario dijo: '{texto}'. Determina si quiere 'follow_up' (hacer seguimiento a un cliente), 'close_deal' (cerrar un trato) o 'update_info' (actualizar la información de un cliente). Si no está claro, responde 'unknown'."
+        response = openai.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "system", "content": "Eres un asistente que analiza intenciones en un CRM de ventas."},
+                    {"role": "user", "content": prompt}]
+        )
+        return response.choices[0].message.content.strip().lower()
+
+    def interpretar_accion_archivos(texto):
+        prompt = f"El usuario dijo: '{texto}'. Determina si quiere 'download' (descargar archivo), 'share' (compartir con alguien más) o 'delete' (eliminar archivo). Si no está claro, responde 'unknown'."
+        response = openai.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "system", "content": "Eres un asistente que analiza intenciones en plataformas de almacenamiento en la nube."},
+                    {"role": "user", "content": prompt}]
+        )
+        return response.choices[0].message.content.strip().lower()
+
+    def interpretar_accion_mensajeria(texto):
+        prompt = f"El usuario dijo: '{texto}'. Determina si quiere 'reply' (responder un mensaje), 'react' (reaccionar con emoji) o 'mention' (mencionar a alguien). Si no está claro, responde 'unknown'."
+        response = openai.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "system", "content": "Eres un asistente que analiza intenciones en plataformas de mensajería."},
+                    {"role": "user", "content": prompt}]
+        )
+        return response.choices[0].message.content.strip().lower()
+
+    @app.route("/ultima-notificacion/gmail", methods=["GET"])
+    def obtener_ultimo_correo_gmail():
+        email = request.args.get("email")
+        try:
+            user = mongo.database.usuarios.find_one({'correo': email})
+            if not user:
+                return jsonify({"error": "Usuario no encontrado"}), 404
+
+            token = user.get("integrations", {}).get("Gmail", {}).get("token")
+            if not token:
+                return jsonify({"error": "Token no disponible"}), 400
+
+            headers = get_gmail_headers(token)
+            response = requests.get("https://www.googleapis.com/gmail/v1/users/me/messages?maxResults=1", headers=headers)
+
+            if response.status_code != 200:
+                return jsonify({"error": "Error al obtener correos"}), response.status_code
+
+            messages = response.json().get("messages", [])
+            if not messages:
+                return jsonify({"error": "No hay correos"})
+
+            message_id = messages[0]["id"]
+            response = requests.get(f"https://www.googleapis.com/gmail/v1/users/me/messages/{message_id}?format=full", headers=headers)
+            message = response.json()
+            headers_list = message.get("payload", {}).get("headers", [])
+
+            subject = next((h["value"] for h in headers_list if h["name"] == "Subject"), "(Sin asunto)")
+            sender = next((h["value"] for h in headers_list if h["name"] == "From"), "(Desconocido)")
+
+            return jsonify({
+                "id": message_id,
+                "from": sender,
+                "subject": subject,
+                "snippet": message.get("snippet", "(Sin contenido)")
+            })
+        except Exception as e:
+            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+
+    @app.route("/ultima-notificacion/outlook", methods=["GET"])
+    def obtener_ultimo_correo_outlook():
+        email = request.args.get("email")
+        try:
+            user = mongo.database.usuarios.find_one({'correo': email})
+            if not user:
+                return jsonify({"error": "Usuario no encontrado"}), 404
+
+            token = user.get("integrations", {}).get("Outlook", {}).get("token")
+            if not token:
+                return jsonify({"error": "Token no disponible"}), 400
+
+            headers = get_outlook_headers(token)
+            response = requests.get(
+                "https://graph.microsoft.com/v1.0/me/messages?$top=1&$filter=parentFolderId ne 'JunkEmail'",
+                headers=headers
+            )
+
+            if response.status_code != 200:
+                return jsonify({"error": "Error al obtener correos"}), response.status_code
+
+            messages = response.json().get("value", [])
+            if not messages:
+                return jsonify({"error": "No hay correos"}), 404
+
+            message = messages[0]
+            return jsonify({
+                "id": message["id"],
+                "from": message["from"]["emailAddress"]["address"],
+                "subject": message["subject"],
+                "snippet": message["bodyPreview"]
+            })
+        except Exception as e:
+            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+
+    @app.route("/ultima-notificacion/notion", methods=["GET"])
+    def obtener_ultima_notificacion_notion():
+        print("📢 Buscando última notificación en Notion...")
+
+        email = request.args.get("email")
+        print("📧 Email recibido:", email)
+
+        try:
+            user = mongo.database.usuarios.find_one({'correo': email})
+            if not user:
+                return jsonify({"error": "Usuario no encontrado"}), 404
+
+            notion_integration = user.get('integrations', {}).get('Notion', None)
+            notion_token = notion_integration.get('token') if notion_integration else None
+
+            if not notion_token:
+                return jsonify({"error": "Token de Notion no disponible"}), 400
+
+            headers = {
+                "Authorization": f"Bearer {notion_token}",
+                "Notion-Version": "2022-06-28",
+                "Content-Type": "application/json"
+            }
+
+            # 🔍 Buscar elementos ordenados por última edición
+            payload = {
+                "sort": {
+                    "direction": "descending",
+                    "timestamp": "last_edited_time"
+                },
+                "page_size": 5  # Buscamos más de 1 para poder filtrar
+            }
+
+            response = requests.post("https://api.notion.com/v1/search", headers=headers, json=payload)
+            notion_data = response.json()
+
+            if response.status_code != 200:
+                return jsonify({"error": "Error al obtener notificaciones de Notion"}), response.status_code
+
+            results = notion_data.get("results", [])
+            if not results:
+                return jsonify({"error": "No hay notificaciones"}), 404
+
+            # ❌ Filtrar elementos archivados
+            filtered_results = [
+                item for item in results
+                if not item.get("archived", False) and item.get("object") == "page"
+            ]
+            if not filtered_results:
+                return jsonify({"error": "No hay notificaciones activas"}), 404
+
+            # 📌 Tomar el más reciente después del filtro
+            last_update = filtered_results[0]
+
+            # 📝 Extraer título
+            title_prop = last_update.get("properties", {}).get("title", {}).get("title", [])
+            title = title_prop[0].get("text", {}).get("content", "(Sin título)") if title_prop else "(Sin título)"
+
+            return jsonify({
+                "from": "Notion",
+                "subject": title,
+                "snippet": f"Última edición: {last_update['last_edited_time']}",
+                "id": last_update["id"]
+            })
+
+        except Exception as e:
+            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+        
+    @app.route("/ultima-notificacion/slack", methods=["GET"])
+    def obtener_ultimo_mensaje_slack():
+        email = request.args.get("email")
+        try:
+            user = mongo.database.usuarios.find_one({'correo': email})
+            if not user:
+                return jsonify({"error": "Usuario no encontrado"}), 404
+
+            token = user.get("integrations", {}).get("Slack", {}).get("token")
+            if not token:
+                return jsonify({"error": "Token no disponible"}), 400
+
+            headers = get_slack_headers(token)
+
+            # 1️⃣ Obtener la lista de DMs del usuario
+            response = requests.get("https://slack.com/api/conversations.list?types=im", headers=headers)
+            response_json = response.json()
+
+            if not response_json.get("ok"):
+                return jsonify({"error": "Error al obtener conversaciones", "details": response_json}), 400
+
+            dms = response_json.get("channels", [])
+            if not dms:
+                return jsonify({"error": "No hay conversaciones directas"}), 404
+
+            # 2️⃣ Ordenar DMs por el último mensaje recibido (latest)
+            dms.sort(key=lambda x: x.get("latest", {}).get("ts", "0"), reverse=True)
+
+            # 3️⃣ Tomar el canal más reciente y obtener mensajes
+            for dm in dms:
+                channel_id = dm["id"]
+
+                history_response = requests.get(f"https://slack.com/api/conversations.history?channel={channel_id}&limit=1", headers=headers)
+                history_json = history_response.json()
+
+                if history_json.get("ok") and history_json.get("messages"):
+                    message = history_json["messages"][0]  # Último mensaje en ese canal
+                    return jsonify({
+                        "id": message["ts"],
+                        "name": "Slack",
+                        "lastMessage": message["text"],
+                        "from": f"Usuario {message['user']}",
+                        "subject": "Mensaje de Slack",
+                        "snippet": message["text"]
+                    })
+
+            return jsonify({"error": "No se encontraron mensajes"}), 404
+
+        except Exception as e:
+            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+
+    @app.route("/ultima-notificacion/onedrive", methods=["GET"])
+    def obtener_ultimo_archivo_onedrive():
+        email = request.args.get("email")
+        try:
+            user = mongo.database.usuarios.find_one({'correo': email})
+            if not user:
+                return jsonify({"error": "Usuario no encontrado"}), 404
+
+            token = user.get("integrations", {}).get("OneDrive", {}).get("token")
+            if not token:
+                return jsonify({"error": "Token no disponible"}), 400
+
+            headers = get_onedrive_headers(token)
+            response = requests.get("https://graph.microsoft.com/v1.0/me/drive/recent", headers=headers)
+
+            if response.status_code != 200:
+                return jsonify({"error": "Error al obtener archivos"})
+
+            files = response.json().get("value", [])
+            if not files:
+                return jsonify({"error": "No hay archivos recientes"})
+
+            file = files[0]
+            return jsonify({
+                "id": file["id"],
+                "name": file["name"],
+                "createdDateTime": file["createdDateTime"]
+            })
+        except Exception as e:
+            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+
+    @app.route("/ultima-notificacion/asana", methods=["GET"])
+    def obtener_ultima_notificacion_asana():
+        print("📢 Buscando última tarea en Asana...")
+
+        email = request.args.get("email")
+        print("📧 Email recibido:", email)
+
+        try:
+            user = mongo.database.usuarios.find_one({'correo': email})
+            if not user:
+                return jsonify({"error": "Usuario no encontrado"}), 404
+
+            token = user.get("integrations", {}).get("Asana", {}).get("token")
+            if not token:
+                return jsonify({"error": "Token no disponible"}), 400
+
+            headers = {"Authorization": f"Bearer {token.strip()}"}
+
+            # 🔹 Obtener workspace_id
+            workspaces_response = requests.get("https://app.asana.com/api/1.0/workspaces", headers=headers)
+            workspaces_data = workspaces_response.json()
+            print("🏢 Workspaces:", workspaces_data)
+
+            if workspaces_response.status_code != 200:
+                return jsonify({"error": "No se pudo obtener el workspace"}), workspaces_response.status_code
+
+            workspaces = workspaces_data.get("data", [])
+            if not workspaces:
+                return jsonify({"error": "No hay workspaces disponibles"}), 404
+
+            workspace_id = workspaces[0]["gid"]  # 🏢 Tomamos el primero
+
+            # 🔹 Obtener user_id del usuario autenticado
+            user_response = requests.get("https://app.asana.com/api/1.0/users/me", headers=headers)
+            user_data = user_response.json()
+            print("👤 Usuario:", user_data)
+
+            if user_response.status_code != 200:
+                return jsonify({"error": "No se pudo obtener el usuario"}), user_response.status_code
+
+            user_id = user_data.get("data", {}).get("gid")
+            if not user_id:
+                return jsonify({"error": "No se encontró el ID del usuario"}), 404
+
+            # 🔍 Obtener tareas asignadas al usuario en el workspace
+            response = requests.get(
+                f"https://app.asana.com/api/1.0/tasks?assignee={user_id}&workspace={workspace_id}&limit=1",
+                headers=headers
+            )
+            response_data = response.json()
+            print("🔍 Respuesta de Asana:", response_data)
+
+            if response.status_code != 200:
+                return jsonify({"error": "Error al obtener tareas", "details": response_data}), response.status_code
+
+            tasks = response_data.get("data", [])
+            if not tasks:
+                return jsonify({"error": "No hay tareas asignadas"}), 404
+
+            task = tasks[0]
+            return jsonify({
+                "from": "Asana",
+                "subject": task.get("name", "(Sin título)"),
+                "snippet": f"Tarea asignada: {task.get('name', '(Sin título)')}",
+                "id": task["gid"],
+            })
+
+        except Exception as e:
+            print("❌ Error inesperado:", str(e))
+            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+
+
+    @app.route("/ultima-notificacion/dropbox", methods=["GET"])
+    def obtener_ultimo_archivo_dropbox():
+        email = request.args.get("email")
+        try:
+            user = mongo.database.usuarios.find_one({'correo': email})
+            if not user:
+                return jsonify({"error": "Usuario no encontrado"}), 404
+
+            token = user.get("integrations", {}).get("Dropbox", {}).get("token")
+            if not token:
+                return jsonify({"error": "Token no disponible"}), 400
+
+            headers = get_dropbox_headers(token)
+            response = requests.post("https://api.dropboxapi.com/2/files/list_folder", headers=headers, json={"path": ""})
+
+            if response.status_code != 200:
+                return jsonify({"error": "Error al obtener archivos"}), response.status_code
+
+            entries = response.json().get("entries", [])
+            if not entries:
+                return jsonify({"error": "No hay archivos nuevos"})
+
+            file = entries[0]
+            return jsonify({
+                "from": "Dropbox",  # Nombre fijo para Dropbox
+                "subject": file["name"],  # Usamos el nombre del archivo como el asunto
+                "snippet": f"Archivo: {file['name']}",
+                "id": file["id"],
+                "server_modified": file.get("server_modified", "(Sin fecha de modificación)")  # Fecha de modificación
+            })
+
+        except Exception as e:
+            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+
+    @app.route("/ultima-notificacion/hubspot", methods=["GET"])
+    def obtener_ultima_notificacion_hubspot():
+        email = request.args.get("email")
+        try:
+            user = mongo.database.usuarios.find_one({'correo': email})
+            if not user:
+                return jsonify({"error": "Usuario no encontrado"}), 404
+
+            token = user.get("integrations", {}).get("HubSpot", {}).get("token")
+            if not token:
+                return jsonify({"error": "Token no disponible"}), 400
+
+            headers = get_hubspot_headers(token)
+
+            # Definir las URLs de los distintos objetos
+            object_types = ["deals", "companies", "contacts", "notes"]
+            notifications = []
+
+            # Iterar sobre los tipos de objetos (deals, companies, contacts, notes)
+            for obj_type in object_types:
+                # Obtener las últimas notificaciones para cada tipo de objeto, ordenadas por fecha de actualización
+                url = f"https://api.hubapi.com/crm/v3/objects/{obj_type}?limit=10&properties=dealname,name,firstname,lastname,hs_note_body&sort=-updatedAt"
+                response = requests.get(url, headers=headers)
+
+                # Verificar el estado de la respuesta
+                if response.status_code != 200:
+                    print(f"Error al obtener {obj_type}: {response.status_code}, {response.text}")
+                    continue  # Si hay un error en alguna de las peticiones, saltarla
+
+                data = response.json().get("results", [])
+                print(f"Datos obtenidos de {obj_type}: {data}")  # Verifica los datos que vienen de HubSpot
+
+                if not data:
+                    print(f"No hay datos para {obj_type}")  # Si no hay datos, saltamos este tipo de objeto
+                    continue
+
+                # Formatear las notificaciones al formato esperado para cada tipo de objeto
+                for item in data:
+                    if obj_type == "deals":
+                        notifications.append({
+                            "from": "HubSpot",
+                            "subject": item["properties"].get("dealname", "(Sin nombre de trato)"),
+                            "snippet": f"Negocio actualizado: {item['properties'].get('dealname', '(Sin nombre de trato)')}",
+                            "id": item["id"],
+                            "updated_at": item["properties"].get("updatedAt", "(Sin fecha de actualización)"),
+                        })
+                    elif obj_type == "companies":
+                        notifications.append({
+                            "from": "HubSpot",
+                            "subject": item["properties"].get("name", "(Sin nombre de empresa)"),
+                            "snippet": f"Compañía actualizada: {item['properties'].get('name', '(Sin nombre de empresa)')}",
+                            "id": item["id"],
+                            "updated_at": item["properties"].get("updatedAt", "(Sin fecha de actualización)"),
+                        })
+                    elif obj_type == "contacts":
+                        notifications.append({
+                            "from": "HubSpot",
+                            "subject": item["properties"].get("firstname", "(Sin nombre)"),
+                            "snippet": f"Contacto actualizado: {item['properties'].get('firstname', '(Sin nombre)')} {item['properties'].get('lastname', '')}",
+                            "id": item["id"],
+                            "updated_at": item["properties"].get("updatedAt", "(Sin fecha de actualización)"),
+                        })
+                    elif obj_type == "notes":
+                        notifications.append({
+                            "from": "HubSpot",
+                            "subject": item["properties"].get("hs_note_body", "(Sin contenido)"),
+                            "snippet": f"Nota actualizada: {item['properties'].get('hs_note_body', '(Sin contenido)')}",
+                            "id": item["id"],
+                            "updated_at": item["properties"].get("updatedAt", "(Sin fecha de actualización)"),
+                        })
+
+            # Si no hay notificaciones, responder con un mensaje adecuado
+            if not notifications:
+                return jsonify({"error": "No hay notificaciones nuevas"})
+
+            return jsonify(notifications)
+
+        except Exception as e:
+            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+
+    def convertir_fecha(timestamp):
+        if timestamp:
+            return datetime.utcfromtimestamp(int(timestamp) / 1000).strftime('%Y-%m-%d %H:%M:%S')
+        return "No definida"
+
+    @app.route("/ultima-notificacion/clickup", methods=["GET"])
+    def obtener_ultima_notificacion_clickup():
+        email = request.args.get("email")
+        try:
+            user = mongo.database.usuarios.find_one({'correo': email})
+            if not user:
+                return jsonify({"error": "Usuario no encontrado"}), 404
+
+            token = user.get("integrations", {}).get("ClickUp", {}).get("token")
+            if not token:
+                return jsonify({"error": "Token no disponible"}), 400
+
+            headers = get_clickup_headers(token)
+            response = requests.get("https://api.clickup.com/api/v2/team", headers=headers)
+
+            if response.status_code != 200:
+                return jsonify({"error": "Error al obtener notificaciones"}), response.status_code
+
+            teams = response.json().get("teams", [])
+            if not teams:
+                return jsonify({"error": "No hay equipos en ClickUp"})
+
+            team_id = teams[0]["id"]
+            response = requests.get(f"https://api.clickup.com/api/v2/team/{team_id}/task", headers=headers)
+
+            tasks = response.json().get("tasks", [])
+            if not tasks:
+                return jsonify({"error": "No hay tareas nuevas"})
+
+            task = tasks[0]
+            due_date = convertir_fecha(task.get("due_date"))
+
+            return jsonify({
+                "id": task["id"],
+                "name": task["name"],
+                "status": task["status"]["status"],
+                "due_date": due_date,
+                "from": "ClickUp",  # ✅ Para que no falle en el frontend
+                "subject": task["name"],  # ✅ Adaptación para React
+                "snippet": f"Estado: {task['status']['status']}, Fecha límite: {due_date}"
+            })
+        except Exception as e:
+            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+
+    @app.route("/ultima-notificacion/drive", methods=["GET"])
+    def obtener_ultimo_archivo_drive():
+        email = request.args.get("email")
+        try:
+            user = mongo.database.usuarios.find_one({'correo': email})
+            if not user:
+                return jsonify({"error": "Usuario no encontrado"}), 404
+
+            token = user.get("integrations", {}).get("Drive", {}).get("token")
+            if not token:
+                return jsonify({"error": "Token no disponible"}), 400
+
+            headers = get_google_drive_headers(token)
+            response = requests.get("https://www.googleapis.com/drive/v3/files?pageSize=1&orderBy=createdTime desc", headers=headers)
+
+            if response.status_code != 200:
+                return jsonify({"error": "Error al obtener archivos"}), response.status_code
+
+            files = response.json().get("files", [])
+            if not files:
+                return jsonify({"error": "No hay archivos nuevos"})
+
+            file = files[0]
+            return jsonify({
+                "id": file["id"],
+                "name": file["name"],
+                "createdTime": file["createdTime"]
+            })
+        except Exception as e:
+            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+
+    @app.route("/ultima-notificacion/teams", methods=["GET"])
+    def obtener_ultimo_mensaje_teams():
+        email = request.args.get("email")
+        try:
+            user = mongo.database.usuarios.find_one({'correo': email})
+            if not user:
+                return jsonify({"error": "Usuario no encontrado"}), 404
+
+            token = user.get("integrations", {}).get("Teams", {}).get("token")
+            if not token:
+                return jsonify({"error": "Token no disponible"}), 400
+
+            headers = get_teams_headers(token)
+            response = requests.get("https://graph.microsoft.com/v1.0/me/chats?$top=1", headers=headers)
+
+            if response.status_code != 200:
+                return jsonify({"error": "Error al obtener mensajes"}), response.status_code
+
+            chats = response.json().get("value", [])
+            if not chats:
+                return jsonify({"error": "No hay mensajes recientes"})
+
+            chat = chats[0]
+            return jsonify({
+                "id": chat["id"],
+                "last_message_preview": chat["lastMessagePreview"]["body"]["content"]
+            })
+        except Exception as e:
+            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+
+
+    @app.route("/accion-gmail", methods=["POST"])
+    def ejecutar_accion_gmail():
+        data = request.json
+        email = data.get("email")
+        user_text = data.get("action_text")
+        message_id = data.get("message_id")
+
+        user = mongo.database.usuarios.find_one({'correo': email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+
+        token = user.get("integrations", {}).get("Gmail", {}).get("token")
+        if not token:
+            return jsonify({"error": "Token no disponible"}), 400
+
+        action = interpretar_accion_email(user_text)
+        headers = get_gmail_headers(token)
+
+        if "delete" in action:
+            response = requests.post(f"https://www.googleapis.com/gmail/v1/users/me/messages/{message_id}/trash", headers=headers)
+            return jsonify({"success": "Correo eliminado"}) if response.status_code == 204 else jsonify({"success": "Correo eliminado"})
+
+        elif "reply" in action:
+            reply_text = data.get("reply_text", "")
+            response = requests.post("https://www.googleapis.com/gmail/v1/users/me/messages/send", headers=headers, json={"raw": reply_text})
+            return jsonify({"success": "Respuesta enviada"}) if response.status_code == 200 else jsonify({"error": "Error al responder correo"}), response.status_code
+
+        elif "spam" in action:
+            response = requests.post(f"https://www.googleapis.com/gmail/v1/users/me/messages/{message_id}/modify",
+                                    headers=headers, json={"addLabelIds": ["SPAM"], "removeLabelIds": ["INBOX"]})
+            print(response)
+            return jsonify({"success": "Correo marcado como spam"}) if response.status_code == 200 else jsonify({"error": "Error al marcar correo como spam"}), response.status_code
+
+        return jsonify({"error": "Acción no reconocida"}), 400
+
+    @app.route("/accion-outlook", methods=["POST"])
+    def ejecutar_accion_outlook():
+        data = request.json
+        email = data.get("email")
+        user_text = data.get("action_text")
+        message_id = data.get("message_id")
+
+        user = mongo.database.usuarios.find_one({'correo': email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+
+        token = user.get("integrations", {}).get("Outlook", {}).get("token")
+        if not token:
+            return jsonify({"error": "Token no disponible"}), 400
+
+        action = interpretar_accion_email(user_text)
+        headers = get_outlook_headers(token)
+
+        if "delete" in action:
+            response = requests.delete(f"https://graph.microsoft.com/v1.0/me/messages/{message_id}", headers=headers)
+            return jsonify({"success": "Correo eliminado"}) if response.status_code == 204 else jsonify({"success": "Correo eliminado"})
+
+        elif "reply" in action:
+            reply_text = data.get("reply_text", "")
+            response = requests.post(f"https://graph.microsoft.com/v1.0/me/messages/{message_id}/reply",
+                                    headers=headers, json={"comment": reply_text})
+            return jsonify({"success": "Respuesta enviada"}) if response.status_code == 200 else jsonify({"error": "Error al responder correo"}), response.status_code
+
+        elif "spam" in action:
+            response = requests.post(f"https://graph.microsoft.com/v1.0/me/messages/{message_id}/move",
+                                    headers=headers, json={"destinationId": "JunkEmail"})
+            return jsonify({"success": "Correo marcado como spam"}) if response.status_code == 200 else jsonify({"success": "Correo marcado como spam"})
+
+        return jsonify({"error": "Acción no reconocida"}), 400
+
+    @app.route("/accion-notion", methods=["POST"])
+    def ejecutar_accion_notion():
+        data = request.json
+        email = data.get("email")
+        user_text = data.get("action_text")
+        page_id = data.get("message_id")
+
+        user = mongo.database.usuarios.find_one({'correo': email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+
+        token = user.get("integrations", {}).get("Notion", {}).get("token")
+        if not token:
+            return jsonify({"error": "Token no disponible"}), 400
+
+        action = interpretar_accion_productividad(user_text)
+        headers = get_notion_headers(token)
+
+        if "mark_done" in action:
+            response = requests.patch(f"https://api.notion.com/v1/pages/{page_id}",
+                                    headers=headers,
+                                    json={"properties": {"status": {"select": {"name": "Listo"}}}})
+            return jsonify({"success": "Página marcada como completada"}) if response.status_code == 200 else jsonify({"error": "Error al actualizar estado"}), response.status_code
+
+        elif "delete" in action:
+            response = requests.patch(f"https://api.notion.com/v1/pages/{page_id}",
+                                    headers=headers, json={"archived": True})  # No puedes eliminar, solo archivar
+            return jsonify({"success": "Página archivada"}) if response.status_code == 200 else jsonify({"error": "Error al archivar"}), response.status_code
+
+
+        return jsonify({"error": "Acción no reconocida"}), 400
+
+    @app.route("/accion-drive", methods=["POST"])
+    def ejecutar_accion_drive():
+        data = request.json
+        email = data.get("email")
+        user_text = data.get("action_text")
+        file_id = data.get("file_id")
+
+        user = mongo.database.usuarios.find_one({'correo': email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+
+        token = user.get("integrations", {}).get("Drive", {}).get("token")
+        if not token:
+            return jsonify({"error": "Token no disponible"}), 400
+
+        action = interpretar_accion_archivos(user_text)
+        headers = get_google_drive_headers(token)
+
+        if "delete" in action:
+            response = requests.delete(f"https://www.googleapis.com/drive/v3/files/{file_id}", headers=headers)
+            return jsonify({"success": "Archivo eliminado"}) if response.status_code == 204 else jsonify({"error": "Error al eliminar archivo"}), response.status_code
+
+        elif "rename" in action:
+            new_name = data.get("new_name", "")
+            response = requests.patch(f"https://www.googleapis.com/drive/v3/files/{file_id}",
+                                    headers=headers, json={"name": new_name})
+            return jsonify({"success": "Archivo renombrado"}) if response.status_code == 200 else jsonify({"error": "Error al renombrar archivo"}), response.status_code
+
+        return jsonify({"error": "Acción no reconocida"}), 400
+
+    @app.route("/accion-slack", methods=["POST"])
+    def ejecutar_accion_slack():
+        data = request.json
+        email = data.get("email")
+        user_text = data.get("action_text")
+        message_ts = data.get("message_id")
+        channel = data.get("channel")
+
+        user = mongo.database.usuarios.find_one({'correo': email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+
+        token = user.get("integrations", {}).get("Slack", {}).get("token")
+        if not token:
+            return jsonify({"error": "Token no disponible"}), 400
+
+        action = interpretar_accion_mensajeria(user_text)
+        headers = get_slack_headers(token)
+
+        if "reply" in action:
+            reply_text = data.get("reply_text", "")
+            response = requests.post("https://slack.com/api/chat.postMessage",
+                                    headers=headers, json={"channel": channel, "thread_ts": message_ts, "text": reply_text})
+            return jsonify({"success": "Mensaje respondido"}) if response.status_code == 200 else jsonify({"error": "Error al responder"}), response.status_code
+
+        return jsonify({"error": "Acción no reconocida"}), 400
+
+
+    @app.route("/accion-asana", methods=["POST"])
+    def ejecutar_accion_asana():
+        data = request.json
+        email = data.get("email")
+        user_text = data.get("action_text")
+        task_id = data.get("message_id")
+
+        user = mongo.database.usuarios.find_one({'correo': email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+
+        token = user.get("integrations", {}).get("Asana", {}).get("token")
+        if not token:
+            return jsonify({"error": "Token no disponible"}), 400
+
+        action = interpretar_accion_productividad(user_text)
+        headers = get_asana_headers(token)
+
+        if "complete" in action:
+            # Realizar la solicitud PUT para marcar la tarea como completada
+            response = requests.put(f"https://app.asana.com/api/1.0/tasks/{task_id}", headers=headers, json={"data": {"completed": True}})
+            if response.status_code == 200:
+                return jsonify({"success": "Tarea completada"})
+            else:
+                return jsonify({"error": "Error al completar tarea"}), response.status_code
+
+        elif "delete" in action:
+            # Realizar la solicitud DELETE para eliminar la tarea
+            response = requests.delete(f"https://app.asana.com/api/1.0/tasks/{task_id}", headers=headers)
+            if response.status_code == 204:
+                return jsonify({"success": "Tarea eliminada"})
+            else:
+                return jsonify({"success": "Tarea eliminada"})
+
+        return jsonify({"error": "Acción no reconocida"}), 400
+
+    @app.route("/accion-clickup", methods=["POST"])
+    def ejecutar_accion_clickup():
+        data = request.json
+        email = data.get("email")
+        user_text = data.get("action_text")
+        task_id = data.get("message_id")
+
+        user = mongo.database.usuarios.find_one({'correo': email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+
+        token = user.get("integrations", {}).get("ClickUp", {}).get("token")
+        if not token:
+            return jsonify({"error": "Token no disponible"}), 400
+
+        action = interpretar_accion_productividad(user_text)
+        print(action)
+        headers = {
+            "Authorization": token,
+            "Content-Type": "application/json"
+        }
+    
+        if "mark_done" in action:
+            response = requests.put(f"https://api.clickup.com/api/v2/task/{task_id}", headers=headers, json={"status": "complete"})
+            return jsonify({"success": "Tarea completada"}) if response.status_code == 200 else jsonify({"error": "Error al completar tarea"}), response.status_code
+
+        elif "delete" in action:
+            response = requests.delete(f"https://api.clickup.com/api/v2/task/{task_id}", headers=headers)
+            return jsonify({"success": "Tarea eliminada"}) if response.status_code == 204 else jsonify({"success": "Tarea eliminada"})
+
+        return jsonify({"error": "Acción no reconocida"}), 400
+
+    @app.route("/accion-hubspot", methods=["POST"])
+    def ejecutar_accion_hubspot():
+        data = request.json
+        email = data.get("email")
+        user_text = data.get("action_text")
+        deal_id = data.get("deal_id")
+
+        user = mongo.database.usuarios.find_one({'correo': email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+
+        token = user.get("integrations", {}).get("HubSpot", {}).get("token")
+        if not token:
+            return jsonify({"error": "Token no disponible"}), 400
+
+        action = interpretar_accion_hubspot(user_text)
+        headers = get_hubspot_headers(token)
+
+        if "update" in action:
+            new_stage = data.get("new_stage", "")
+            response = requests.patch(f"https://api.hubapi.com/crm/v3/objects/deals/{deal_id}", headers=headers, json={"properties": {"dealstage": new_stage}})
+            return jsonify({"success": "Negocio actualizado"}) if response.status_code == 200 else jsonify({"error": "Error al actualizar negocio"}), response.status_code
+
+        return jsonify({"error": "Acción no reconocida"}), 400
+
+    @app.route("/accion-dropbox", methods=["POST"])
+    def ejecutar_accion_dropbox():
+        data = request.json
+        email = data.get("email")
+        user_text = data.get("action_text")
+        file_path = data.get("file_path")
+
+        user = mongo.database.usuarios.find_one({'correo': email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+
+        token = user.get("integrations", {}).get("Dropbox", {}).get("token")
+        if not token:
+            return jsonify({"error": "Token no disponible"}), 400
+
+        action = interpretar_accion_archivos(user_text)
+        headers = get_dropbox_headers(token)
+
+        if "delete" in action:
+            response = requests.post("https://api.dropboxapi.com/2/files/delete_v2", headers=headers, json={"path": file_path})
+            return jsonify({"success": "Archivo eliminado"}) if response.status_code == 200 else jsonify({"error": "Error al eliminar archivo"}), response.status_code
+
+        return jsonify({"error": "Acción no reconocida"}), 400
+
+    @app.route("/accion-onedrive", methods=["POST"])
+    def ejecutar_accion_onedrive():
+        data = request.json
+        email = data.get("email")
+        user_text = data.get("action_text")
+        file_id = data.get("file_id")
+
+        user = mongo.database.usuarios.find_one({'correo': email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+
+        token = user.get("integrations", {}).get("OneDrive", {}).get("token")
+        if not token:
+            return jsonify({"error": "Token no disponible"}), 400
+
+        action = interpretar_accion_archivos(user_text)
+        headers = get_onedrive_headers(token)
+
+        if "delete" in action:
+            response = requests.delete(f"https://graph.microsoft.com/v1.0/me/drive/items/{file_id}", headers=headers)
+            return jsonify({"success": "Archivo eliminado"}) if response.status_code == 204 else jsonify({"error": "Error al eliminar archivo"}), response.status_code
+
+        return jsonify({"error": "Acción no reconocida"}), 400
+
+    @app.route("/accion-teams", methods=["POST"])
+    def ejecutar_accion_teams():
+        data = request.json
+        email = data.get("email")
+        user_text = data.get("action_text")
+        message_id = data.get("message_id")
+        channel_id = data.get("channel_id")
+
+        user = mongo.database.usuarios.find_one({'correo': email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+
+        token = user.get("integrations", {}).get("Teams", {}).get("token")
+        if not token:
+            return jsonify({"error": "Token no disponible"}), 400
+
+        action = interpretar_accion_mensajeria(user_text)
+        headers = get_teams_headers(token)
+
+        if "reply" in action:
+            reply_text = data.get("reply_text", "")
+            response = requests.post(f"https://graph.microsoft.com/v1.0/teams/{channel_id}/messages/{message_id}/replies",
+                                    headers=headers, json={"body": {"content": reply_text}})
+            return jsonify({"success": "Mensaje respondido"}) if response.status_code == 201 else jsonify({"error": "Error al responder"}), response.status_code
+
+        return jsonify({"error": "Acción no reconocida"}), 400
+
+

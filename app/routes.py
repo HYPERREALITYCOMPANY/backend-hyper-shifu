@@ -1,6 +1,7 @@
 from flask import redirect, Blueprint, url_for, session, request, jsonify
 import requests
 import time
+import pytz
 from dateutil.relativedelta import relativedelta
 from requests_oauthlib import OAuth2Session
 from config import Config
@@ -634,8 +635,8 @@ def setup_routes(app, mongo):
 
     def get_hubspot_headers(token):
         return {
-            'Authorization': f"Bearer {token}",
-            'Content-Type': 'application/json'
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
         }
 
     @app.route('/search/hubspot', methods=['GET'])
@@ -789,6 +790,7 @@ def setup_routes(app, mongo):
 
         return jsonify(search_results)
 
+
     def extract_links(results, key):
         if isinstance(results, list):
             return [item.get(key) for item in results if key in item]
@@ -798,6 +800,8 @@ def setup_routes(app, mongo):
     def generate_prompt(query, search_results):
         # Extraer solo la información relevante de cada fuente
         results = {}
+
+        print("PROMPT",search_results)
 
         # Gmail Results (extraer información relevante)
         gmail_results = "\n".join([ 
@@ -836,7 +840,7 @@ def setup_routes(app, mongo):
                 contacts = hubspot_data["contacts"]
                 if isinstance(contacts, list) and contacts:
                     hubspot_results.append("Contactos:\n" + "\n".join([ 
-                        f"Nombre: {contact.get('firstname', 'N/A') or ''} {contact.get('lastname', 'N/A') or ''} | Correo: {contact.get('email', 'N/A') or ''} | Teléfono: {contact.get('phone', 'N/A') or ''} | Company: {contact.get('company', 'N/A')}"
+                        f"Nombre: {contact.get('firstname', 'N/A')} {contact.get('lastname', 'N/A')} | Correo: {contact.get('email', 'N/A')} | Teléfono: {contact.get('phone', 'N/A')} | Compañía: {contact.get('company', 'N/A')}"
                         for contact in contacts
                     ]))
 
@@ -844,15 +848,15 @@ def setup_routes(app, mongo):
                 companies = hubspot_data["companies"]
                 if isinstance(companies, list) and companies:
                     hubspot_results.append("Compañías:\n" + "\n".join([ 
-                        f"Compañía: {company.get('company', 'N/A')} | Teléfono: {company.get('phone', 'N/A')}"
+                        f"Nombre: {company.get('name', 'N/A')} | Industria: {company.get('industry', 'N/A')} | Tamaño: {company.get('size', 'N/A')}"
                         for company in companies
                     ]))
 
             if "deals" in hubspot_data:
                 deals = hubspot_data["deals"]
                 if isinstance(deals, list) and deals:
-                    hubspot_results.append("Deals:\n" + "\n".join([ 
-                        f"Nombre: {deal.get('dealname', 'N/A')} | Estado: {deal.get('dealstage', 'N/A')}"
+                    hubspot_results.append("Negocios:\n" + "\n".join([ 
+                        f"Nombre: {deal.get('dealname', 'N/A')} | Estado: {deal.get('dealstage', 'N/A')} | Monto: {deal.get('amount', 'N/A')}"
                         for deal in deals
                     ]))
 
@@ -903,6 +907,11 @@ def setup_routes(app, mongo):
             for msg in search_results.get('teams', []) if isinstance(msg, dict)
         ]) or "No se encontraron mensajes relacionados en Teams."
 
+        google_drive_results = "\n".join([
+            f"Archivo: {file.get('title', 'Sin nombre')} | Tipo: {file.get('type', 'Desconocido')} | Enlace: {file.get('url', 'Sin enlace')}"
+            for file in search_results.get('googledrive', []) if isinstance(file, dict)
+        ]) or "No se encontraron archivos relacionados en Google Drive."
+        
         # Crear el prompt final
         prompt = f"""Respuesta concisa a la consulta: "{query}"
 
@@ -929,6 +938,9 @@ def setup_routes(app, mongo):
         Dropbox:
         {dropbox_results}
 
+        Google Drive:
+        {google_drive_results}
+
         Asana:
         {asana_results}
 
@@ -942,6 +954,7 @@ def setup_routes(app, mongo):
         Quiero que respondas a la query que mando el usuario en base a la informacion que se te agrego por cada api, solo puedes y debes usar esa información para contestar
         - En dado caso que no exista información en ninguna api, contesta de manera amable que si puede mejorar su prompt o lo que desea encontrar
         - En dado caso exista la información en una api y en unas no, solo contesta con la que si existe la información.
+        - En el caso de HubSpot, cuando se soliciten contactos de una compañía y el campo 'compañía' esté vacío, valida que el nombre de la empresa pueda obtenerse del dominio del correo electrónico (es decir, todo lo que sigue después del '@'). Si el dominio es, por ejemplo, 'empresa.com', entonces considera que la empresa es 'empresa'. Asegúrate de no responder con registros irrelevantes y solo muestre los resultados de contactos relacionados con el dominio del correo o con el nombre de la compañía.
         Necesito que tu respuesta sea concisa a la query enviada por el usuario (toma el formato de "Suggested Answers" de Guru para guiarte) incluye emojis de ser posible para hacer mas amigable la interacción con el usuario.
         No respondas 'Respuesta:' si no que responde de manera natural como si fuese una conversación, tampoco agregues enlaces.
         Analiza antes de responder ya que algunas apis te devuelven información general, si tu piensas que no se responde de manera amena la pregunta contesta de manera amable si puede mejorar su prompt o que desea encontrar
@@ -1117,19 +1130,23 @@ def setup_routes(app, mongo):
                 prompt = (
                     f"Interpreta el siguiente mensaje del usuario: '{last_message}'. "
                     f"TEN EN CUENTA QUE LA FECHA DE HOY ES {hoy}\n"
-                    f"1. LO MÁS IMPORTANTE: Identifica si es un saludo, una solicitud o si se refiere a la respuesta anterior enviada por la IA.\n"
+                    f"1. LO MÁS IMPORTANTE: Identifica si es un saludo, una solicitud GET o POST, o si se refiere a la respuesta anterior enviada por la IA.\n"
                     f"   - Si es un saludo, responde con 'Es un saludo'.\n"
-                    f"   - Si es una solicitud, responde con 'Es una solicitud'.\n"
-                    f"En caso de ser una solicitud, desglosa las partes relevantes para cada API (Gmail, Notion, Slack, HubSpot, Outlook, ClickUp, Dropbox, Asana, Google Drive, OneDrive, Teams).\n"
+                    f"   - Si es una solicitud GET, responde con 'Es una solicitud GET'.\n"
+                    f"   - Si es una solicitud POST, responde con 'Es una solicitud POST'.\n"
+                    f"   - Si es una solicitud que menciona algo sobre una conversación o respuesta anterior (ejemplo: 'de lo que hablamos antes', 'en la conversación anterior', 'acerca del mensaje previo', 'respuesta anterior', 'de que trataba', etc), responde con 'Se refiere a la respuesta anterior'.\n"
+                    f"En caso de ser una solicitud GET o POST, desglosa las partes relevantes para cada API (Gmail, Notion, Slack, HubSpot, Outlook, ClickUp, Dropbox, Asana, Google Drive, OneDrive, Teams).\n"
                     f"Asegúrate de lo siguiente:\n"
+                    f"ESPECIFICAMENTE SI Y SOLO SI LA SOLICITUD ES TIPO GET"
                     f"- No coloques fechas en ninguna query, ni after ni before'.\n"
                     f"- Si se menciona un nombre propio (detectado si hay una combinación de nombre y apellido), responde 'from: <nombre completo>'.\n"
                     f"- Si se menciona un correo electrónico, responde 'from: <correo mencionado>'. Usa una expresión regular para verificar esto.\n"
                     f"- Usa la misma query de Gmail también para Outlook.\n"
+                    f"- Usa la misma query de Notion en Asana y Clickup"
                     f"- En HubSpot, identifica qué tipo de objeto busca el usuario (por ejemplo: contacto, compañía, negocio, empresa, tarea, etc.) y ajusta la query de forma precisa. "
                     f"El valor debe seguir esta estructura: \"<tipo de objeto> <query>\", como por ejemplo \"contacto osuna\" o \"compañía osuna\".\n\n"
-                    f"Para Slack, adapta la query de Gmail. \n\n"
-                    f"En ClickUp, si el usuario menciona tareas o proyectos (tambien toma en cuenta siempre la query de notion (es decir si existe query de notion, existe query de clickup) para hacer esta), ajusta la consulta a su nombre o identificador específico.\n"
+                    f"Para Slack, adapta la query de Gmail.\n\n"
+                    f"En ClickUp, si el usuario menciona tareas o proyectos (también toma en cuenta siempre la query de Notion), ajusta la consulta a su nombre o identificador específico.\n"
                     f"""
                         Genera una consulta para Dropbox, OneDrive y Google Drive basada en el mensaje del usuario.
                             
@@ -1146,21 +1163,58 @@ def setup_routes(app, mongo):
                     f"- Si menciona un tema específico sin un contacto, pero da detalles del contenido, usa \"message:<palabras clave>\".\n"
                     f"- Si el usuario usa términos como 'mensaje sobre', 'hablamos de', 'tema de conversación', extrae las palabras clave y úsalas en \"message:<palabras clave>\".\n"
                     f"- Si no se puede interpretar una búsqueda específica para Teams, devuelve \"N/A\".\n"
-                    f"- SI EL USUARIO MENCIONA EXPLICITAMENTE 'TEAMS' O 'MICROSOFT TEAMS' HAZ LA QUERY"
+                    f"- SI EL USUARIO MENCIONA EXPLICITAMENTE 'TEAMS' O 'MICROSOFT TEAMS' HAZ LA QUERY\n"
+                     f"- SI EL USUARIO MENCIONA EXPLICITAMENTE 'TEAMS' O 'MICROSOFT TEAMS' HAZ LA QUERY"
                     f"Estructura del JSON:\n"
                     f"{{\n"
                     f"    \"gmail\": \"<query para Gmail> Se conciso y evita palabras de solicitud y solo pon la query y evita los is:unread\",\n"
-                    f"    \"notion\": \"<query para Notion o 'N/A' si no aplica, siempre existira mediante se mencionen status de proyectos o tareas. O se mencionen compañias, empresas o proyectos en la query>\",\n"
-                    f"    \"slack\": \"<query para Slack o 'N/A' si no aplica, usa la de Gmail pero más redireccionada a como un mensaje, si es una solicitud, hazla más informal y directa>\",\n"
-                    f"    \"hubspot\": \"Si el usuario menciona 'contactos de <empresa o nombre>', responde 'contacto <empresa o nombre>'. Si menciona 'empresas de <sector>', responde 'empresa <sector>'. Si menciona 'negocios de <sector>' o 'negocio de <empresa>', responde 'negocio <sector o empresa>'. Si menciona 'compañías de <sector>', responde 'compañía <sector>'. Si el usuario menciona un contacto específico con un nombre propio y pide información (como número, correo, etc.), responde 'contacto <nombre> (<campo solicitado>)'.\",\n"
+                    f"    \"notion\": \"<query para Notion o 'N/A' si no aplica, siempre existira mediante se mencionen status de proyectos o tareas. O se mencionen compañias, empresas o proyectos en la query>\",\n"
+                    f"    \"slack\": \"<query para Slack o 'N/A' si no aplica, usa la de Gmail pero más redireccionada a como un mensaje, si es una solicitud, hazla más informal y directa>\",\n"
+                    f"    \"hubspot\": \"Si el usuario menciona 'contactos de <empresa o nombre>', responde 'contacto <empresa o nombre>'. Si menciona 'empresas de <sector>', responde 'empresa <sector>'. Si menciona 'negocio >nombre>' o 'negocio de <empresa>', responde 'negocio <sector o empresa>'. Si menciona 'compañías de <sector>', responde 'compañía <sector>'. Si el usuario menciona un contacto específico con un nombre propio y pide información (como número, correo, etc.), responde 'contacto <nombre> (<campo solicitado>)'.\",\n"
                     f"    \"outlook\": \"<query para Outlook, misma que Gmail>\",\n"
-                    f"    \"clickup\": \"<query para ClickUp, o 'N/A' si no aplica. Siempre existira si y solo si se mencionan status de proyectos, tareas, compañías, empresas, proyectos específicos o fechas en la query. Además, se realizará la búsqueda en tareas, calendarios, diagramas de Gantt y tablas relacionadas con el equipo y las tareas asociadas, dependiendo de los elementos presentes en la consulta.>"
+                    f"    \"clickup\": \"<query para ClickUp, o 'N/A' si no aplica. Siempre existira si y solo si se mencionan status de proyectos, tareas, compañías, empresas, proyectos específicos o fechas en la query. Además, se realizará la búsqueda en tareas, calendarios, diagramas de Gantt y tablas relacionadas con el equipo y las tareas asociadas, dependiendo de los elementos presentes en la consulta.>"
                     f"    \"dropbox\": \"<query para Dropbox o 'N/A' si no aplica>\",\n"
                     f"    \"asana\": \"<query para Asana o 'N/A' si no aplica>\",\n"
                     f"    \"googledrive\": \"<query para Google Drive o 'N/A' si no aplica>\",\n"
                     f"    \"onedrive\": \"<query para OneDrive o 'N/A' si no aplica>\",\n"
                     f"    \"teams\": \"<query para Teams o 'N/A' si no aplica>\"\n"
                     f"}}\n\n"
+                    f"El JSON debe incluir solo información relevante extraída del mensaje del usuario y ser fácilmente interpretable por sistemas automatizados."
+                    f"Si el mensaje del usuario no puede ser interpretado para una de las aplicaciones, responde 'N/A' o 'No se puede interpretar'." 
+                    f""
+                    f"ESPECIFICAMENTE SI Y SOLO SI LA SOLICITUD ES TIPO POST:\n"
+                    f"OBLIGATORIO: Responde con 'es una solicitud post' seguido del JSON de abajo\n"
+                    f"Detecta las acciones solicitadas por el usuario y genera la consulta para la API correspondiente:\n"
+                    f"1. **Crear o Agregar elementos** (acciones como 'crear', 'agregar', 'añadir', 'subir', 'agendar'):\n"
+                    f"   - Ejemplo: Crear un contacto, tarea, archivo. (Esto se envía a Notion, Asana, ClickUp)\n"
+                    f"2. **Modificar o Editar elementos** (acciones como 'editar', 'modificar', 'actualizar', 'mover'):\n"
+                    f"   - Ejemplo: Editar una tarea, archivo. (Esto se envía a Notion, Asana, ClickUp)\n"
+                    f"3. **Eliminar elementos** (acciones como 'eliminar', 'borrar', 'suprimir'):\n"
+                    f"   - Ejemplo: Eliminar un contacto, tarea, archivo. (Esto se envía a Notion, Asana, ClickUp)\n"
+                    f"   - Si se menciona **'eliminar correos'**, debe enviarse a **Gmail** y **Outlook**\n"
+                    f"   - Si se menciona **'elimina la cita'** o 'elimina la reunion' debe enviarse a **Gmail**\n"
+                    f"4. **Mover elementos** (acciones como 'mover', 'trasladar', 'archivar', 'poner en spam'):\n"
+                    f"   - Ejemplo: Mover un archivo o correo a una carpeta, o poner correos en spam. (Esto se envía a **Gmail** y **Outlook**)\n"
+                    f"5. **Enviar o compartir** (acciones como 'enviar', 'compartir', 'enviar por correo'):\n"
+                    f"   - Ejemplo: Enviar un correo (Esto se envía a Gmail, Outlook, Teams, Slack)\n"
+                    f"6. **Agendar o Programar** (acciones como 'agendar', 'programar'):\n"
+                    f"   - Ejemplo: Agendar cita en Gmail \n"
+                    f"Cuando detectes una solicitud de POST, identifica a qué servicios corresponde basándote en las acciones. Usa 'N/A' para las APIs que no apliquen.\n"
+                    f"**Generación de Consulta**: Asegúrate de que las consultas sean claras y sin palabras adicionales como '¿Podrías...?'. Utiliza los datos específicos proporcionados (nombre, fecha, tarea, etc.) para generar las queries."
+                    f"**Estructura del JSON para la respuesta (con acciones del usuario):**\n"
+                    f"{{\n"
+                    f"    \"gmail\": \"<query para Gmail, como 'Eliminar todos los correos de Dominos Pizza' o 'Mover a spam los correos de tal empresa'>\",\n"
+                    f"    \"notion\": \"<query para Notion, como 'Marca como completada la tarea tal'>\",\n"
+                    f"    \"slack\": \"<query para Slack, adaptada de forma informal si aplica>\",\n"
+                    f"    \"hubspot\": \"<query para HubSpot si se menciona contacto o negocio>\",\n"
+                    f"    \"outlook\": \"<query para Outlook, igual que Gmail>\",\n"
+                    f"    \"clickup\": \"<query para ClickUp, 'N/A' si no aplica>\",\n"
+                    f"    \"dropbox\": \"<query para Dropbox, 'N/A' si no aplica>\",\n"
+                    f"    \"asana\": \"<query para Asana, 'N/A' si no aplica>\",\n"
+                    f"    \"googledrive\": \"<query para Google Drive, 'N/A' si no aplica>\",\n"
+                    f"    \"onedrive\": \"<query para OneDrive, 'N/A' si no aplica>\",\n"
+                    f"    \"teams\": \"<query para Teams, 'N/A' si no aplica>\"\n"
+                    f"}}\n"
                     f"El JSON debe incluir solo información relevante extraída del mensaje del usuario y ser fácilmente interpretable por sistemas automatizados. "
                     f"Usa 'N/A' si una API no aplica a la solicitud.\n"
                     f"Los saludos posibles que deberías detectar incluyen, pero no se limitan a: 'Hola', '¡Hola!', 'Buenos días', 'Buenas', 'Hey', 'Ciao', 'Bonjour', 'Hola a todos', '¡Qué tal!'. "
@@ -1170,14 +1224,13 @@ def setup_routes(app, mongo):
                 if last_ai_response:
                     prompt += f"\nLa última respuesta de la IA fue: '{last_ai_response}'.\n"
 
-
                 response = openai.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[
                         {"role": "system", "content": "Eres un asistente que identifica saludos o solicitudes."},
                         {"role": "user", "content": prompt}
                     ],
-                    max_tokens=700
+                    max_tokens=1800
                 )
                 ia_interpretation = response.choices[0].message.content.strip().lower()
                 print(ia_interpretation)
@@ -1199,7 +1252,7 @@ def setup_routes(app, mongo):
 
                     ia_response = response_greeting.choices[0].message.content.strip()
 
-                elif 'solicitud' in ia_interpretation:
+                elif 'get' in ia_interpretation:
                     print("SOLICITUUUD")
                     match = re.search(r'\{[^}]*\}', ia_interpretation, re.DOTALL | re.MULTILINE)
                     print(match)
@@ -1314,7 +1367,8 @@ def setup_routes(app, mongo):
                             links = extract_links_from_datas(datas=search_results_data)
                             print("LINKS", links)
                             prompt = generate_prompt(last_message, search_results_data)
-                            last_ai_response = prompt
+                            global last_response
+                            last_response = prompt
                             response = openai.chat.completions.create(
                                 model="gpt-3.5-turbo",
                                 messages=[{
@@ -1329,25 +1383,84 @@ def setup_routes(app, mongo):
                             responses = response.choices[0].message.content.strip()
                             print("RESPONSES: ",responses)
 
-                            if not ia_response:
+                            if not responses:
                                 return jsonify({"error": "La respuesta de la IA está vacía"}), 500
 
                             return jsonify({"message": responses, "links": links})
                         except Exception as e:
                             return jsonify({"error": f"Error al procesar la solicitud: {str(e)}"}), 500
-                elif 'hace referencia a la respuesta anterior' in ia_interpretation:
-                                # Si el usuario hace referencia a la respuesta anterior, inclúyela en el prompt
-                                reference_prompt = f"El usuario dijo: '{last_message}'\n"
-                                reference_prompt += f"La última respuesta de la IA fue: '{last_ai_response}'.\n"
-                                reference_prompt += "Responde al usuario considerando la respuesta anterior."
+                elif 'post' in ia_interpretation:
+                    print("SOLICITUD POST")
+                    match = re.search(r'\{[^}]*\}', ia_interpretation, re.DOTALL | re.MULTILINE)
+                    print(match)
+                    if match:
+                        try:
+                            queries = json.loads(match.group(0))
+                            print(queries)    
+                            gmail_data = queries.get('gmail', {})
+                            notion_data = queries.get('notion', {})
+                            slack_data = queries.get('slack', {})
+                            hubspot_data = queries.get('hubspot', {})
+                            outlook_data = queries.get('outlook', {})
+                            clickup_data = queries.get('clickup', {})
+                            dropbox_data = queries.get('dropbox', {})
+                            asana_data = queries.get('asana', {})
+                            googledrive_data = queries.get('googledrive', {})
+                            onedrive_data = queries.get('onedrive', {})
+                            teams_data = queries.get('teams', {})
 
-                                response_reference = openai.chat.completions.create(
-                                    model="gpt-3.5-turbo",
-                                    messages=[{"role": "system", "content": "Eres un asistente que recuerda la última respuesta."},
-                                            {"role": "user", "content": reference_prompt}],
-                                    max_tokens=150
-                                )
-                                ia_response = response_reference.choices[0].message.content.strip()
+                            email = request.args.get('email')
+                            if not email:
+                                return jsonify({"error": "Se deben proporcionar tanto el email como los datos"}), 400
+
+                            try:
+                                user = mongo.database.usuarios.find_one({'correo': email})
+                                if not user:
+                                    return jsonify({"error": "Usuario no encontrado"}), 404
+
+                                post_results_data = {}
+                                apis = {
+                                    'gmail': post_to_gmail(gmail_data),
+                                    'notion': post_to_notion(notion_data),
+                                    # 'slack': post_to_slack,
+                                    # 'hubspot': post_to_hubspot,
+                                    'outlook': post_to_outlook(outlook_data),
+                                    'clickup': post_to_clickup(clickup_data),
+                                    # 'dropbox': post_to_dropbox,
+                                    'asana': post_to_asana(asana_data),
+                                    # 'googledrive': post_to_googledrive,
+                                    # 'onedrive': post_to_onedrive,
+                                    # 'teams': post_to_teams,
+                                }
+                                
+                                for service, query in queries.items():
+                                    if query.lower() != 'n/a' and service in apis:
+                                        try:
+                                            response = apis[service](query, email)
+                                            post_results_data[service] = apis[service](query, email)
+                                        except Exception as e:
+                                            post_results_data[service] = {"error": str(e)}
+                                
+                                return jsonify({"message": response})
+                                
+                            except Exception as e:
+                                return jsonify({"error": f"Error al procesar la solicitud: {str(e)}"}), 500
+                        except json.JSONDecodeError:
+                            return jsonify({"error": "Formato JSON inválido"}), 400
+                elif 'anterior' in ia_interpretation:
+                    reference_prompt = f"El usuario dijo: '{last_message}'\n"
+                    reference_prompt += f"La última respuesta de la IA fue: '{last_response}'.\n"
+                    reference_prompt += "Responde al usuario considerando la respuesta anterior."
+
+                    print(reference_prompt)
+
+                    response_reference = openai.chat.completions.create(
+                        model="gpt-3.5-turbo",
+                        messages=[{"role": "system", "content": "Eres un asistente que recuerda la última respuesta."},
+                                {"role": "user", "content": reference_prompt}],
+                        max_tokens=150
+                    )
+                    ia_response = response_reference.choices[0].message.content.strip()
                 else:
                     ia_response = "Lo siento, no entendí el mensaje. ¿Puedes especificar más sobre lo que necesitas?"
 
@@ -2036,115 +2149,70 @@ def setup_routes(app, mongo):
             return None, None
         
     @app.route('/search/google_drive', methods=["GET"])
-    def search_google_drive():
-        print("HOLA GOOGLE DRIVE!")
+    def search_google_drive(query):
+        print("🔍 Buscando en Google Drive...")
         email = request.args.get('email')
-        query = request.args.get('query')  # Asegúrate de que la query sea pasada como un parámetro
-        
+
         if not query:
-            return jsonify({"error": "No se proporcionaron términos de búsqueda"}), 400
-        
+            return jsonify({"error": "No se proporcionó una consulta válida."}), 400
+
         try:
-            # Recuperar el token de Google Drive desde la base de datos
+            # 📌 Recuperar token de Google Drive
             user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
-                return jsonify({"error": "Usuario no encontrado"}), 404
+                return jsonify({"error": "Usuario no encontrado."}), 404
 
-            google_drive_integration = user.get('integrations', {}).get('GoogleDrive', None)
-            if google_drive_integration:
-                google_drive_token = google_drive_integration.get('token', None)
-            else:
-                google_drive_token = None
-            
+            google_drive_token = user.get('integrations', {}).get('Drive', {}).get('token')
             if not google_drive_token:
-                return jsonify({"error": "Token de Google Drive no disponible"}), 400
+                return jsonify({"error": "Token de Google Drive no disponible."}), 400
+
+            headers = {
+                "Authorization": f"Bearer {google_drive_token}",
+                "Accept": "application/json"
+            }
             
-            # 🔍 **Extraer filtros de la query**
-            search_term = None
-            folder_name = None
-            search_type = None  # Puede ser "file" o "folder"
+            # Reformatear la consulta para eliminar "carpeta:" si está presente
+            if query.startswith("carpeta:"):
+                query = query[len("carpeta:"):]
 
-            # Asegurarnos de que los parámetros "archivo:" y "carpeta:" estén presentes
-            if 'archivo:' in query:
-                search_term = query.split('archivo:')[1].split(' ')[0].strip()  # Toma el término después de "archivo:"
-                search_type = "file"
+            # Ahora query solo contendrá "prueba" y será válida para la búsqueda en Google Drive
+            folder_query = f"name = '{query}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
 
-            if 'carpeta:' in query:
-                folder_name = query.split('carpeta:')[1].strip()  # Toma la carpeta después de "carpeta:"
-                search_type = "folder"
+            folder_params = {
+                "q": folder_query,
+                "fields": "files(id, name)"
+            }
+            print(folder_params)
+            folder_response = requests.get("https://www.googleapis.com/drive/v3/files", headers=headers, params=folder_params)
+            folder_data = folder_response.json()
+            print(folder_data)
+            if "files" not in folder_data or not folder_data["files"]:
+                return []  # No se encontraron carpetas
+            
+            folder_id = folder_data["files"][0]["id"]
+            
+            # Buscar archivos dentro de la carpeta
+            files_query = f"'{folder_id}' in parents and trashed = false"
+            files_params = {
+                "q": files_query,
+                "fields": "files(id, name, mimeType, webViewLink)"
+            }
+            files_response = requests.get("https://www.googleapis.com/drive/v3/files", headers=headers, params=files_params)
+            files_data = files_response.json()
 
-            # Validar que tenemos al menos uno de los dos parámetros
-            if not search_term and not folder_name:
-                return jsonify({"error": "El término de búsqueda es inválido, se debe proporcionar 'archivo:' o 'carpeta:'"}), 400
-
-            # Si tenemos carpeta, buscarla primero
-            if folder_name:
-                url = f"https://www.googleapis.com/drive/v3/files?q=name='{folder_name}' and mimeType='application/vnd.google-apps.folder'"
-                headers = {'Authorization': f"Bearer {google_drive_token}"}
-                
-                response = requests.get(url, headers=headers)
-                response.raise_for_status()
-
-                results = response.json().get('files', [])
-                folder_found = None
-
-                for result in results:
-                    if result.get('name').lower() == folder_name.lower() and result.get('mimeType') == 'application/vnd.google-apps.folder':
-                        folder_found = result
-                        break
-
-                if not folder_found:
-                    return jsonify({"error": f"No se encontró la carpeta '{folder_name}' en Google Drive."}), 404
-
-                # Ahora que encontramos la carpeta, buscar el archivo dentro de ella
-                folder_id = folder_found.get('id')
-                if search_term:
-                    files_url = f"https://www.googleapis.com/drive/v3/files?q=name='{search_term}' and '{folder_id}' in parents"
-                    
-                    response = requests.get(files_url, headers=headers)
-                    response.raise_for_status()
-
-                    files = response.json().get('files', [])
-                    if not files:
-                        return jsonify({"message": f"No se encontraron archivos con el nombre '{search_term}' en la carpeta '{folder_name}'."}), 200
-
-                    filtered_results = []
-                    for file in files:
-                        file_url = f"https://drive.google.com/file/d/{file['id']}/view"
-                        filtered_results.append({
-                            'name': file.get('name', 'Sin nombre'),
-                            'url': file_url
-                        })
-
-                    return jsonify(filtered_results)
-                else:
-                    return jsonify({"error": "No se proporcionó el nombre del archivo."}), 400
-            else:
-                # Si no se menciona la carpeta, buscamos el archivo directamente
-                if not search_term:
-                    return jsonify({"error": "No se proporcionó el nombre del archivo."}), 400
-                
-                url = f"https://www.googleapis.com/drive/v3/files?q=name='{search_term}' and mimeType!='application/vnd.google-apps.folder'"
-                headers = {'Authorization': f"Bearer {google_drive_token}"}
-                response = requests.get(url, headers=headers)
-                response.raise_for_status()
-
-                results = response.json().get('files', [])
-                if not results:
-                    return jsonify({"message": f"No se encontraron archivos con el nombre '{search_term}' en Google Drive."}), 200
-
-                filtered_results = []
-                for file in results:
-                    file_url = f"https://drive.google.com/file/d/{file['id']}/view"
-                    filtered_results.append({
-                        'name': file.get('name', 'Sin nombre'),
-                        'url': file_url
-                    })
-
-                return jsonify(filtered_results)
+            print(files_response)
+            search_results = []
+            for file in files_data.get("files", []):
+                search_results.append({
+                    "title": file["name"],
+                    "type": file["mimeType"],
+                    "url": file["webViewLink"]
+                })
+            print(search_results)
+            return jsonify(search_results)
 
         except requests.RequestException as e:
-            return jsonify({"error": "Error al realizar la solicitud a Google Drive", "details": str(e)}), 500
+            return jsonify({"error": "Error en la solicitud a Google Drive", "details": str(e)}), 500
         except Exception as e:
             return jsonify({"error": "Error inesperado", "details": str(e)}), 500
 
@@ -2573,85 +2641,112 @@ def setup_routes(app, mongo):
         except Exception as e:
             return jsonify({"error": "Error inesperado", "details": str(e)}), 500
 
-    @app.route("/ultima-notificacion/hubspot", methods=["GET"])
-    def obtener_ultima_notificacion_hubspot():
-        email = request.args.get("email")
+    def parse_hubspot_date(date_str):
+        """Convierte una fecha ISO8601 de HubSpot a timestamp en milisegundos"""
         try:
-            user = mongo.database.usuarios.find_one({'correo': email})
-            if not user:
-                return jsonify({"error": "Usuario no encontrado"}), 404
-
-            token = user.get("integrations", {}).get("HubSpot", {}).get("token")
-            if not token:
-                return jsonify({"error": "Token no disponible"}), 400
-
-            headers = get_hubspot_headers(token)
-
-            # Definir las URLs de los distintos objetos
-            object_types = ["deals", "companies", "contacts", "notes"]
-            notifications = []
-
-            # Iterar sobre los tipos de objetos (deals, companies, contacts, notes)
-            for obj_type in object_types:
-                # Obtener las últimas notificaciones para cada tipo de objeto, ordenadas por fecha de actualización
-                url = f"https://api.hubapi.com/crm/v3/objects/{obj_type}?limit=10&properties=dealname,name,firstname,lastname,hs_note_body&sort=-updatedAt"
-                response = requests.get(url, headers=headers)
-
-                # Verificar el estado de la respuesta
-                if response.status_code != 200:
-                    print(f"Error al obtener {obj_type}: {response.status_code}, {response.text}")
-                    continue  # Si hay un error en alguna de las peticiones, saltarla
-
-                data = response.json().get("results", [])
-                print(f"Datos obtenidos de {obj_type}: {data}")  # Verifica los datos que vienen de HubSpot
-
-                if not data:
-                    print(f"No hay datos para {obj_type}")  # Si no hay datos, saltamos este tipo de objeto
-                    continue
-
-                # Formatear las notificaciones al formato esperado para cada tipo de objeto
-                for item in data:
-                    if obj_type == "deals":
-                        notifications.append({
-                            "from": "HubSpot",
-                            "subject": item["properties"].get("dealname", "(Sin nombre de trato)"),
-                            "snippet": f"Negocio actualizado: {item['properties'].get('dealname', '(Sin nombre de trato)')}",
-                            "id": item["id"],
-                            "updated_at": item["properties"].get("updatedAt", "(Sin fecha de actualización)"),
-                        })
-                    elif obj_type == "companies":
-                        notifications.append({
-                            "from": "HubSpot",
-                            "subject": item["properties"].get("name", "(Sin nombre de empresa)"),
-                            "snippet": f"Compañía actualizada: {item['properties'].get('name', '(Sin nombre de empresa)')}",
-                            "id": item["id"],
-                            "updated_at": item["properties"].get("updatedAt", "(Sin fecha de actualización)"),
-                        })
-                    elif obj_type == "contacts":
-                        notifications.append({
-                            "from": "HubSpot",
-                            "subject": item["properties"].get("firstname", "(Sin nombre)"),
-                            "snippet": f"Contacto actualizado: {item['properties'].get('firstname', '(Sin nombre)')} {item['properties'].get('lastname', '')}",
-                            "id": item["id"],
-                            "updated_at": item["properties"].get("updatedAt", "(Sin fecha de actualización)"),
-                        })
-                    elif obj_type == "notes":
-                        notifications.append({
-                            "from": "HubSpot",
-                            "subject": item["properties"].get("hs_note_body", "(Sin contenido)"),
-                            "snippet": f"Nota actualizada: {item['properties'].get('hs_note_body', '(Sin contenido)')}",
-                            "id": item["id"],
-                            "updated_at": item["properties"].get("updatedAt", "(Sin fecha de actualización)"),
-                        })
-
-            # Si no hay notificaciones, responder con un mensaje adecuado
-            if not notifications:
-                return jsonify({"error": "No hay notificaciones nuevas"})
-
-            return jsonify(notifications)
-
+            dt = datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S.%fZ")
+            dt = dt.replace(tzinfo=pytz.UTC)  # Asegurar que está en UTC
+            return int(dt.timestamp() * 1000)  # Convertir a milisegundos
         except Exception as e:
-            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+            print(f"Error al convertir fecha: {date_str} -> {str(e)}")
+            return 0  # Retorna 0 si hay error
+
+    @app.route('/ultima-notificacion/hubspot', methods=['GET'])
+    def get_last_notification_hubspot():
+        print("HUBSPOT: Última notificación")
+
+        email = request.args.get("email")
+        user = mongo.database.usuarios.find_one({'correo': email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+
+        hubspot_integration = user.get('integrations', {}).get('HubSpot', None)
+        if not hubspot_integration:
+            return jsonify({"error": "Integración con HubSpot no configurada"}), 400
+
+        hubspot_token = hubspot_integration.get('token', None)
+        if not hubspot_token:
+            return jsonify({"error": "Token de HubSpot no disponible"}), 400
+
+        headers = get_hubspot_headers(hubspot_token)
+
+        # URLs de búsqueda para contactos, negocios y empresas
+        endpoints = {
+            "contacto": "https://api.hubapi.com/crm/v3/objects/contacts/search",
+            "negocio": "https://api.hubapi.com/crm/v3/objects/deals/search",
+            "empresa": "https://api.hubapi.com/crm/v3/objects/companies/search"
+        }
+
+        search_data = {
+            "filterGroups": [
+                {
+                    "filters": [
+                        {
+                            "propertyName": "hs_lastmodifieddate",
+                            "operator": "GT",
+                            "value": "0"
+                        }
+                    ]
+                }
+            ],
+            "properties": ["hs_lastmodifieddate","dealname", "firstname", "lastname", "email", "hubspot_owner_id", "name"],
+            "limit": 1,
+            "sorts": ["-hs_lastmodifieddate"]
+        }
+
+        latest_update = None
+
+        for entity, url in endpoints.items():
+            try:
+                response = requests.post(url, headers=headers, json=search_data)
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get("results"):
+                        result = data["results"][0]
+                        last_modified_str = result["properties"].get("hs_lastmodifieddate", "0")
+
+                        # Convertir la fecha a timestamp en milisegundos
+                        last_modified = parse_hubspot_date(last_modified_str) if isinstance(last_modified_str, str) else int(last_modified_str)
+
+                        if latest_update is None or last_modified > latest_update["timestamp"]:
+                            latest_update = {
+                                "type": entity,
+                                "data": result,
+                                "timestamp": last_modified
+                            }
+                else:
+                    print(f"Error al obtener {entity}: {response.status_code} - {response.text}")
+            except Exception as e:
+                print(f"Error en la consulta de {entity}: {str(e)}")
+
+        if not latest_update:
+            return jsonify({"message": "No se encontraron cambios recientes."}), 404
+
+        # Formatear respuesta
+        update_data = latest_update["data"]
+        entity_type = latest_update["type"]
+        properties = update_data["properties"]
+
+        if entity_type == "contacto":
+            subject = f"{properties.get('firstname', '')} {properties.get('lastname', '')}".strip()
+            snippet = f"Nuevo contacto: {properties.get('email', '(sin email)')}"
+        elif entity_type == "negocio":
+            subject = properties.get("dealname", "(Sin nombre)")
+            snippet = f"Nuevo negocio detectado."
+        elif entity_type == "empresa":
+            subject = properties.get("name", "(Sin nombre)")
+            snippet = f"Nuevo cambio en la empresa."
+
+        notification_data = {
+            "from": "HubSpot",
+            "type": entity_type,
+            "subject": subject if subject else "(Sin título)",
+            "snippet": snippet,
+            "id": update_data.get("id", "N/A"),
+            "last_modified": datetime.fromtimestamp(latest_update["timestamp"] / 1000).isoformat()
+        }
+
+        return jsonify(notification_data)
 
     def convertir_fecha(timestamp):
         if timestamp:
@@ -3092,4 +3187,400 @@ def setup_routes(app, mongo):
 
         return jsonify({"error": "Acción no reconocida"}), 400
 
+    def post_to_gmail(query):
+        """Procesa la consulta y ejecuta la acción en Gmail API o Google Calendar si aplica."""
+        print("HOLAAA GMAIL")
+        email = request.args.get('email')
+        if not email:
+            return jsonify({"error": "Se debe proporcionar un email"}), 400
 
+        user = mongo.database.usuarios.find_one({'correo': email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+
+        gmail_token = user.get('integrations', {}).get('Gmail', {}).get('token')
+        if not gmail_token:
+            return jsonify({"error": "Token de Gmail no disponible"}), 400
+
+        match = re.search(r'todos los correos de (.+)', query, re.IGNORECASE)
+        if match:
+            sender = match.group(1)
+            # Determinar la acción: "delete" para eliminar, "spam" para mover a spam.
+            action = "delete" if "eliminar" in query.lower() else "spam" if "mover a spam" in query.lower() else None
+
+            if not action:
+                return {"error": "Acción no reconocida para Gmail"}
+
+            headers = {"Authorization": f"Bearer {gmail_token}", "Content-Type": "application/json"}
+            
+            if action == "delete":
+                # Primero, buscamos los mensajes del remitente especificado
+                list_url = "https://www.googleapis.com/gmail/v1/users/me/messages"
+                params = {"q": f"from:{sender}"}
+                list_response = requests.get(list_url, headers=headers, params=params)
+                messages = list_response.json().get("messages", [])
+                
+                if not messages:
+                    return {"error": f"No se encontraron correos del remitente {sender}"}
+                
+                delete_results = []
+                # Para cada mensaje, movemos a la papelera
+                for msg in messages:
+                    message_id = msg["id"]
+                    delete_url = f"https://www.googleapis.com/gmail/v1/users/me/messages/{message_id}/trash"
+                    delete_response = requests.post(delete_url, headers=headers)
+                    delete_results.append(delete_response.json())
+                
+                if delete_results:
+                    return {"message": f"Se han eliminado {len(delete_results)} correos del remitente {sender}"}
+            
+            elif action == "spam":
+                # Primero, buscamos los mensajes del remitente especificado
+                list_url = "https://www.googleapis.com/gmail/v1/users/me/messages"
+                params = {"q": f"from:{sender}"}
+                list_response = requests.get(list_url, headers=headers, params=params)
+                messages = list_response.json().get("messages", [])
+                
+                if not messages:
+                    return {"error": f"No se encontraron correos del remitente {sender}"}
+                
+                spam_results = []
+                # Para cada mensaje, modificamos las etiquetas para agregar "SPAM"
+                for msg in messages:
+                    message_id = msg["id"]
+                    modify_url = f"https://www.googleapis.com/gmail/v1/users/me/messages/{message_id}/modify"
+                    modify_payload = {"addLabelIds": ["SPAM"]}
+                    modify_response = requests.post(modify_url, headers=headers, json=modify_payload)
+                    spam_results.append(modify_response.json())
+                
+                if spam_results:
+                    return {"message": f"Se han movido {len(spam_results)} correos del remitente {sender} a spam"}
+        print(query)
+        if "agendar" in query:
+            print("hola")
+            prompt = f"El usuario dijo: '{query}'. Devuelve un JSON con los campos 'date', 'time' y 'subject' que representen la fecha, hora y asunto de la cita agendada (el asunto ponlo con inicial mayuscula en la primer palabra) .Si no se puede extraer la información, devuelve 'unknown'."
+        
+            response = openai.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "Eres un asistente que ayuda a organizar citas en Google Calendar."},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            ia_response = response.choices[0].message.content.strip().lower()
+            try:
+                match = re.search(r'\{[^}]*\}', ia_response, re.DOTALL | re.MULTILINE)
+                parsed_info = json.loads(match.group(0))
+                if parsed_info == 'unknown':
+                    return {"error": "No se pudo interpretar la consulta."}
+
+                date_str = parsed_info['date']
+                time_str = parsed_info['time']
+                subject = parsed_info['subject']
+
+                months = {
+                    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6,
+                    "julio": 7, "agosto": 8, "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12
+                }
+                day, month_name = date_str.split(" de ")
+                month = months.get(month_name.lower())
+
+                if not month:
+                    return {"error": "Mes no válido en la consulta"}
+
+                current_year = datetime.now().year
+                hour = int(re.search(r'\d+', time_str).group())
+                if "pm" in time_str.lower() and hour != 12:
+                    hour += 12
+                if "am" in time_str.lower() and hour == 12:
+                    hour = 0
+
+                event_datetime = datetime(current_year, month, int(day), hour, 0, 0, tzinfo=pytz.UTC)
+
+                event = {
+                    "summary": subject,
+                    "start": {"dateTime": event_datetime.isoformat(), "timeZone": "UTC"},
+                    "end": {"dateTime": (event_datetime.replace(hour=event_datetime.hour + 1)).isoformat(), "timeZone": "UTC"}
+                }
+
+                print(event)
+
+                url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+                headers = {"Authorization": f"Bearer {gmail_token}", "Content-Type": "application/json"}
+                response = requests.post(url, json=event, headers=headers)
+                return {"message": "Se ha agendado tu cita"}
+            except Exception as e:
+                print(f"Error al procesar la respuesta: {e}")
+        return {"error": "No se encontró una acción válida en la consulta"}
+
+    def post_to_outlook(query):
+        """Procesa la consulta y ejecuta la acción en Outlook API."""
+        email = request.args.get('email')
+        if not email:
+            return jsonify({"error": "Se debe proporcionar un email"}), 400
+
+        user = mongo.database.usuarios.find_one({'correo': email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+
+        outlook_token = user.get('integrations', {}).get('Outlook', {}).get('token')
+        if not outlook_token:
+            return jsonify({"error": "Token de Outlook no disponible"}), 400
+
+        match = re.search(r'todos los correos de (.+)', query, re.IGNORECASE)
+        if match:
+            sender = match.group(1)
+            action = "delete" if "eliminar" in query else "spam" if "mover a spam" in query else None
+
+            if not action:
+                return {"error": "Acción no reconocida para Outlook"}
+
+            url = "https://graph.microsoft.com/v1.0/me/messages"
+            headers = {"Authorization": f"Bearer {outlook_token}", "Content-Type": "application/json"}
+            
+            # Primero, obtener todos los mensajes del remitente especificado
+            params = {"$filter": f"from/emailAddress/address eq '{sender}'"}
+            list_response = requests.get(url, headers=headers, params=params)
+            messages = list_response.json().get("value", [])
+
+            if not messages:
+                return {"error": f"No se encontraron correos del remitente {sender}"}
+            
+            results = []
+
+            for msg in messages:
+                message_id = msg["id"]
+                if action == "delete":
+                    # Eliminar el correo
+                    delete_url = f"https://graph.microsoft.com/v1.0/me/messages/{message_id}/move"
+                    response = requests.post(delete_url, headers=headers, json={"destinationId": "deleteditems"})
+                    results.append(response.json())
+                
+                elif action == "spam":
+                    # Mover el correo a la carpeta de "Junk Email"
+                    move_url = f"https://graph.microsoft.com/v1.0/me/messages/{message_id}/move"
+                    response = requests.post(move_url, headers=headers, json={"destinationId": "JunkEmail"})
+                    results.append(response.json())
+
+            if results:
+                if action == "delete":
+                    return jsonify({"message": f"Se han eliminado {len(results)} correos del remitente {sender}"})
+                elif action == "spam":
+                    return jsonify({"message": f"Se han movido {len(results)} correos del remitente {sender} a spam"})
+            else:
+                return {"error": "No se pudo realizar la acción"}
+
+        return {"error": "No se encontró un remitente válido en la consulta"}
+    
+    def get_task_id_clickup(name, token):
+        headers = get_clickup_headers(token)
+        
+        # Obtener el equipo
+        response = requests.get("https://api.clickup.com/api/v2/team", headers=headers)
+        if response.status_code != 200:
+            return {"error": "Error al obtener equipos de ClickUp"}, response.status_code
+        
+        teams = response.json().get("teams", [])
+        if not teams:
+            return {"error": "No hay equipos en ClickUp"}
+
+        # Seleccionar el primer equipo (puedes personalizar esto si tienes múltiples equipos)
+        team_id = teams[0]["id"]
+
+        # Obtener las tareas del equipo
+        response = requests.get(f"https://api.clickup.com/api/v2/team/{team_id}/task", headers=headers)
+        if response.status_code != 200:
+            return {"error": "Error al obtener tareas del equipo"}, response.status_code
+        
+        tasks = response.json().get("tasks", [])
+        if not tasks:
+            return {"error": "No hay tareas disponibles en el equipo"}
+        
+        # Buscar la tarea que coincida con el nombre proporcionado
+        for task in tasks:
+            if task["name"].lower() == name.lower():
+                return task["id"]  # Retorna el ID de la tarea si coincide el nombre
+
+        return {"error": f"No se encontró la tarea con el nombre {name}"}
+
+    def get_task_id_asana(name, token):
+        url = "https://app.asana.com/api/1.0/tasks"
+        headers = {"Authorization": f"Bearer {token}"}
+        params = {"name": name}  # Asumiendo que Asana permite buscar tareas por nombre (verificar en la API de Asana)
+
+        response = requests.get(url, headers=headers, params=params)
+        if response.status_code == 200:
+            tasks = response.json().get('data', [])
+            if tasks:
+                return tasks[0]["gid"]  # Asana usa "gid" como el identificador de la tarea
+        return None
+
+    def get_task_id_notion(name, token):
+        url = "https://api.notion.com/v1/databases/YOUR_DATABASE_ID/query"
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        data = {
+            "filter": {
+                "property": "Name",  # Asegúrate de que "Name" es el nombre correcto de la propiedad en tu base de datos
+                "rich_text": {
+                    "equals": name
+                }
+            }
+        }
+        
+        response = requests.post(url, headers=headers, json=data)
+        if response.status_code == 200:
+            results = response.json().get('results', [])
+            if results:
+                return results[0]["id"]  # Notion utiliza el "id" de cada página
+        return None
+
+    def post_to_notion(query):
+        """Procesa la consulta y ejecuta la acción en la API de Notion."""
+        email = request.args.get('email')
+        if not email:
+            return jsonify({"error": "Se debe proporcionar un email"}), 400
+
+        user = mongo.database.usuarios.find_one({'correo': email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+
+        notion_token = user.get('integrations', {}).get('Notion', {}).get('token')
+        if not notion_token:
+            return jsonify({"error": "Token de Notion no disponible"}), 400
+
+        match = re.search(r'marca como completada la tarea (.+)', query, re.IGNORECASE)
+        if match:
+            task_name = match.group(1)
+
+            task_id = get_task_id_notion(task_name, notion_token)
+            if not task_id:
+                return {"error": f"No se encontró la tarea {task_name} en Notion"}
+
+            url = f"https://api.notion.com/v1/pages/{task_id}"
+            headers = {
+                "Authorization": f"Bearer {notion_token}",
+                "Content-Type": "application/json",
+                "Notion-Version": "2021-05-13"
+            }
+
+            # Marcar la tarea como completada
+            data = {
+                "properties": {
+                    "Status": {
+                        "select": {
+                            "name": "Completed"  # Asume que "Completed" es el estado de completado
+                        }
+                    }
+                }
+            }
+            response = requests.patch(url, headers=headers, json=data)
+            if response.status_code == 200:
+                return jsonify({"message": f"Tarea {task_name} completada correctamente"})
+            else:
+                return jsonify({"error": "No se pudo completar la tarea"}), 400
+
+        return {"error": "No se encontró una tarea válida en la consulta"}
+
+    def post_to_clickup(query):
+        """Procesa la consulta y ejecuta la acción en la API de ClickUp."""
+        email = request.args.get('email')
+        if not email:
+            return jsonify({"error": "Se debe proporcionar un email"}), 400
+
+        user = mongo.database.usuarios.find_one({'correo': email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+
+        clickup_token = user.get('integrations', {}).get('ClickUp', {}).get('token')
+        if not clickup_token:
+            return jsonify({"error": "Token de ClickUp no disponible"}), 400
+
+        match = re.search(r'(marca como completada|cambia el estado a|elimina) la tarea (.+)', query, re.IGNORECASE)
+        if match:
+            action = match.group(1).lower()
+            task_name = match.group(2)
+            
+            # Obtener el ID de la tarea
+            task_id = get_task_id_clickup(task_name, clickup_token)
+            if not task_id:
+                return jsonify({"error": f"No se encontró la tarea {task_name} en ClickUp"}), 404
+
+            url = f"https://api.clickup.com/api/v2/task/{task_id}"
+            headers = {
+                "Authorization": f"Bearer {clickup_token}",
+                "Content-Type": "application/json"
+            }
+
+            # Acción según la consulta
+            if "completada" in action:
+                data = {"status": "complete"}  # Asume que "complete" es el estado para tarea completada
+                response = requests.put(url, headers=headers, json=data)
+                if response.status_code == 200:
+                    return jsonify({"message": f"Tarea {task_name} completada correctamente"})
+                else:
+                    return jsonify({"error": "No se pudo completar la tarea"}), 400
+            
+            elif "cambia el estado" in action:
+                # Extraer el nuevo estado del query
+                new_status_match = re.search(r'cambia el estado a (.+)', query, re.IGNORECASE)
+                if new_status_match:
+                    new_status = new_status_match.group(1)
+                    data = {"status": new_status}
+                    response = requests.put(url, headers=headers, json=data)
+                    if response.status_code == 200:
+                        return jsonify({"message": f"Estado de la tarea {task_name} cambiado a {new_status}"})
+                    else:
+                        return jsonify({"error": "No se pudo cambiar el estado de la tarea"}), 400
+                else:
+                    return jsonify({"error": "No se proporcionó un nuevo estado"}), 400
+
+            elif "elimina" in action:
+                # Eliminar la tarea
+                response = requests.delete(f"https://api.clickup.com/api/v2/task/{task_id}", headers=headers)
+                print(response)
+                if response.status_code == 204:  # El código 204 indica que la tarea se eliminó exitosamente
+                    return jsonify({"message": f"Tarea {task_name} eliminada correctamente"})
+                else:
+                    return jsonify({"error": "No se pudo eliminar la tarea"}), 400
+
+            return jsonify({"error": "Acción no reconocida para ClickUp"}), 400
+
+        return jsonify({"error": "No se encontró una tarea válida en la consulta"}), 400
+
+
+    def post_to_asana(query):
+        """Procesa la consulta y ejecuta la acción en la API de Asana."""
+        email = request.args.get('email')
+        if not email:
+            return jsonify({"error": "Se debe proporcionar un email"}), 400
+
+        user = mongo.database.usuarios.find_one({'correo': email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+
+        asana_token = user.get('integrations', {}).get('Asana', {}).get('token')
+        if not asana_token:
+            return jsonify({"error": "Token de Asana no disponible"}), 400
+
+        match = re.search(r'marca como completada la tarea (.+)', query, re.IGNORECASE)
+        if match:
+            task_name = match.group(1)
+
+            task_id = get_task_id_asana(task_name, asana_token)
+            if not task_id:
+                return {"error": f"No se encontró la tarea {task_name} en Asana"}
+
+            url = f"https://app.asana.com/api/1.0/tasks/{task_id}"
+            headers = {
+                "Authorization": f"Bearer {asana_token}",
+                "Content-Type": "application/json"
+            }
+
+            data = {"data": {"completed": True}}
+            response = requests.put(url, headers=headers, json=data)
+            if response.status_code == 200:
+                return jsonify({"message": f"Tarea {task_name} completada correctamente"})
+            else:
+                return jsonify({"error": "No se pudo completar la tarea"}), 400
+
+        return {"error": "No se encontró una tarea válida en la consulta"}

@@ -1,7 +1,6 @@
 from flask import redirect, Blueprint, url_for, session, request, jsonify
 import requests
 import time
-import pytz
 from dateutil.relativedelta import relativedelta
 from requests_oauthlib import OAuth2Session
 from config import Config
@@ -2645,7 +2644,6 @@ def setup_routes(app, mongo):
         """Convierte una fecha ISO8601 de HubSpot a timestamp en milisegundos"""
         try:
             dt = datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S.%fZ")
-            dt = dt.replace(tzinfo=pytz.UTC)  # Asegurar que está en UTC
             return int(dt.timestamp() * 1000)  # Convertir a milisegundos
         except Exception as e:
             print(f"Error al convertir fecha: {date_str} -> {str(e)}")

@@ -1434,17 +1434,30 @@ def setup_routes(app, mongo):
                                     # 'teams': post_to_teams,
                                 }
                                 
+                                # Ejecutar las funciones de las APIs correspondientes
                                 for service, query in queries.items():
                                     if query.lower() != 'n/a' and service in apis:
                                         try:
                                             response = apis[service](query)
                                             message = response.get('message', None)
+                                            # Solo guardamos si hay un mensaje y es distinto a "Sin mensaje"
                                             if message and message != "Sin mensaje":
                                                 post_results_data[service] = message
                                         except Exception as e:
-                                            post_results_data[service] = {"error": str(e)}
-                                
-                                return jsonify({"message": response})
+                                            # Puedes decidir cómo manejar el error, aquí se ignora si falla
+                                            pass
+
+                                # Si se obtuvo algún mensaje, tomamos el primero
+                                final_message = None
+                                if post_results_data:
+                                    # Extraemos el primer mensaje válido
+                                    for service, msg in post_results_data.items():
+                                        final_message = msg
+                                        break
+
+                                # Si no se obtuvo mensaje válido, se puede definir un valor por defecto
+                                if not final_message:
+                                    final_message = "Sin mensaje"
                                 
                             except Exception as e:
                                 return jsonify({"error": f"Error al procesar la solicitud: {str(e)}"}), 500

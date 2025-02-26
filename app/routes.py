@@ -1421,14 +1421,14 @@ def setup_routes(app, mongo):
 
                                 post_results_data = {}
                                 apis = {
-                                    'gmail': post_to_gmail(gmail_data),
-                                    'notion': post_to_notion(notion_data),
+                                    'gmail': post_to_gmail,
+                                    'notion': post_to_notion,
                                     # 'slack': post_to_slack,
                                     # 'hubspot': post_to_hubspot,
-                                    'outlook': post_to_outlook(outlook_data),
-                                    'clickup': post_to_clickup(clickup_data),
+                                    'outlook': post_to_outlook,
+                                    'clickup': post_to_clickup,
                                     # 'dropbox': post_to_dropbox,
-                                    'asana': post_to_asana(asana_data),
+                                    'asana': post_to_asana,
                                     # 'googledrive': post_to_googledrive,
                                     # 'onedrive': post_to_onedrive,
                                     # 'teams': post_to_teams,
@@ -1437,7 +1437,7 @@ def setup_routes(app, mongo):
                                 for service, query in queries.items():
                                     if query.lower() != 'n/a' and service in apis:
                                         try:
-                                            response = apis[service](query, email)
+                                            response = apis[service](query)
                                             post_results_data[service] = apis[service](query, email)
                                         except Exception as e:
                                             post_results_data[service] = {"error": str(e)}

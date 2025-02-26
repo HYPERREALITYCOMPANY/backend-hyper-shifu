@@ -153,8 +153,11 @@ def setup_routes(app, mongo):
     def add_integration():
         request_data = request.get_json()
         user_email = request_data.get("email")
+        print(user_email)
         integration_name = request_data.get("integration")
+        print(integration_name)
         token = request_data.get("token")
+        print(token)
         expires_in = request_data.get("expires_in")
 
         if not all([user_email, integration_name, token]):
@@ -227,6 +230,7 @@ def setup_routes(app, mongo):
 
     @app.route('/search/gmail', methods=["GET"])
     def search_gmail(query):
+        print("HOLA GMAIL!")
         email = request.args.get('email')
         try:
             user = mongo.database.usuarios.find_one({'correo': email})
@@ -256,12 +260,15 @@ def setup_routes(app, mongo):
                     query = "is:inbox"
                     params = {"q": query, "maxResults": 1 }
                     response = requests.get(url, headers=headers, params=params)
+                    print(response.raise_for_status())
                     response.raise_for_status()
                     messages = response.json().get('messages', [])
+                    print(messages)
                     if not messages:
                         return jsonify({"message": "No se encontraron resultados en Gmail"}), 200
 
                     keywords = query.split()
+                    print(keywords)
                     search_results = []
                     for message in messages:
                         message_id = message['id']
@@ -292,6 +299,15 @@ def setup_routes(app, mongo):
                             # Crear la URL del correo
                             mail_url = f"https://mail.google.com/mail/u/0/#inbox/{message_id}"
 
+                            # Depuración del mensaje procesado
+                            print({
+                                'from': sender,
+                                'date': date,
+                                'subject': subject,
+                                'body': body[:50],  # Muestra solo los primeros 50 caracteres
+                                'link': mail_url
+                            })
+
                             # Añadir a los resultados (removí filtros problemáticos)
                             search_results.append({
                                 'from': sender,
@@ -305,15 +321,19 @@ def setup_routes(app, mongo):
                 headers = {
                     'Authorization': f"Bearer {gmail_token}"
                 }
+                print("ANTES DEL RESPONSE", query)
                 params = {"q": query, "maxResults": 5 }
                 response = requests.get(url, headers=headers, params=params)
+                print(response.raise_for_status())
                 response.raise_for_status()
 
                 messages = response.json().get('messages', [])
+                print(messages)
                 if not messages:
                     return jsonify({"message": "No se encontraron resultados en Gmail"}), 200
 
                 keywords = query.split()
+                print(keywords)
                 search_results = []
                 for message in messages:
                     message_id = message['id']
@@ -343,6 +363,15 @@ def setup_routes(app, mongo):
 
                         # Crear la URL del correo
                         mail_url = f"https://mail.google.com/mail/u/0/#inbox/{message_id}"
+
+                        # Depuración del mensaje procesado
+                        print({
+                            'from': sender,
+                            'date': date,
+                            'subject': subject,
+                            'body': body[:50],  # Muestra solo los primeros 50 caracteres
+                            'link': mail_url
+                        })
 
                         # Añadir a los resultados (removí filtros problemáticos)
                         search_results.append({
@@ -568,12 +597,14 @@ def setup_routes(app, mongo):
                 'Content-Type': 'application/json'
             }
 
+            print("OUTLOOK")
             params = {
                 '$search': search_query, '$top':10
             }
 
             response = requests.get(url, headers=headers, params=params)
             keywords = query.lower().split()
+            print(keywords)
             # Verificar si la respuesta tiene un código de error
             if response.status_code != 200:
                 print("Error en la respuesta de Outlook:", response.status_code, response.text)
@@ -611,6 +642,8 @@ def setup_routes(app, mongo):
 
     @app.route('/search/hubspot', methods=['GET'])
     def search_hubspot(query):
+        print("HUBSPOT")
+        print(query)
         if not query:
             return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
 
@@ -768,6 +801,9 @@ def setup_routes(app, mongo):
     def generate_prompt(query, search_results):
         # Extraer solo la información relevante de cada fuente
         results = {}
+
+        print("PROMPT",search_results)
+
         # Gmail Results (extraer información relevante)
         gmail_results = "\n".join([ 
             f"De: {email.get('from', 'Desconocido')} | Asunto: {email.get('subject', 'Sin asunto')} | Fecha: {email.get('date', 'Sin fecha')} | Body: {email.get('body', 'Sin cuerpo')}" 
@@ -926,6 +962,7 @@ def setup_routes(app, mongo):
         Información relevante a tomar en cuenta bodys de correos, fechas y Remitente (De:)
         """
 
+        print(prompt)
         return prompt
 
 
@@ -1020,6 +1057,7 @@ def setup_routes(app, mongo):
     
     def extract_links_from_datas(datas):
         """Extrae los enlaces y los nombres (asunto/página/mensaje) de cada API según la estructura de datos recibida."""
+        print("DATA LINKS", datas)
         results = {
             'gmail': [],
             'slack': [],
@@ -1196,6 +1234,7 @@ def setup_routes(app, mongo):
                     max_tokens=1800
                 )
                 ia_interpretation = response.choices[0].message.content.strip().lower()
+                print(ia_interpretation)
 
                 if 'saludo' in ia_interpretation:
                     prompt_greeting = f"Usuario: {last_message}\nResponde de manera cálida y amigable, como si fuera una conversación normal."
@@ -1215,10 +1254,13 @@ def setup_routes(app, mongo):
                     ia_response = response_greeting.choices[0].message.content.strip()
 
                 elif 'get' in ia_interpretation:
+                    print("SOLICITUUUD")
                     match = re.search(r'\{[^}]*\}', ia_interpretation, re.DOTALL | re.MULTILINE)
+                    print(match)
                     if match:
                         try:
                             queries = json.loads(match.group(0))
+                            print(queries)
                             
                             gmail_query = queries.get('gmail', 'n/a')
                             notion_query = queries.get('notion', 'n/a')
@@ -1322,7 +1364,9 @@ def setup_routes(app, mongo):
                                 search_results_data['teams'] = teams_results.get_json() if hasattr(teams_results, 'get_json') else teams_results
                             except Exception:
                                 search_results_data['teams'] = ["No se encontró ningún valor en Teams"]
+                            print("DATA", search_results_data["googledrive"])
                             links = extract_links_from_datas(datas=search_results_data)
+                            print("LINKS", links)
                             prompt = generate_prompt(last_message, search_results_data)
                             global last_response
                             last_response = prompt
@@ -1338,6 +1382,7 @@ def setup_routes(app, mongo):
                                 max_tokens=4096
                             )
                             responses = response.choices[0].message.content.strip()
+                            print("RESPONSES: ",responses)
 
                             if not responses:
                                 return jsonify({"error": "La respuesta de la IA está vacía"}), 500
@@ -1346,10 +1391,13 @@ def setup_routes(app, mongo):
                         except Exception as e:
                             return jsonify({"error": f"Error al procesar la solicitud: {str(e)}"}), 500
                 elif 'post' in ia_interpretation:
+                    print("SOLICITUD POST")
                     match = re.search(r'\{[^}]*\}', ia_interpretation, re.DOTALL | re.MULTILINE)
+                    print(match)
                     if match:
                         try:
                             queries = json.loads(match.group(0))
+                            print(queries)    
                             gmail_data = queries.get('gmail', {})
                             notion_data = queries.get('notion', {})
                             slack_data = queries.get('slack', {})
@@ -1373,45 +1421,29 @@ def setup_routes(app, mongo):
 
                                 post_results_data = {}
                                 apis = {
-                                    'gmail': post_to_gmail,
-                                    'notion': post_to_notion,
+                                    'gmail': post_to_gmail(gmail_data),
+                                    'notion': post_to_notion(notion_data),
                                     # 'slack': post_to_slack,
                                     # 'hubspot': post_to_hubspot,
-                                    'outlook': post_to_outlook,
-                                    'clickup': post_to_clickup,
+                                    'outlook': post_to_outlook(outlook_data),
+                                    'clickup': post_to_clickup(clickup_data),
                                     # 'dropbox': post_to_dropbox,
-                                    'asana': post_to_asana,
+                                    'asana': post_to_asana(asana_data),
                                     # 'googledrive': post_to_googledrive,
                                     # 'onedrive': post_to_onedrive,
                                     # 'teams': post_to_teams,
                                 }
                                 
-                                # Ejecutar las funciones de las APIs correspondientes
                                 for service, query in queries.items():
                                     if query.lower() != 'n/a' and service in apis:
                                         try:
-                                            response = apis[service](query)
-                                            message = response.get('message', None)
-                                            # Solo guardamos si hay un mensaje y es distinto a "Sin mensaje"
-                                            if message and message != "Sin mensaje":
-                                                post_results_data[service] = message
+                                            response = apis[service](query, email)
+                                            post_results_data[service] = apis[service](query, email)
                                         except Exception as e:
-                                            # Puedes decidir cómo manejar el error, aquí se ignora si falla
-                                            pass
-
-                                # Si se obtuvo algún mensaje, tomamos el primero
-                                final_message = None
-                                if post_results_data:
-                                    # Extraemos el primer mensaje válido
-                                    for service, msg in post_results_data.items():
-                                        final_message = msg
-                                        break
-
-                                # Si no se obtuvo mensaje válido, se puede definir un valor por defecto
-                                if not final_message:
-                                    final_message = "Sin mensaje"
-
-                                return jsonify({"message": final_message})
+                                            post_results_data[service] = {"error": str(e)}
+                                
+                                return jsonify({"message": response})
+                                
                             except Exception as e:
                                 return jsonify({"error": f"Error al procesar la solicitud: {str(e)}"}), 500
                         except json.JSONDecodeError:
@@ -1420,6 +1452,8 @@ def setup_routes(app, mongo):
                     reference_prompt = f"El usuario dijo: '{last_message}'\n"
                     reference_prompt += f"La última respuesta de la IA fue: '{last_response}'.\n"
                     reference_prompt += "Responde al usuario considerando la respuesta anterior."
+
+                    print(reference_prompt)
 
                     response_reference = openai.chat.completions.create(
                         model="gpt-3.5-turbo",
@@ -1476,6 +1510,7 @@ def setup_routes(app, mongo):
     @app.route("/clickup-proxy", methods=["POST"])
     def clickup_proxy():
         try:
+            print("hola")
             data = request.json
 
             client_id = data.get("client_id")
@@ -1495,6 +1530,7 @@ def setup_routes(app, mongo):
             }
 
             response = requests.post(token_url, json=payload)
+            print(response)
             data = response.json()
 
             if "access_token" in data:
@@ -1510,6 +1546,7 @@ def setup_routes(app, mongo):
     @app.route("/dropbox-proxy", methods=["POST"])
     def dropbox_proxy():
         try:
+            print("hola")
             data = request.json
 
             client_id = data.get("client_id")
@@ -1531,6 +1568,7 @@ def setup_routes(app, mongo):
             }
 
             response = requests.post(token_url, data=payload)
+            print(response)
             data = response.json()
 
             return jsonify({
@@ -1541,6 +1579,7 @@ def setup_routes(app, mongo):
         
     @app.route("/asana-proxy", methods=["POST"])
     def asana():
+        print("hola")
         try:
             data = request.json
             client_id = data.get("client_id")
@@ -1565,6 +1604,7 @@ def setup_routes(app, mongo):
 
             response = requests.post(token_url, data=payload, headers=headers)
             data = response.json()
+            print(data)
 
             access_token = data.get("access_token")
             expires_in = data.get("expires_in")
@@ -1579,6 +1619,7 @@ def setup_routes(app, mongo):
 
     @app.route('/search/clickup', methods=["GET"])
     def search_clickup(query):
+        print("HOLA CLICKUP!")
         email = request.args.get('email')
         try:
             user = mongo.database.usuarios.find_one({'correo': email})
@@ -1621,7 +1662,11 @@ def setup_routes(app, mongo):
                 "query": query
             }
 
+            print(f"Haciendo solicitud a ClickUp con {params}")
+
             response = requests.get(task_url, headers=headers, params=params)
+            print(f"Response Status: {response.status_code}")
+            print(f"Response Content: {response.text}")
 
             if response.status_code == 404:
                 return jsonify({"error": "No se encontró la ruta en ClickUp. Verifica la URL y el team_id."}), 404
@@ -1660,6 +1705,7 @@ def setup_routes(app, mongo):
 
     @app.route('/search/dropbox', methods=["GET"])
     def search_dropbox(query):
+        print("HOLA DROPBOX!")
         email = request.args.get('email')
         try:
             user = mongo.database.usuarios.find_one({'correo': email})
@@ -1710,9 +1756,11 @@ def setup_routes(app, mongo):
             }
 
             response = requests.post(url, headers=headers, json=params)
+            print("PRINT DROPBOX", response)
             response.raise_for_status()
 
             results = response.json().get('matches', [])
+            print(results)
             if not results:
                 return jsonify({"message": "No se encontraron resultados en Dropbox"}), 200
 
@@ -1795,6 +1843,7 @@ def setup_routes(app, mongo):
 
     @app.route('/search/asana', methods=["GET"])
     def search_asana(query):
+        print("HOLA ASANA!")
         email = request.args.get('email')
         try:
             user = mongo.database.usuarios.find_one({'correo': email})
@@ -1849,6 +1898,7 @@ def setup_routes(app, mongo):
 
             response.raise_for_status()
             results = response.json().get('data', [])
+            print("ASANA",results)
 
             if not results:
                 return jsonify({"message": "No se encontraron resultados en Asana"}), 200
@@ -1879,66 +1929,87 @@ def setup_routes(app, mongo):
             return jsonify({"error": "Error inesperado", "details": str(e)}), 500
 
     @app.route('/search/onedrive', methods=["GET"])
-    def search_onedrive(query):        
+    def search_onedrive(query):
+        print("HOLA ONEDRIVE!")
         email = request.args.get('email')
-
-        if not email or not query:
-            return jsonify({"error": "Faltan parámetros (email y query)"}), 400
-
         try:
             user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
             onedrive_integration = user.get('integrations', {}).get('OneDrive', None)
-            onedrive_token = onedrive_integration.get('token') if onedrive_integration else None
-
+            if onedrive_integration:
+                onedrive_token = onedrive_integration.get('token', None)
+            else:
+                onedrive_token = None
+            
             if not onedrive_token:
                 return jsonify({"error": "Token de OneDrive no disponible"}), 400
+            
+            if not query or query.lower() == "n/a":
+                return jsonify({"message": "No se proporcionaron términos de búsqueda"}), 400
 
-            # 🛠️ Limpiar la query para obtener solo el nombre de la carpeta
-            query_clean = query.split(":")[-1].strip()
+            # 🔍 **Extraer filtros de la query**
+            search_term = None
+            search_type = None  # Puede ser "file" o "folder"
 
-            # 🔍 **Buscar la carpeta directamente por nombre**
-            folder_url = f"https://graph.microsoft.com/v1.0/me/drive/root:/{query_clean}"
+            parts = query.split()
+            for part in parts:
+                if part.startswith("carpeta:"):
+                    search_term = part.replace("carpeta:", "").strip()
+                    search_type = "folder"
+                elif part.startswith("archivo:"):
+                    search_term = part.replace("archivo:", "").strip()
+                    search_type = "file"
+                elif part.startswith("tipo:"):
+                    tipo = part.replace("tipo:", "").strip().lower()
+                    if tipo in ["file", "folder"]:
+                        search_type = tipo
+            
+            if not search_term:
+                return jsonify({"error": "El término de búsqueda es inválido"}), 400
+
+            # 🔎 **Buscar la carpeta específica "Prueba" en OneDrive**
+            url = f"https://graph.microsoft.com/v1.0/me/drive/root/children"
             headers = {
-                'Authorization': f"Bearer {onedrive_token}",
-                'Accept': 'application/json'
+                'Authorization': f"Bearer {onedrive_token}"
             }
 
+            response = requests.get(url, headers=headers)
+            response.raise_for_status()
 
-            folder_response = requests.get(folder_url, headers=headers)
-            if folder_response.status_code == 404:
-                return jsonify({"error": f"No se encontró la carpeta '{query_clean}' en OneDrive."}), 404
+            results = response.json().get('value', [])
+            folder_found = None
 
-            folder_data = folder_response.json()
-            folder_id = folder_data.get("id")
+            for result in results:
+                if result.get('name').lower() == search_term.lower() and result.get('folder'):
+                    folder_found = result
+                    break
+            
+            if not folder_found:
+                return jsonify({"error": f"No se encontró la carpeta '{search_term}' en OneDrive."}), 404
 
-            if not folder_id:
-                return jsonify({"error": "No se pudo obtener el ID de la carpeta"}), 500
-
-            # 🔎 **Buscar archivos dentro de la carpeta**
+            # Ahora que encontramos la carpeta "Prueba", buscar los archivos dentro de ella
+            folder_id = folder_found.get('id')
             files_url = f"https://graph.microsoft.com/v1.0/me/drive/items/{folder_id}/children"
-            files_response = requests.get(files_url, headers=headers)
+            
+            response = requests.get(files_url, headers=headers)
+            response.raise_for_status()
 
-            if files_response.status_code != 200:
-                return jsonify({"error": "Error al obtener archivos de la carpeta"}), files_response.status_code
-
-            files = files_response.json().get('value', [])
+            files = response.json().get('value', [])
 
             if not files:
-                return jsonify({"message": f"No se encontraron archivos en la carpeta '{query_clean}'."}), 200
+                return jsonify({"message": f"No se encontraron archivos en la carpeta '{search_term}'."}), 200
 
-            # 🎯 **Procesar resultados**
-            search_results = []
+            # 🎯 **Procesar resultados (archivos dentro de la carpeta)**
+            filtered_results = []
             for file in files:
-                search_results.append({
+                filtered_results.append({
                     'name': file.get('name', 'Sin nombre'),
-                    'type': file.get('file', {}).get('mimeType', 'Desconocido'),
                     'url': file.get('@microsoft.graph.downloadUrl', None)
                 })
 
-            return jsonify(search_results)
+            return jsonify(filtered_results)
 
         except requests.RequestException as e:
             return jsonify({"error": "Error al realizar la solicitud a OneDrive", "details": str(e)}), 500
@@ -1947,6 +2018,7 @@ def setup_routes(app, mongo):
 
     @app.route('/search/teams', methods=["GET"])
     def search_teams(query):
+        print("HOLA TEAMS!")
         email = request.args.get('email')
         try:
             # Obtener el usuario desde la base de datos
@@ -1967,9 +2039,11 @@ def setup_routes(app, mongo):
             headers = {'Authorization': f"Bearer {teams_token}"}
             
             if query.startswith("conversation with:"):
+                print("conversation")
                 # Buscar un chat con el usuario especificado
                 name, keywords = extract_conversation_query(query)
                 chat_id = get_chat_id(name, headers)
+                print(f"💬 Chat ID encontrado: {chat_id}")
                 if not chat_id:
                     return jsonify({"error": f"No se encontró una conversación con {name}"}), 404
                 
@@ -2000,6 +2074,7 @@ def setup_routes(app, mongo):
             response.raise_for_status()
 
             results = response.json().get('value', [])
+            print(results)
             if not results:
                 return jsonify({"message": "No se encontraron resultados en Teams"}), 200
 
@@ -2076,6 +2151,7 @@ def setup_routes(app, mongo):
         
     @app.route('/search/google_drive', methods=["GET"])
     def search_google_drive(query):
+        print("🔍 Buscando en Google Drive...")
         email = request.args.get('email')
 
         if not query:
@@ -2107,8 +2183,10 @@ def setup_routes(app, mongo):
                 "q": folder_query,
                 "fields": "files(id, name)"
             }
+            print(folder_params)
             folder_response = requests.get("https://www.googleapis.com/drive/v3/files", headers=headers, params=folder_params)
             folder_data = folder_response.json()
+            print(folder_data)
             if "files" not in folder_data or not folder_data["files"]:
                 return []  # No se encontraron carpetas
             
@@ -2123,6 +2201,7 @@ def setup_routes(app, mongo):
             files_response = requests.get("https://www.googleapis.com/drive/v3/files", headers=headers, params=files_params)
             files_data = files_response.json()
 
+            print(files_response)
             search_results = []
             for file in files_data.get("files", []):
                 search_results.append({
@@ -2130,6 +2209,7 @@ def setup_routes(app, mongo):
                     "type": file["mimeType"],
                     "url": file["webViewLink"]
                 })
+            print(search_results)
             return jsonify(search_results)
 
         except requests.RequestException as e:
@@ -2308,8 +2388,10 @@ def setup_routes(app, mongo):
 
     @app.route("/ultima-notificacion/notion", methods=["GET"])
     def obtener_ultima_notificacion_notion():
+        print("📢 Buscando última notificación en Notion...")
 
         email = request.args.get("email")
+        print("📧 Email recibido:", email)
 
         try:
             user = mongo.database.usuarios.find_one({'correo': email})
@@ -2456,7 +2538,11 @@ def setup_routes(app, mongo):
 
     @app.route("/ultima-notificacion/asana", methods=["GET"])
     def obtener_ultima_notificacion_asana():
+        print("📢 Buscando última tarea en Asana...")
+
         email = request.args.get("email")
+        print("📧 Email recibido:", email)
+
         try:
             user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
@@ -2471,6 +2557,7 @@ def setup_routes(app, mongo):
             # 🔹 Obtener workspace_id
             workspaces_response = requests.get("https://app.asana.com/api/1.0/workspaces", headers=headers)
             workspaces_data = workspaces_response.json()
+            print("🏢 Workspaces:", workspaces_data)
 
             if workspaces_response.status_code != 200:
                 return jsonify({"error": "No se pudo obtener el workspace"}), workspaces_response.status_code
@@ -2484,6 +2571,7 @@ def setup_routes(app, mongo):
             # 🔹 Obtener user_id del usuario autenticado
             user_response = requests.get("https://app.asana.com/api/1.0/users/me", headers=headers)
             user_data = user_response.json()
+            print("👤 Usuario:", user_data)
 
             if user_response.status_code != 200:
                 return jsonify({"error": "No se pudo obtener el usuario"}), user_response.status_code
@@ -2498,6 +2586,7 @@ def setup_routes(app, mongo):
                 headers=headers
             )
             response_data = response.json()
+            print("🔍 Respuesta de Asana:", response_data)
 
             if response.status_code != 200:
                 return jsonify({"error": "Error al obtener tareas", "details": response_data}), response.status_code
@@ -2565,6 +2654,7 @@ def setup_routes(app, mongo):
 
     @app.route('/ultima-notificacion/hubspot', methods=['GET'])
     def get_last_notification_hubspot():
+        print("HUBSPOT: Última notificación")
 
         email = request.args.get("email")
         user = mongo.database.usuarios.find_one({'correo': email})
@@ -2800,6 +2890,7 @@ def setup_routes(app, mongo):
         elif "spam" in action:
             response = requests.post(f"https://www.googleapis.com/gmail/v1/users/me/messages/{message_id}/modify",
                                     headers=headers, json={"addLabelIds": ["SPAM"], "removeLabelIds": ["INBOX"]})
+            print(response)
             return jsonify({"success": "Correo marcado como spam"}) if response.status_code == 200 else jsonify({"error": "Error al marcar correo como spam"}), response.status_code
 
         return jsonify({"error": "Acción no reconocida"}), 400
@@ -2981,6 +3072,7 @@ def setup_routes(app, mongo):
             return jsonify({"error": "Token no disponible"}), 400
 
         action = interpretar_accion_productividad(user_text)
+        print(action)
         headers = {
             "Authorization": token,
             "Content-Type": "application/json"
@@ -3098,6 +3190,7 @@ def setup_routes(app, mongo):
 
     def post_to_gmail(query):
         """Procesa la consulta y ejecuta la acción en Gmail API o Google Calendar si aplica."""
+        print("HOLAAA GMAIL")
         email = request.args.get('email')
         if not email:
             return jsonify({"error": "Se debe proporcionar un email"}), 400
@@ -3163,7 +3256,9 @@ def setup_routes(app, mongo):
                 
                 if spam_results:
                     return {"message": f"Se han movido {len(spam_results)} correos del remitente {sender} a spam"}
+        print(query)
         if "agendar" in query:
+            print("hola")
             prompt = f"El usuario dijo: '{query}'. Devuelve un JSON con los campos 'date', 'time' y 'subject' que representen la fecha, hora y asunto de la cita agendada (el asunto ponlo con inicial mayuscula en la primer palabra) .Si no se puede extraer la información, devuelve 'unknown'."
         
             response = openai.chat.completions.create(
@@ -3209,6 +3304,7 @@ def setup_routes(app, mongo):
                     "end": {"dateTime": (event_datetime.replace(hour=event_datetime.hour + 1)).isoformat(), "timeZone": "UTC"}
                 }
 
+                print(event)
 
                 url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
                 headers = {"Authorization": f"Bearer {gmail_token}", "Content-Type": "application/json"}
@@ -3442,6 +3538,7 @@ def setup_routes(app, mongo):
             elif "elimina" in action:
                 # Eliminar la tarea
                 response = requests.delete(f"https://api.clickup.com/api/v2/task/{task_id}", headers=headers)
+                print(response)
                 if response.status_code == 204:  # El código 204 indica que la tarea se eliminó exitosamente
                     return jsonify({"message": f"Tarea {task_name} eliminada correctamente"})
                 else:

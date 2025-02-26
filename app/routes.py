@@ -1196,6 +1196,7 @@ def setup_routes(app, mongo):
                     max_tokens=1800
                 )
                 ia_interpretation = response.choices[0].message.content.strip().lower()
+                print(ia_interpretation)
 
                 if 'saludo' in ia_interpretation:
                     prompt_greeting = f"Usuario: {last_message}\nResponde de manera cálida y amigable, como si fuera una conversación normal."
@@ -1215,10 +1216,13 @@ def setup_routes(app, mongo):
                     ia_response = response_greeting.choices[0].message.content.strip()
 
                 elif 'get' in ia_interpretation:
+                    print("SOLICITUUUD")
                     match = re.search(r'\{[^}]*\}', ia_interpretation, re.DOTALL | re.MULTILINE)
+                    print(match)
                     if match:
                         try:
                             queries = json.loads(match.group(0))
+                            print(queries)
                             
                             gmail_query = queries.get('gmail', 'n/a')
                             notion_query = queries.get('notion', 'n/a')
@@ -1322,7 +1326,9 @@ def setup_routes(app, mongo):
                                 search_results_data['teams'] = teams_results.get_json() if hasattr(teams_results, 'get_json') else teams_results
                             except Exception:
                                 search_results_data['teams'] = ["No se encontró ningún valor en Teams"]
+                            print("DATA", search_results_data["googledrive"])
                             links = extract_links_from_datas(datas=search_results_data)
+                            print("LINKS", links)
                             prompt = generate_prompt(last_message, search_results_data)
                             global last_response
                             last_response = prompt
@@ -1338,6 +1344,7 @@ def setup_routes(app, mongo):
                                 max_tokens=4096
                             )
                             responses = response.choices[0].message.content.strip()
+                            print("RESPONSES: ",responses)
 
                             if not responses:
                                 return jsonify({"error": "La respuesta de la IA está vacía"}), 500

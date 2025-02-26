@@ -1438,7 +1438,7 @@ def setup_routes(app, mongo):
                                     if query.lower() != 'n/a' and service in apis:
                                         try:
                                             response = apis[service](query)
-                                            post_results_data[service] = apis[service](query, email)
+                                            post_results_data[service] = apis[service](query)
                                         except Exception as e:
                                             post_results_data[service] = {"error": str(e)}
                                 

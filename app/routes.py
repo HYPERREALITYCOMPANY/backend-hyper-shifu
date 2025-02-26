@@ -3163,7 +3163,7 @@ def setup_routes(app, mongo):
                 
                 if spam_results:
                     return {"message": f"Se han movido {len(spam_results)} correos del remitente {sender} a spam"}
-        if "agendar" in query:
+        if "agendar" or "agendame" in query:
             prompt = f"El usuario dijo: '{query}'. Devuelve un JSON con los campos 'date', 'time' y 'subject' que representen la fecha, hora y asunto de la cita agendada (el asunto ponlo con inicial mayuscula en la primer palabra) .Si no se puede extraer la información, devuelve 'unknown'."
         
             response = openai.chat.completions.create(

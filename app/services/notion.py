@@ -17,7 +17,6 @@ def notion_auth():
             'response_type': 'code',
         }
         auth_url = f"{notion_auth_url}?{urlencode(query_params)}"
-        print(f"Auth URL: {auth_url}")
 
         return redirect(f"{notion_auth_url}?{urlencode(query_params)}")
 
@@ -34,7 +33,6 @@ def notion_callback(mongo, idUser):
         if not code:
             return jsonify({"error": "El parámetro 'code' falta en la respuesta"}), 400
 
-        print(f"Código recibido: {code}")
 
         token_url = "https://api.notion.com/v1/oauth/token"
         token_data = {
@@ -55,14 +53,11 @@ def notion_callback(mongo, idUser):
         encoded_data = urlencode(token_data)
 
         response = requests.post(token_url, data=encoded_data, headers=headers)
-        print(f"Status code: {response.status_code}")
-        print(f"Response: {response.json()}")
 
         if response.status_code != 200:
             return jsonify({"error": "Error al obtener el token de Notion", "details": response.json()}), response.status_code
 
         access_token_data = response.json()
-        print(f"Access token: {access_token_data}")
         access_token = access_token_data.get('access_token')
         if not access_token:
             return jsonify({"error": "No se pudo obtener el token de acceso"}), 400

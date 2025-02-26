@@ -18,9 +18,7 @@ class Config:
     GMAIL_CLIENT_SECRET = os.getenv('GMAIL_CLIENT_SECRET')
 
     NOTION_CLIENT_ID = os.getenv('NOTION_CLIENT_ID')
-    print(f"Client ID: {NOTION_CLIENT_ID}")
     NOTION_CLIENT_SECRET = os.getenv('NOTION_CLIENT_SECRET')
-    print(f"Client Secret: {NOTION_CLIENT_SECRET}")
     
     ASANA_CLIENT_ID = os.getenv('ASANA_CLIENT_ID')
     ASANA_CLIENT_SECRET = os.getenv('ASANA_CLIENT_SECRET')

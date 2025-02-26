@@ -830,8 +830,7 @@ def setup_routes(app, mongo):
 
         hubspot_results = "\n".join(hubspot_results) or "No se encontraron resultados relacionados en HubSpot."
 
-        # Nuevas APIs: ClickUp, Dropbox, Asana, OneDrive, Teams
-
+        # ClickUp Results (Filtrar por tarea específica)
         clickup_results = "\n".join([
             f"Tarea: {task.get('task_name', 'Sin nombre')} | "
             f"Estado: {task.get('status', 'Sin estado')} | "
@@ -840,8 +839,8 @@ def setup_routes(app, mongo):
             f"Fecha de vencimiento: {task.get('due_date') if task.get('due_date') else 'Sin fecha'} | "
             f"Lista: {task.get('list', 'Sin lista')} | "
             f"URL: {task.get('url', 'Sin URL')}"
-            for task in search_results.get('clickup', []) if isinstance(task, dict)
-        ]) or "No se encontraron tareas relacionadas en ClickUp."
+            for task in search_results.get('clickup', []) if isinstance(task, dict) and 'Shiffu' in task.get('task_name', '')
+        ]) or "No se encontraron tareas relacionadas con 'Shiffu' en ClickUp."
 
         # Dropbox Results
         dropbox_results = "\n".join([
@@ -877,6 +876,7 @@ def setup_routes(app, mongo):
             for file in search_results.get('googledrive', []) if isinstance(file, dict)
         ]) or "No se encontraron archivos relacionados en Google Drive."
         
+
         # Crear el prompt final
         prompt = f"""Respuesta concisa a la consulta: "{query}"
 
@@ -925,8 +925,9 @@ def setup_routes(app, mongo):
         Analiza antes de responder ya que algunas apis te devuelven información general, si tu piensas que no se responde de manera amena la pregunta contesta de manera amable si puede mejorar su prompt o que desea encontrar
         Información relevante a tomar en cuenta bodys de correos, fechas y Remitente (De:)
         """
-
+        
         return prompt
+
 
 
     def clean_body(body):

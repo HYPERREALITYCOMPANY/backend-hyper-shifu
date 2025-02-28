@@ -247,9 +247,8 @@ def setup_routes(app, mongo):
             if not query:
                 return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
             
-            # Si la query está vacía después de filtrar, devolvemos un error
-            if not query:
-                return jsonify({"error": "No se proporcionó un término de búsqueda válido"}), 400
+            if query == "n/a":
+                return jsonify({"message": "No hay resultados en Gmail"}), 200
 
             if any(palabra in query for palabra in ["ultimo", "último"]):    
                 if any(palabra in query for palabra in ["mi", "mí", "mis"]):
@@ -344,7 +343,7 @@ def setup_routes(app, mongo):
                         # Crear la URL del correo
                         mail_url = f"https://mail.google.com/mail/u/0/#inbox/{message_id}"
 
-                        # Añadir a los resultados (removí filtros problemáticos)
+                        # Añadir a los resultados
                         search_results.append({
                             'from': sender,
                             'date': date,
@@ -839,7 +838,7 @@ def setup_routes(app, mongo):
             f"Fecha de vencimiento: {task.get('due_date') if task.get('due_date') else 'Sin fecha'} | "
             f"Lista: {task.get('list', 'Sin lista')} | "
             f"URL: {task.get('url', 'Sin URL')}"
-            for task in search_results.get('clickup', []) if isinstance(task, dict) and 'Shiffu' in task.get('task_name', '')
+            for task in search_results.get('clickup', []) if isinstance(task, dict)
         ]) or "No se encontraron tareas relacionadas con 'Shiffu' en ClickUp."
 
         # Dropbox Results
@@ -925,7 +924,7 @@ def setup_routes(app, mongo):
         Analiza antes de responder ya que algunas apis te devuelven información general, si tu piensas que no se responde de manera amena la pregunta contesta de manera amable si puede mejorar su prompt o que desea encontrar
         Información relevante a tomar en cuenta bodys de correos, fechas y Remitente (De:)
         """
-        
+        print(prompt)
         return prompt
 
 
@@ -1110,7 +1109,11 @@ def setup_routes(app, mongo):
                     f"- En HubSpot, identifica qué tipo de objeto busca el usuario (por ejemplo: contacto, compañía, negocio, empresa, tarea, etc.) y ajusta la query de forma precisa. "
                     f"El valor debe seguir esta estructura: \"<tipo de objeto> <query>\", como por ejemplo \"contacto osuna\" o \"compañía osuna\".\n\n"
                     f"Para Slack, adapta la query de Gmail.\n\n"
-                    f"En ClickUp, si el usuario menciona tareas o proyectos (también toma en cuenta siempre la query de Notion), ajusta la consulta a su nombre o identificador específico.\n"
+                    f"""En ClickUp, la consulta debe ajustarse específicamente si el usuario menciona tareas, proyectos, estados o fechas.
+                    Si menciona 'tarea de <nombre>' o 'estado de la tarea <nombre>', responde: 'tarea <nombre>'.
+                    Si menciona 'proyecto <nombre>' o 'estado del proyecto <nombre>', responde: 'proyecto <nombre>'.
+                    Si solo menciona 'estado' sin contexto adicional, devuelve 'estado de tareas' para obtener una visión general.
+                    Si el usuario menciona fechas, ajusta la búsqueda para encontrar tareas dentro de ese rango.\n"""
                     f"""
                         Genera una consulta para Dropbox, OneDrive y Google Drive basada en el mensaje del usuario.
                             
@@ -1200,7 +1203,7 @@ def setup_routes(app, mongo):
                 print(ia_interpretation)
 
                 if 'saludo' in ia_interpretation:
-                    prompt_greeting = f"Usuario: {last_message}\nResponde de manera cálida y amigable, como si fuera una conversación normal."
+                    prompt_greeting = f"Usuario: {last_message}\nResponde de manera cálida y amigable, como si fuera una conversación normal. Y pon emojis"
 
                     response_greeting = openai.chat.completions.create(
                         model="gpt-3.5-turbo",
@@ -1609,11 +1612,9 @@ def setup_routes(app, mongo):
                         return jsonify({"message": "No se encontraron resultados en ClickUp"}), 200
 
             team_url = "https://api.clickup.com/api/v2/team"
-            headers = {
-                'Authorization': f"Bearer {clickup_token}"
-            }
+            headers = {'Authorization': f"Bearer {clickup_token}"}
             team_response = requests.get(team_url, headers=headers)
-
+            
             if team_response.status_code != 200:
                 return jsonify({"error": "No se pudo obtener el team_id", "details": team_response.text}), team_response.status_code
 
@@ -1621,26 +1622,21 @@ def setup_routes(app, mongo):
             if not teams:
                 return jsonify({"error": "El usuario no pertenece a ningún equipo en ClickUp"}), 400
 
-            team_id = teams[0].get('id')  # Usamos el primer equipo disponible
+            team_id = teams[0].get('id')  # Tomamos el primer equipo disponible
 
-            # ✅ 2. Buscar tareas en ClickUp
+            # Buscar tareas en ClickUp
             task_url = f"https://api.clickup.com/api/v2/team/{team_id}/task"
-            params = {
-                "query": query
-            }
-
+            params = {"query": query}
             response = requests.get(task_url, headers=headers, params=params)
 
-            if response.status_code == 404:
-                return jsonify({"error": "No se encontró la ruta en ClickUp. Verifica la URL y el team_id."}), 404
+            if response.status_code != 200:
+                return jsonify({"error": "Error al buscar tareas en ClickUp", "details": response.text}), response.status_code
 
-            response.raise_for_status()  # Lanzará error si el código de estado es 4xx o 5xx
-            results = response.json().get('tasks', [])
-
-            if not results:
+            tasks = response.json().get('tasks', [])
+            
+            if not tasks:
                 return jsonify({"message": "No se encontraron resultados en ClickUp"}), 200
 
-            # ✅ 3. Filtrar manualmente las tareas basadas en el query (Filtro más flexible)
             filtered_results = [
                 {
                     'task_name': task.get('name', 'Sin título'),
@@ -1652,14 +1648,11 @@ def setup_routes(app, mongo):
                     'list': task.get('list', {}).get('name', 'Sin lista'),
                     'url': f"https://app.clickup.com/t/{task.get('id')}"
                 }
-                for task in results
+                for task in tasks
             ]
-
-            if not filtered_results:
-                return jsonify({"message": "No se encontraron tareas que coincidan con el término de búsqueda."}), 200
-
+            
             return jsonify(filtered_results)
-
+    
         except requests.RequestException as e:
             return jsonify({"error": "Error al realizar la solicitud a ClickUp", "details": str(e)}), 500
         except Exception as e:

@@ -767,6 +767,18 @@ def setup_routes(app, mongo):
     def generate_prompt(query, search_results):
         # Extraer solo la información relevante de cada fuente
         results = {}
+        def format_size(size_in_bytes):
+            if size_in_bytes is None:
+                return "Desconocido"
+            size_in_bytes = int(size_in_bytes)
+            if size_in_bytes < 1024:
+                return f"{size_in_bytes} B"
+            elif size_in_bytes < 1024**2:
+                return f"{size_in_bytes / 1024:.2f} KB"
+            elif size_in_bytes < 1024**3:
+                return f"{size_in_bytes / (1024**2):.2f} MB"
+            else:
+                return f"{size_in_bytes / (1024**3):.2f} GB"
         # Gmail Results (extraer información relevante)
         gmail_results = "\n".join([ 
             f"De: {email.get('from', 'Desconocido')} | Asunto: {email.get('subject', 'Sin asunto')} | Fecha: {email.get('date', 'Sin fecha')} | Body: {email.get('body', 'Sin cuerpo')}" 
@@ -843,7 +855,7 @@ def setup_routes(app, mongo):
 
         # Dropbox Results
         dropbox_results = "\n".join([
-            f"Archivo: {file.get('name', 'Sin nombre')} | Tamaño: {file.get('size', 'Desconocido')} | Fecha de modificación: {file.get('modified', 'Sin fecha')}"
+            f"Archivo: {file.get('name', 'Sin nombre')} | Tamaño: {format_size(file.get('size'))} | Fecha de modificación: {file.get('modified', 'Sin fecha')}"
             for file in search_results.get('dropbox', []) if isinstance(file, dict)
         ]) or "No se encontraron archivos relacionados en Dropbox."
 
@@ -871,10 +883,13 @@ def setup_routes(app, mongo):
         ]) or "No se encontraron mensajes relacionados en Teams."
 
         google_drive_results = "\n".join([
-            f"Archivo: {file.get('title', 'Sin nombre')} | Tipo: {file.get('type', 'Desconocido')} | Enlace: {file.get('url', 'Sin enlace')}"
+            f"Archivo: {file.get('title', 'Sin nombre')} | "
+            f"Tamaño: {format_size(file.get('size'))} | "
+            f"Modificado: {file.get('modified', 'Sin fecha')} | "
+            f"Propietario: {file.get('owner', 'Desconocido')} ({file.get('owner_email', 'Sin correo')}) | "
             for file in search_results.get('googledrive', []) if isinstance(file, dict)
         ]) or "No se encontraron archivos relacionados en Google Drive."
-        
+
 
         # Crear el prompt final
         prompt = f"""Respuesta concisa a la consulta: "{query}"
@@ -1019,55 +1034,77 @@ def setup_routes(app, mongo):
             return jsonify({"error": str(e)}), 500
     
     def extract_links_from_datas(datas):
-        """Extrae los enlaces y los nombres (asunto/página/mensaje) de cada API según la estructura de datos recibida."""
+        """Extrae los enlaces y los nombres (asunto/página/mensaje/nombre de archivo) de cada API según la estructura de datos recibida."""
         results = {
-            'gmail': [],
-            'slack': [],
-            'notion': [],
-            'outlook': [],
-            'clickup': [],
-            'hubspot': [],
-            'dropbox': [],
-            'asana': [],
-            'onedrive': [],
-            'teams': []  # Añadimos Teams al diccionario de resultados
+            'gmail': [], 'slack': [], 'notion': [], 'outlook': [], 'clickup': [], 'hubspot': [], 
+            'dropbox': [], 'asana': [], 'onedrive': [], 'teams': [], 'googledrive': []
         }
 
-        # Extraer links y asunto de Gmail (vienen en una lista de diccionarios)
-        if isinstance(datas.get('gmail'), list):  # Comprobamos si es una lista
+        # Gmail
+        if isinstance(datas.get('gmail'), list):
             results['gmail'] = [
                 {'link': item['link'], 'subject': item.get('subject', 'No subject')} 
                 for item in datas['gmail'] if 'link' in item
             ]
-
-        # Extraer links y mensaje de Slack (viene en una lista dentro de una tupla)
-        if isinstance(datas.get('slack'), list):  # Cambié para verificar si es una lista
+        
+        # Slack
+        if isinstance(datas.get('slack'), list):
             results['slack'] = [
-                {'link': item['link'], 'message': item.get('message', 'No message')}
+                {'link': item['link'], 'message': item.get('message', 'No message')} 
                 for item in datas['slack'] if 'link' in item
             ]
-
-        # Extraer links y nombre de página de Notion (viene en una lista)
-        if isinstance(datas.get('notion'), list):  # Verificamos que sea lista
+        
+        # Notion
+        if isinstance(datas.get('notion'), list):
             results['notion'] = [
-                {'url': item['url'], 'page_name': item.get('properties', {}).get('Nombre', 'Sin Nombre')}
+                {'url': item['url'], 'page_name': item.get('properties', {}).get('Nombre', 'Sin Nombre')} 
                 for item in datas['notion'] if 'url' in item
             ]
-
-        # Extraer links y asunto de Outlook (viene en una lista dentro de una tupla)
-        if isinstance(datas.get('outlook'), list):  # Cambié para verificar si es lista
+        
+        # Outlook
+        if isinstance(datas.get('outlook'), list):
             results['outlook'] = [
-                {'webLink': item['webLink'], 'subject': item.get('subject', 'No subject')}
+                {'webLink': item['webLink'], 'subject': item.get('subject', 'No subject')} 
                 for item in datas['outlook'] if 'webLink' in item
             ]
-
+        
+        # ClickUp
         if isinstance(datas.get("clickup"), list):
             results['clickup'] = [
-                {'url': item['url'], 'task_name': item.get('task_name', 'Sin Nombre')}
-                for item in datas.get("clickup") if 'url' in item
+                {'url': item['url'], 'task_name': item.get('task_name', 'Sin Nombre')} 
+                for item in datas["clickup"] if 'url' in item
             ]
-
+        
+        # Dropbox
+        if isinstance(datas.get("dropbox"), list):
+            results['dropbox'] = [
+                {'url': item['download_link'], 'name': item.get('name', 'Sin Nombre')} 
+                for item in datas["dropbox"] if 'download_link' in item
+            ]
+        
+        # OneDrive
+        if isinstance(datas.get("onedrive"), list):
+            results['onedrive'] = [
+                {'url': item['url'], 'name': item.get('name', 'Sin Nombre')} 
+                for item in datas["onedrive"] if 'url' in item
+            ]
+        
+        # Asana
+        if isinstance(datas.get("asana"), list):
+            results['asana'] = [
+                {'url': item['url'], 'task_name': item.get('name', 'Sin Nombre')} 
+                for item in datas["asana"] if 'url' in item
+            ]
+        
+        # Google Drive
+        if isinstance(datas.get("googledrive"), list):
+            results['googledrive'] = [
+                {'url': item['url'], 'name': item.get('name', 'Sin Nombre')} 
+                for item in datas["googledrive"] if 'url' in item
+            ]
+        
         return results
+
                 
     @app.route("/api/chatAi", methods=["POST"])
     def apiChat():
@@ -1077,11 +1114,48 @@ def setup_routes(app, mongo):
         hoy = datetime.today().strftime('%Y-%m-%d')
         system_message = """
         Eres Shiffu, un asistente virtual amigable y útil en su versión alfa. 
-        Ayudas a los usuarios respondiendo preguntas de manera clara y humana. 
-        Si el usuario saluda, responde de forma cálida y amigable como si estuvieras manteniendo una conversación fluida.
-        Si el usuario cuenta algo sobre cómo se siente o alguna situación especial, responde de manera comprensiva.
-        En general, responde con naturalidad y empatía a las interacciones.
-        Tambien eres un analizador de prompts para distintas apis (Gmail, Hubspot, Outlook, Slack, Notion, etc)
+        Tu objetivo es ayudar a los usuarios respondiendo de manera clara, precisa y con un tono humano. 
+
+        ### Interacción General:
+        - Si el usuario saluda, responde de forma cálida y amigable, como si fuera una conversación fluida.
+        - Si el usuario comparte cómo se siente o menciona una situación personal, responde con empatía y comprensión.
+        - Siempre mantén una respuesta natural y cercana, evitando un tono robótico.
+
+        ### Análisis de Prompts para APIs:
+        Eres un analizador experto en interpretar solicitudes relacionadas con APIs como:
+        - **Gmail, Outlook**
+        - **Slack, Teams**
+        - **Notion, Asana, ClickUp**
+        - **HubSpot**
+        - **Google Drive, Dropbox, OneDrive**
+
+        Cuando el usuario envía un mensaje, debes:
+        1. **Identificar el tipo de solicitud:**
+        - Si es un saludo → Responde con: `"Es un saludo"`
+        - Si es una solicitud GET → Responde con: `"Es una solicitud GET"`
+        - Si es una solicitud POST → Responde con: `"Es una solicitud POST"`
+        - Si menciona una respuesta anterior → Responde con: `"Se refiere a la respuesta anterior"`
+
+        2. **Procesar solicitudes GET:**
+        - **Gmail y Outlook:** Si el usuario menciona un nombre propio, genera `from: <nombre completo>`. Si menciona un correo, usa `from: <correo>`. No agregues filtros de fecha.
+        - **HubSpot:** Detecta si busca un contacto, empresa, negocio o tarea. Responde en el formato `"contacto <nombre>"`, `"empresa <sector>"`, etc.
+        - **Slack y Teams:** Adapta la consulta de Gmail en un formato más conversacional.
+        - **Notion, ClickUp, Asana:** Si el usuario menciona proyectos, tareas o estados, genera la consulta correspondiente.
+        - **Google Drive, Dropbox, OneDrive:** Si busca un archivo, carpeta o documento, estructura la consulta en `"archivo:<nombre>"` o `"carpeta:<nombre>"`.
+        - **Teams:** Si menciona un canal, responde `"channel:<nombre>"`. Si menciona una conversación con alguien, responde `"conversation with:<nombre> <tema>"`.
+
+        3. **Procesar solicitudes POST:**
+        - **Crear elementos:** Agregar tareas, contactos, archivos (Notion, Asana, ClickUp).
+        - **Editar elementos:** Modificar estados, nombres, detalles de tareas o archivos.
+        - **Eliminar elementos:** Borrar correos (Gmail, Outlook), tareas o archivos (Notion, Asana, ClickUp).
+        - **Mover elementos:** Archivar correos, mover archivos (Gmail, Outlook, Drive).
+        - **Enviar/Compartir:** Enviar correos o mensajes (Gmail, Outlook, Slack, Teams).
+        - **Agendar:** Programar citas en Google Calendar.
+
+        Si una API no es relevante en la solicitud, responde `"N/A"`.
+
+        Tu respuesta debe ser concisa, sin palabras innecesarias, y lista para ser interpretada por sistemas automatizados.
+
         """
 
         ia_response = "Lo siento, no entendí tu mensaje. ¿Puedes reformularlo?"
@@ -1330,7 +1404,7 @@ def setup_routes(app, mongo):
                                 search_results_data['teams'] = teams_results.get_json() if hasattr(teams_results, 'get_json') else teams_results
                             except Exception:
                                 search_results_data['teams'] = ["No se encontró ningún valor en Teams"]
-                            print("DATA", search_results_data["googledrive"])
+                            print("DATA", search_results_data)
                             links = extract_links_from_datas(datas=search_results_data)
                             print("LINKS", links)
                             prompt = generate_prompt(last_message, search_results_data)
@@ -1722,11 +1796,15 @@ def setup_routes(app, mongo):
 
             for result in results:
                 raw_metadata = result.get('metadata', {})
-                metadata = raw_metadata.get('metadata', {})  # Extraer el diccionario interno correcto
+                metadata = raw_metadata.get('metadata', {})  # Extraer el diccionario correcto
 
                 name = metadata.get('name', 'Sin nombre')
                 path = metadata.get('path_display', 'Sin ruta')
                 tag = metadata.get('.tag', '')  # Puede ser "file" o "folder"
+                
+                # 🔍 **Extraer tamaño y fecha de modificación**
+                size = metadata.get('size', None)  # Tamaño del archivo
+                modified = metadata.get('server_modified', None)  # Fecha de modificación
 
                 if search_type == "folder" and tag == "folder":
                     # 📂 Si es una carpeta, listar su contenido
@@ -1735,16 +1813,13 @@ def setup_routes(app, mongo):
                         'Authorization': f"Bearer {dropbox_token}",
                         'Content-Type': 'application/json'
                     }
-                    list_folder_params = {
-                        "path": path
-                    }
+                    list_folder_params = {"path": path}
 
                     try:
                         list_response = requests.post(list_folder_url, headers=list_folder_headers, json=list_folder_params)
                         list_response.raise_for_status()
                         folder_contents = list_response.json().get('entries', [])
 
-                        # Agregar solo archivos dentro de la carpeta
                         for item in folder_contents:
                             if item['.tag'] == 'file':  # Solo archivos
                                 file_link = generate_dropbox_link(dropbox_token, item['path_display'])
@@ -1752,7 +1827,9 @@ def setup_routes(app, mongo):
                                     'name': item['name'],
                                     'path': item['path_display'],
                                     'type': 'file',
-                                    'download_link': file_link
+                                    'download_link': file_link,
+                                    'size': item.get('size'),  
+                                    'modified': item.get('server_modified')  
                                 })
                     except requests.RequestException as e:
                         return jsonify({"error": "Error al listar los archivos dentro de la carpeta", "details": str(e)}), 500
@@ -1764,9 +1841,10 @@ def setup_routes(app, mongo):
                             'name': name,
                             'path': path,
                             'type': tag,
-                            'download_link': file_link
+                            'download_link': file_link,
+                            'size': size,
+                            'modified': modified
                         })
-
             if not filtered_results:
                 return jsonify({"message": "No se encontraron archivos o carpetas que coincidan con el término de búsqueda."}), 200
 
@@ -2099,27 +2177,22 @@ def setup_routes(app, mongo):
             
             # Reformatear la consulta para eliminar "carpeta:" si está presente
             if query.startswith("carpeta:"):
-                query = query[len("carpeta:"):]
+                query = query[len("carpeta:"):]  # Solo queda el nombre de la carpeta
 
-            # Ahora query solo contendrá "prueba" y será válida para la búsqueda en Google Drive
             folder_query = f"name = '{query}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-
-            folder_params = {
-                "q": folder_query,
-                "fields": "files(id, name)"
-            }
+            folder_params = {"q": folder_query, "fields": "files(id, name)"}
             folder_response = requests.get("https://www.googleapis.com/drive/v3/files", headers=headers, params=folder_params)
             folder_data = folder_response.json()
             if "files" not in folder_data or not folder_data["files"]:
-                return []  # No se encontraron carpetas
-            
+                return jsonify([])  # No se encontraron carpetas
+
             folder_id = folder_data["files"][0]["id"]
             
             # Buscar archivos dentro de la carpeta
             files_query = f"'{folder_id}' in parents and trashed = false"
             files_params = {
                 "q": files_query,
-                "fields": "files(id, name, mimeType, webViewLink)"
+                "fields": "files(id, name, mimeType, webViewLink, size, modifiedTime, owners(displayName, emailAddress))"
             }
             files_response = requests.get("https://www.googleapis.com/drive/v3/files", headers=headers, params=files_params)
             files_data = files_response.json()
@@ -2127,17 +2200,22 @@ def setup_routes(app, mongo):
             search_results = []
             for file in files_data.get("files", []):
                 search_results.append({
-                    "title": file["name"],
-                    "type": file["mimeType"],
-                    "url": file["webViewLink"]
+                    "title": file.get("name", "Desconocido"),
+                    "type": file.get("mimeType", "Desconocido"),
+                    "url": file.get("webViewLink", "No disponible"),
+                    "size": file.get("size", "Desconocido"),
+                    "modified": file.get("modifiedTime", "Desconocido"),
+                    "owner": file.get("owners", [{}])[0].get("displayName", "Desconocido"),
+                    "owner_email": file.get("owners", [{}])[0].get("emailAddress", "Desconocido")
                 })
+            
             return jsonify(search_results)
-
+        
         except requests.RequestException as e:
             return jsonify({"error": "Error en la solicitud a Google Drive", "details": str(e)}), 500
         except Exception as e:
             return jsonify({"error": "Error inesperado", "details": str(e)}), 500
-
+    
 # SECRETARIA
     def get_gmail_headers(token):
         return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
@@ -2428,32 +2506,58 @@ def setup_routes(app, mongo):
     def obtener_ultimo_archivo_onedrive():
         email = request.args.get("email")
         try:
+            # Buscar al usuario en la base de datos
             user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
+            # Obtener el token de OneDrive
             token = user.get("integrations", {}).get("OneDrive", {}).get("token")
             if not token:
                 return jsonify({"error": "Token no disponible"}), 400
 
-            headers = get_onedrive_headers(token)
-            response = requests.get("https://graph.microsoft.com/v1.0/me/drive/recent", headers=headers)
+            # Configurar los headers de la API de OneDrive
+            headers = {
+                "Authorization": f"Bearer {token}"
+            }
 
+            # Nueva URL para buscar archivos en TODO OneDrive
+            url = "https://graph.microsoft.com/v1.0/me/drive/root/search(q='')"
+            params = {
+                "$orderby": "lastModifiedDateTime desc",
+                "$top": "5",  # Obtener solo los más recientes
+                "$select": "id,name,file,lastModifiedDateTime,parentReference"
+            }
+            response = requests.get(url, headers=headers, params=params)
+
+            # Verificar que la respuesta fue exitosa
             if response.status_code != 200:
-                return jsonify({"error": "Error al obtener archivos"})
+                return jsonify({"error": "Error al obtener archivos de OneDrive"}), response.status_code
 
-            files = response.json().get("value", [])
-            if not files:
-                return jsonify({"error": "No hay archivos recientes"})
+            items = response.json().get('value', [])
+            if not items:
+                return jsonify({"error": "No hay archivos nuevos"}), 404
 
-            file = files[0]
+            # Filtrar solo archivos (descartar carpetas)
+            archivos = [item for item in items if "file" in item]
+            if not archivos:
+                return jsonify({"error": "No hay archivos recientes"}), 404
+
+            # Obtener el archivo más reciente
+            last_file = archivos[0]
+
             return jsonify({
-                "id": file["id"],
-                "name": file["name"],
-                "createdDateTime": file["createdDateTime"]
+                "from": "OneDrive",
+                "subject": f"Último archivo modificado: {last_file['name']}",
+                "snippet": f"Archivo: {last_file['name']}",
+                "id": last_file["id"],
+                "modified_time": last_file.get("lastModifiedDateTime", "(Sin fecha de modificación)"),
+                "file_path": last_file.get("parentReference", {}).get("path", "Desconocido")  # Ruta del archivo
             })
+
         except Exception as e:
             return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+
 
     @app.route("/ultima-notificacion/asana", methods=["GET"])
     def obtener_ultima_notificacion_asana():
@@ -2519,20 +2623,24 @@ def setup_routes(app, mongo):
             print("❌ Error inesperado:", str(e))
             return jsonify({"error": "Error inesperado", "details": str(e)}), 500
 
-
     @app.route("/ultima-notificacion/dropbox", methods=["GET"])
     def obtener_ultimo_archivo_dropbox():
         email = request.args.get("email")
         try:
+            # Buscar al usuario en la base de datos
             user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
+            # Obtener el token de Dropbox
             token = user.get("integrations", {}).get("Dropbox", {}).get("token")
             if not token:
                 return jsonify({"error": "Token no disponible"}), 400
 
+            # Configuración de headers para la API de Dropbox
             headers = get_dropbox_headers(token)
+            
+            # Llamada a la API para obtener la lista de archivos y carpetas en Dropbox
             response = requests.post("https://api.dropboxapi.com/2/files/list_folder", headers=headers, json={"path": ""})
 
             if response.status_code != 200:
@@ -2540,16 +2648,53 @@ def setup_routes(app, mongo):
 
             entries = response.json().get("entries", [])
             if not entries:
-                return jsonify({"error": "No hay archivos nuevos"})
+                return jsonify({"error": "No hay archivos o carpetas nuevos"})
 
-            file = entries[0]
-            return jsonify({
-                "from": "Dropbox",  # Nombre fijo para Dropbox
-                "subject": file["name"],  # Usamos el nombre del archivo como el asunto
-                "snippet": f"Archivo: {file['name']}",
-                "id": file["id"],
-                "server_modified": file.get("server_modified", "(Sin fecha de modificación)")  # Fecha de modificación
-            })
+            # Filtramos los archivos y las carpetas
+            files_and_folders = []
+            for entry in entries:
+                if entry[".tag"] == "file":
+                    files_and_folders.append({
+                        "type": "file",
+                        "name": entry["name"],
+                        "path_display": entry["path_display"],
+                        "client_modified": entry.get("client_modified", ""),
+                        "id": entry["id"]
+                    })
+                elif entry[".tag"] == "folder":
+                    files_and_folders.append({
+                        "type": "folder",
+                        "name": entry["name"],
+                        "path_display": entry["path_display"],
+                        "client_modified": entry.get("client_modified", ""),
+                        "id": entry["id"]
+                    })
+            
+            # Ordenamos los archivos y las carpetas por fecha de modificación (del más reciente al más antiguo)
+            files_and_folders.sort(key=lambda x: x.get('client_modified', ''), reverse=True)
+
+            # Obtenemos el más reciente (archivo o carpeta)
+            last_entry = files_and_folders[0]
+
+            # Construimos la respuesta según el tipo de la entrada (archivo o carpeta)
+            if last_entry["type"] == "file":
+                return jsonify({
+                    "from": "Dropbox",  # Nombre fijo para Dropbox
+                    "subject": f"Ultimo cambio detectado fue en la ruta {last_entry['path_display']} en el archivo llamado: {last_entry['name']}",
+                    "snippet": f"Archivo: {last_entry['name']}",
+                    "id": last_entry["id"],
+                    "server_modified": last_entry.get("client_modified", "(Sin fecha de modificación)"),  # Fecha de modificación
+                    "file_path": last_entry["path_display"]  # Carpeta donde se encuentra el archivo
+                })
+            else:
+                return jsonify({
+                    "from": "Dropbox",  # Nombre fijo para Dropbox
+                    "subject": f"Ultimo cambio detectado fue en la ruta {last_entry['path_display']} en la carpeta llamada: {last_entry['name']}",
+                    "snippet": f"Carpeta: {last_entry['name']}",
+                    "id": last_entry["id"],
+                    "server_modified": last_entry.get("client_modified", "(Sin fecha de modificación)"),  # Fecha de modificación
+                    "file_path": last_entry["path_display"]  # Carpeta donde se encuentra la carpeta
+                })
 
         except Exception as e:
             return jsonify({"error": "Error inesperado", "details": str(e)}), 500
@@ -2713,30 +2858,67 @@ def setup_routes(app, mongo):
     def obtener_ultimo_archivo_drive():
         email = request.args.get("email")
         try:
+            # Buscar al usuario en la base de datos
             user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
+            # Obtener el token de Google Drive
             token = user.get("integrations", {}).get("Drive", {}).get("token")
             if not token:
                 return jsonify({"error": "Token no disponible"}), 400
 
-            headers = get_google_drive_headers(token)
-            response = requests.get("https://www.googleapis.com/drive/v3/files?pageSize=1&orderBy=createdTime desc", headers=headers)
+            # Configurar los headers de la API de Google Drive
+            headers = {
+                "Authorization": f"Bearer {token}"
+            }
 
+            # Realizar la solicitud a la API de Google Drive para listar los archivos
+            url = "https://www.googleapis.com/drive/v3/files"
+            params = {
+                "pageSize": 10,  # Obtener los primeros 10 archivos
+                "fields": "files(id, name, mimeType, modifiedTime, parents)",
+                "orderBy": "modifiedTime desc"  # Ordenar por la fecha de modificación
+            }
+            response = requests.get(url, headers=headers, params=params)
+
+            # Verificar que la respuesta fue exitosa
             if response.status_code != 200:
-                return jsonify({"error": "Error al obtener archivos"}), response.status_code
+                return jsonify({"error": "Error al obtener archivos de Google Drive"}), response.status_code
 
-            files = response.json().get("files", [])
+            files = response.json().get('files', [])
             if not files:
-                return jsonify({"error": "No hay archivos nuevos"})
+                return jsonify({"error": "No hay archivos o carpetas nuevos"}), 404
 
-            file = files[0]
-            return jsonify({
-                "id": file["id"],
-                "name": file["name"],
-                "createdTime": file["createdTime"]
-            })
+            # Obtener el archivo o carpeta más reciente
+            last_entry = files[0]
+
+            # Clasificar si es un archivo o una carpeta
+            if last_entry["mimeType"] == "application/vnd.google-apps.folder":
+                entry_type = "folder"
+            else:
+                entry_type = "file"
+
+            # Crear la respuesta según el tipo (archivo o carpeta)
+            if entry_type == "file":
+                return jsonify({
+                    "from": "Google Drive",
+                    "subject": f"Último cambio detectado fue en el archivo llamado: {last_entry['name']}",
+                    "snippet": f"Archivo: {last_entry['name']}",
+                    "id": last_entry["id"],
+                    "modified_time": last_entry.get("modifiedTime", "(Sin fecha de modificación)"),
+                    "file_path": last_entry.get("parents", ["Desconocido"])  # Carpeta donde se encuentra el archivo
+                })
+            else:
+                return jsonify({
+                    "from": "Google Drive",
+                    "subject": f"Último cambio detectado fue en la carpeta llamada: {last_entry['name']} en la ruta {last_entry.get('parents', 'Desconocida')}",
+                    "snippet": f"Carpeta: {last_entry['name']}",
+                    "id": last_entry["id"],
+                    "modified_time": last_entry.get("modifiedTime", "(Sin fecha de modificación)"),
+                    "file_path": last_entry.get("parents", ["Desconocido"])  # Carpeta donde se encuentra la carpeta
+                })
+
         except Exception as e:
             return jsonify({"error": "Error inesperado", "details": str(e)}), 500
 
@@ -3141,7 +3323,7 @@ def setup_routes(app, mongo):
                     delete_results.append(delete_response.json())
                 
                 if delete_results:
-                    return {"message": f"Se han eliminado {len(delete_results)} correos del remitente {sender}"}
+                    return {"message": f"Se han eliminado {len(delete_results)} correos del remitente {sender} 🧹✉️🚮"}
             
             elif action == "spam":
                 # Primero, buscamos los mensajes del remitente especificado
@@ -3163,7 +3345,7 @@ def setup_routes(app, mongo):
                     spam_results.append(modify_response.json())
                 
                 if spam_results:
-                    return {"message": f"Se han movido {len(spam_results)} correos del remitente {sender} a spam"}
+                    return {"message": f"Se han movido {len(spam_results)} correos del remitente {sender} a spam 🚫📩🛑"}
         if "agendar" or "agendame" in query:
             prompt = f"El usuario dijo: '{query}'. Devuelve un JSON con los campos 'date', 'time' y 'subject' que representen la fecha, hora y asunto de la cita agendada (el asunto ponlo con inicial mayuscula en la primer palabra) .Si no se puede extraer la información, devuelve 'unknown'."
         
@@ -3214,7 +3396,7 @@ def setup_routes(app, mongo):
                 url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
                 headers = {"Authorization": f"Bearer {gmail_token}", "Content-Type": "application/json"}
                 response = requests.post(url, json=event, headers=headers)
-                return {"message": "Se ha agendado tu cita"}
+                return {"message": f"¡Tu cita ha sido agendada con éxito! 📅🕒\n\nDetalles:\n- Asunto: {subject}\n- Fecha y hora de inicio: {event['start']['dateTime']}\n- Fecha y hora de fin: {event['end']['dateTime']}\n\n¡Nos vemos pronto! 😊"}
             except Exception as e:
                 print(f"Error al procesar la respuesta: {e}")
         return {"error": "No se encontró una acción válida en la consulta"}

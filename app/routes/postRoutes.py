@@ -15,12 +15,14 @@ import os
 import quopri
 import openai
 openai.api_key=Config.CHAT_API_KEY
-from app.routes.secretaryGetRoutes import setup_routes_secretary_gets
 
 def setup_post_routes(app,mongo):
-    functions = setup_routes_secretary_gets(app, mongo)
-    get_clickup_headers = functions["get_clickup_headers"]
-    
+    def get_clickup_headers(token):
+        return {
+            "Authorization": token,
+            "Content-Type": "application/json"
+    }
+
     def post_to_gmail(query):
         """Procesa la consulta y ejecuta la acción en Gmail API o Google Calendar si aplica."""
         email = request.args.get('email')

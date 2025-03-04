@@ -11,6 +11,8 @@ from app.routes.integrationRoutes import setup_integrations_routes
 from app.routes.secretaryPostRoutes import setup_routes_secretary_posts
 from app.routes.secretaryGetRoutes import setup_routes_secretary_gets
 from app.routes.proxyRoutes import setup_proxy_routes
+from app.routes.chatRoutes import setup_routes_chats
+
 
 
 
@@ -37,7 +39,7 @@ def create_app():
     setup_integrations_routes(app, mongo)
     setup_routes_secretary_posts(app, mongo)
     setup_proxy_routes(app, mongo)
-
+    setup_routes_chats(app, mongo)
     return app
 
 app = create_app()

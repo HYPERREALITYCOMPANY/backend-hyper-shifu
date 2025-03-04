@@ -15,6 +15,10 @@ from requests.models import Response
 import re
 import json
 from werkzeug.security import generate_password_hash, check_password_hash
+
+#Importación de rutas
+from .routes.authRoutes import setup_auth_routes
+
 import os
 import quopri
 from flask_pymongo import PyMongo, ObjectId
@@ -23,6 +27,7 @@ openai.api_key=Config.CHAT_API_KEY
 
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 def setup_routes(app, mongo):
+    setup_auth_routes(app, mongo)
     stateSlack = ""
     idUser = ""
     notion_bp = Blueprint('notion', __name__)
@@ -761,8 +766,9 @@ def setup_routes(app, mongo):
             f"Asignado a: {', '.join(task.get('assignees', ['Sin asignar']))} | "
             f"Fecha de vencimiento: {task.get('due_date') if task.get('due_date') else 'Sin fecha'} | "
             f"Lista: {task.get('list', 'Sin lista')} | "
+            f"URL: {task.get('url', 'Sin URL')}"
             for task in search_results.get('clickup', []) if isinstance(task, dict)
-        ]) or "No se encontraron tareas relacionadas en ClickUp."
+        ]) or "No se encontraron tareas relacionadas con 'Shiffu' en ClickUp."
 
         # Dropbox Results
         dropbox_results = "\n".join([
@@ -944,7 +950,8 @@ def setup_routes(app, mongo):
             # Manejo de errores
             return jsonify({"error": str(e)}), 500
     
-    def extract_links_from_datas(datas, query):
+    def extract_links_from_datas(datas):
+        """Extrae los enlaces y los nombres (asunto/página/mensaje/nombre de archivo) de cada API según la estructura de datos recibida."""
         results = {
             'gmail': [], 'slack': [], 'notion': [], 'outlook': [], 'clickup': [], 'hubspot': [], 
             'dropbox': [], 'asana': [], 'onedrive': [], 'teams': [], 'googledrive': []
@@ -1080,8 +1087,7 @@ def setup_routes(app, mongo):
                     f"1. LO MÁS IMPORTANTE: Identifica si es un saludo, una solicitud GET o POST, o si se refiere a la respuesta anterior enviada por la IA.\n"
                     f"   - Si es un saludo, responde con 'Es un saludo'.\n"
                     f"   - Si es una solicitud GET, responde con 'Es una solicitud GET'.\n"
-                    f"   - Si es una solicitud POST simple (acción única), responde con 'Es una solicitud POST'.\n"       
-                    f"   - Si es una solicitud POST automatizada o quemada (para ejecutar siempre cuando ocurra algo), responde con 'Es una solicitud POST automatizada'.\n"
+                    f"   - Si es una solicitud POST, responde con 'Es una solicitud POST'.\n"
                     f"   - Si es una solicitud que menciona algo sobre una conversación o respuesta anterior (ejemplo: 'de lo que hablamos antes', 'en la conversación anterior', 'acerca del mensaje previo', 'respuesta anterior', 'de que trataba', etc), responde con 'Se refiere a la respuesta anterior'.\n"
                     f"En caso de ser una solicitud GET o POST, desglosa las partes relevantes para cada API (Gmail, Notion, Slack, HubSpot, Outlook, ClickUp, Dropbox, Asana, Google Drive, OneDrive, Teams).\n"
                     f"Asegúrate de lo siguiente:\n"
@@ -1134,7 +1140,7 @@ def setup_routes(app, mongo):
                     f"El JSON debe incluir solo información relevante extraída del mensaje del usuario y ser fácilmente interpretable por sistemas automatizados."
                     f"Si el mensaje del usuario no puede ser interpretado para una de las aplicaciones, responde 'N/A' o 'No se puede interpretar'." 
                     f""
-                    f"ESPECIFICAMENTE SI Y SOLO SI LA SOLICITUD ES TIPO POST SIMPLE:\n"
+                    f"ESPECIFICAMENTE SI Y SOLO SI LA SOLICITUD ES TIPO POST:\n"
                     f"OBLIGATORIO: Responde con 'es una solicitud post' seguido del JSON de abajo\n"
                     f"Detecta las acciones solicitadas por el usuario y genera la consulta para la API correspondiente:\n"
                     f"1. **Crear o Agregar elementos** (acciones como 'crear', 'agregar', 'añadir', 'subir', 'agendar'):\n"
@@ -1167,71 +1173,7 @@ def setup_routes(app, mongo):
                     f"    \"onedrive\": \"<query para OneDrive, 'N/A' si no aplica>\",\n"
                     f"    \"teams\": \"<query para Teams, 'N/A' si no aplica>\"\n"
                     f"}}\n"
-                    f"ESPECIFICAMENTE SI Y SOLO SI LA SOLICITUD ES TIPO POST AUTOMATIZADA (QUEMADA):\n"
-                    f"OBLIGATORIO: Responde con 'es una solicitud post automatizada' seguido del JSON de abajo\n"
-                    f"Detecta los patrones de automatización solicitados por el usuario. Estos se identifican con frases como:\n"
-                    f"- 'Cada vez que...'\n"
-                    f"- 'Siempre que...'\n"
-                    f"- 'Mueve siempre...'\n"
-                    f"- 'Borra automáticamente...'\n"
-                    f"- 'Cuando reciba correos de...'\n"
-                    f"- 'Si un proyecto cambia a...'\n"
-                    f"- 'Contesta automáticamente a...'\n"
-                    f"- Cualquier indicación de acción repetitiva o condicional\n\n"
-                    
-                    f"Para estos casos, construye un JSON con:\n"
-                    f"1. 'condition': La condición que activa la automatización\n"
-                    f"2. 'action': La acción a realizar\n"
-                    f"3. Para cada servicio relevante\n\n"
-                    
-                    f"**Estructura del JSON para la respuesta (con automatizaciones):**\n"
-                    f"{{\n"
-                    f"    \"gmail\": {{\n"
-                    f"        \"condition\": \"<condición que activa la acción, ej: 'Cuando llegue correo de Dominos Pizza'>\",\n"
-                    f"        \"action\": \"<acción a realizar, ej: 'borrar'>\"\n"
-                    f"    }},\n"
-                    f"    \"notion\": {{\n"
-                    f"        \"condition\": \"<condición, ej: 'Cuando un proyecto cambie a En Curso'>\",\n"
-                    f"        \"action\": \"<acción, ej: 'cambiar a prioridad crítica'>\"\n"
-                    f"    }},\n"
-                    f"    \"slack\": {{\n"
-                    f"        \"condition\": \"<condición>\",\n"
-                    f"        \"action\": \"<acción>\"\n"
-                    f"    }},\n"
-                    f"    \"hubspot\": {{\n"
-                    f"        \"condition\": \"<condición>\",\n"
-                    f"        \"action\": \"<acción>\"\n"
-                    f"    }},\n"
-                    f"    \"outlook\": {{\n"
-                    f"        \"condition\": \"<condición>\",\n"
-                    f"        \"action\": \"<acción>\"\n"
-                    f"    }},\n"
-                    f"    \"clickup\": {{\n"
-                    f"        \"condition\": \"<condición>\",\n"
-                    f"        \"action\": \"<acción>\"\n"
-                    f"    }},\n"
-                    f"    \"dropbox\": {{\n"
-                    f"        \"condition\": \"<condición>\",\n"
-                    f"        \"action\": \"<acción>\"\n"
-                    f"    }},\n"
-                    f"    \"asana\": {{\n"
-                    f"        \"condition\": \"<condición>\",\n"
-                    f"        \"action\": \"<acción>\"\n"
-                    f"    }},\n"
-                    f"    \"googledrive\": {{\n"
-                    f"        \"condition\": \"<condición>\",\n"
-                    f"        \"action\": \"<acción>\"\n"
-                    f"    }},\n"
-                    f"    \"onedrive\": {{\n"
-                    f"        \"condition\": \"<condición>\",\n"
-                    f"        \"action\": \"<acción>\"\n"
-                    f"    }},\n"
-                    f"    \"teams\": {{\n"
-                    f"        \"condition\": \"<condición>\",\n"
-                    f"        \"action\": \"<acción>\"\n"
-                    f"    }}\n"
-                    f"}}\n"
-                    f"LOS JSON debe incluir solo información relevante extraída del mensaje del usuario y ser fácilmente interpretable por sistemas automatizados. "
+                    f"El JSON debe incluir solo información relevante extraída del mensaje del usuario y ser fácilmente interpretable por sistemas automatizados. "
                     f"Usa 'N/A' si una API no aplica a la solicitud.\n"
                     f"Los saludos posibles que deberías detectar incluyen, pero no se limitan a: 'Hola', '¡Hola!', 'Buenos días', 'Buenas', 'Hey', 'Ciao', 'Bonjour', 'Hola a todos', '¡Qué tal!'. "
                     f"Si detectas un saludo, simplemente responde con 'Es un saludo'."
@@ -1243,14 +1185,10 @@ def setup_routes(app, mongo):
                 response = openai.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[
-                        {"role": "system", "content": """Eres un asistente que identifica saludos o solicitudes. 
-                                - Si el usuario saluda, responde de forma cálida y amigable, como si fuera una conversación fluida.
-                                - Si el usuario comparte cómo se siente o menciona una situación personal, responde con empatía y comprensión.
-                                - Siempre mantén una respuesta natural y cercana, evitando un tono robótico.
-                        """},
+                        {"role": "system", "content": "Eres un asistente que identifica saludos o solicitudes."},
                         {"role": "user", "content": prompt}
                     ],
-                    max_tokens=4096
+                    max_tokens=1800
                 )
                 ia_interpretation = response.choices[0].message.content.strip().lower()
                 print(ia_interpretation)
@@ -1480,18 +1418,6 @@ def setup_routes(app, mongo):
                                 return jsonify({"error": f"Error al procesar la solicitud: {str(e)}"}), 500
                         except json.JSONDecodeError:
                             return jsonify({"error": "Formato JSON inválido"}), 400
-                elif "es una solicitud post automatizada" ==  ia_interpretation:
-                    print("Solicitud automatizada")
-                    try:
-                        json_match = re.search(r"\{.*\}", match.group(0))  
-                        print(json_match)
-                        if json_match:
-                            json_data = json.loads(json_match.group(0))  # Convertir a diccionario
-                            return process_automated_post_request(json_data)
-                        else:
-                            print("No se encontró JSON válido en la respuesta.")
-                    except Exception as e:
-                        return f"Error al procesar la solicitud automatizada: {str(e)}"
                 elif 'anterior' in ia_interpretation:
                     reference_prompt = f"El usuario dijo: '{last_message}'\n"
                     reference_prompt += f"La última respuesta de la IA fue: '{last_response}'.\n"
@@ -2700,14 +2626,9 @@ def setup_routes(app, mongo):
             print(f"Error al convertir fecha: {date_str} -> {str(e)}")
             return 0  # Retorna 0 si hay error
 
-    def get_hubspot_headers(token):
-        return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-
-    def parse_hubspot_date(date_str):
-        return int(date_str) if date_str.isdigit() else int(datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S.%fZ").timestamp() * 1000)
-
     @app.route('/ultima-notificacion/hubspot', methods=['GET'])
     def get_last_notification_hubspot():
+
         email = request.args.get("email")
         user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
@@ -2723,7 +2644,7 @@ def setup_routes(app, mongo):
 
         headers = get_hubspot_headers(hubspot_token)
 
-        # URLs de búsqueda
+        # URLs de búsqueda para contactos, negocios y empresas
         endpoints = {
             "contacto": "https://api.hubapi.com/crm/v3/objects/contacts/search",
             "negocio": "https://api.hubapi.com/crm/v3/objects/deals/search",
@@ -2742,7 +2663,7 @@ def setup_routes(app, mongo):
                     ]
                 }
             ],
-            "properties": ["hs_lastmodifieddate", "dealname", "firstname", "lastname", "email", "hubspot_owner_id", "name"],
+            "properties": ["hs_lastmodifieddate","dealname", "firstname", "lastname", "email", "hubspot_owner_id", "name"],
             "limit": 1,
             "sorts": ["-hs_lastmodifieddate"]
         }
@@ -2775,21 +2696,11 @@ def setup_routes(app, mongo):
         if not latest_update:
             return jsonify({"message": "No se encontraron cambios recientes."}), 404
 
-        # Extraer datos de la actualización
+        # Formatear respuesta
         update_data = latest_update["data"]
         entity_type = latest_update["type"]
         properties = update_data["properties"]
 
-        # Obtener propiedades antiguas si existen
-        previous_properties = update_data.get("previousValues", {})
-
-        changed_properties = {}
-        for key, new_value in properties.items():
-            old_value = previous_properties.get(key)
-            if old_value and old_value != new_value:
-                changed_properties[key] = {"antes": old_value, "después": new_value}
-
-        # Construcción del mensaje según el tipo de entidad
         if entity_type == "contacto":
             subject = f"{properties.get('firstname', '')} {properties.get('lastname', '')}".strip()
             snippet = f"Nuevo contacto: {properties.get('email', '(sin email)')}"
@@ -2800,18 +2711,13 @@ def setup_routes(app, mongo):
             subject = properties.get("name", "(Sin nombre)")
             snippet = f"Nuevo cambio en la empresa."
 
-        # Agregar detalles del cambio
-        if changed_properties:
-            snippet += f" Propiedades modificadas: {', '.join(changed_properties.keys())}."
-
         notification_data = {
             "from": "HubSpot",
             "type": entity_type,
             "subject": subject if subject else "(Sin título)",
             "snippet": snippet,
             "id": update_data.get("id", "N/A"),
-            "last_modified": datetime.fromtimestamp(latest_update["timestamp"] / 1000).isoformat(),
-            "changed_properties": changed_properties
+            "last_modified": datetime.fromtimestamp(latest_update["timestamp"] / 1000).isoformat()
         }
 
         return jsonify(notification_data)
@@ -3190,102 +3096,30 @@ def setup_routes(app, mongo):
 
         return jsonify({"error": "Acción no reconocida"}), 400
 
-    def interpretar_accion_hubspot(user_text):
-        """
-        Determina la acción a ejecutar según el texto recibido.
-        """
-        action_text = user_text.lower()
-
-        if "actualizar etapa" in action_text or "cambiar etapa" in action_text:
-            return "update_stage"
-        elif "asignar a" in action_text or "cambiar dueño" in action_text:
-            return "assign_owner"
-        elif "cambiar nombre del negocio" in action_text:
-            return "update_deal_name"
-        elif "eliminar contacto" in action_text:
-            return "delete_contact"
-        elif "cambiar nombre del contacto" in action_text:
-            return "update_contact_name"
-
-        return "unknown"
-
-    def get_hubspot_headers(token):
-        return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-
     @app.route("/accion-hubspot", methods=["POST"])
     def ejecutar_accion_hubspot():
         data = request.json
         email = data.get("email")
         user_text = data.get("action_text")
-        entity_id = data.get("entity_id")  # Puede ser deal_id o contact_id
-        entity_type = data.get("entity_type")  # "deal" o "contact"
+        deal_id = data.get("deal_id")
 
-        if not email or not user_text or not entity_id or not entity_type:
-            return jsonify({"error": "Faltan parámetros requeridos (email, action_text, entity_id, entity_type)"}), 400
-
-        # Buscar usuario en la base de datos
         user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
         token = user.get("integrations", {}).get("HubSpot", {}).get("token")
         if not token:
-            return jsonify({"error": "Token de HubSpot no disponible"}), 400
+            return jsonify({"error": "Token no disponible"}), 400
 
         action = interpretar_accion_hubspot(user_text)
         headers = get_hubspot_headers(token)
 
-        if entity_type == "deal":
-            url = f"https://api.hubapi.com/crm/v3/objects/deals/{entity_id}"
-            if action == "update_stage":
-                new_stage = data.get("new_stage", "").strip()
-                if not new_stage:
-                    return jsonify({"error": "Falta el nuevo estado (new_stage)"}), 400
+        if "update" in action:
+            new_stage = data.get("new_stage", "")
+            response = requests.patch(f"https://api.hubapi.com/crm/v3/objects/deals/{deal_id}", headers=headers, json={"properties": {"dealstage": new_stage}})
+            return jsonify({"success": "Negocio actualizado"}) if response.status_code == 200 else jsonify({"error": "Error al actualizar negocio"}), response.status_code
 
-                response = requests.patch(url, headers=headers, json={"properties": {"dealstage": new_stage}})
-                return jsonify({"success": f"Negocio actualizado a la etapa '{new_stage}'"}) if response.status_code == 200 else jsonify({"error": "Error al actualizar negocio"}), response.status_code
-
-            elif action == "assign_owner":
-                new_owner_id = data.get("owner_id", "").strip()
-                if not new_owner_id:
-                    return jsonify({"error": "Falta el ID del nuevo propietario (owner_id)"}), 400
-
-                response = requests.patch(url, headers=headers, json={"properties": {"hubspot_owner_id": new_owner_id}})
-                return jsonify({"success": f"Negocio asignado a {new_owner_id}"}) if response.status_code == 200 else jsonify({"error": "Error al asignar propietario"}), response.status_code
-
-            elif action == "update_deal_name":
-                new_name = data.get("new_name", "").strip()
-                if not new_name:
-                    return jsonify({"error": "Falta el nuevo nombre (new_name)"}), 400
-
-                response = requests.patch(url, headers=headers, json={"properties": {"dealname": new_name}})
-                return jsonify({"success": f"Nombre del negocio cambiado a '{new_name}'"}) if response.status_code == 200 else jsonify({"error": "Error al actualizar el nombre"}), response.status_code
-
-        elif entity_type == "contact":
-            url = f"https://api.hubapi.com/crm/v3/objects/contacts/{entity_id}"
-            
-            if action == "delete_contact":
-                response = requests.delete(url, headers=headers)
-                return jsonify({"success": "Contacto eliminado"}) if response.status_code == 204 else jsonify({"error": "Error al eliminar contacto"}), response.status_code
-
-            elif action == "update_contact_name":
-                new_firstname = data.get("new_firstname", "").strip()
-                new_lastname = data.get("new_lastname", "").strip()
-
-                if not new_firstname and not new_lastname:
-                    return jsonify({"error": "Falta el nuevo nombre o apellido"}), 400
-
-                update_data = {}
-                if new_firstname:
-                    update_data["firstname"] = new_firstname
-                if new_lastname:
-                    update_data["lastname"] = new_lastname
-
-                response = requests.patch(url, headers=headers, json={"properties": update_data})
-                return jsonify({"success": f"Nombre del contacto actualizado a '{new_firstname} {new_lastname}'"}) if response.status_code == 200 else jsonify({"error": "Error al actualizar contacto"}), response.status_code
-
-        return jsonify({"error": "Acción o tipo de entidad no reconocidos"}), 400
-
+        return jsonify({"error": "Acción no reconocida"}), 400
 
     @app.route("/accion-dropbox", methods=["POST"])
     def ejecutar_accion_dropbox():
@@ -3754,280 +3588,3 @@ def setup_routes(app, mongo):
                 return jsonify({"error": "No se pudo completar la tarea"}), 400
 
         return {"error": "No se encontró una tarea válida en la consulta"}
-
-    # POST QUEMADOS
-    # Función para obtener el token de acceso del usuario por servicio
-    def get_user_token(email, service):
-        try:
-            # Obtener usuario de MongoDB
-            user = mongo.database.usuarios.find_one({'correo': email})
-            if not user:
-                print(f"Usuario no encontrado: {email}")
-                return None
-            
-            # Verificar si existe la integración para este servicio
-            integration = user.get('integrations', {}).get(service, None)
-            if not integration:
-                print(f"No hay integración para {service}")
-                return None
-                
-            return integration
-        except Exception as e:
-            print(f"Error al obtener token para {service}: {str(e)}")
-            return None
-    def save_automation_rule(email, service, condition, action):
-        try:
-            rule = {
-                "condition": condition,
-                "action": action,
-                "created_at": datetime.now(),
-                "active": True,
-                "rule_id": str(ObjectId()) 
-            }
-
-            result = mongo.database.usuarios.update_one(
-                {'correo': email},
-                {
-                    '$push': {
-                        f'automation_rules.{service}': rule
-                    }
-                },
-                upsert=False
-            )
-            
-            if result.modified_count > 0:
-                print(f"Regla guardada para {email} en {service}")
-                return True
-            else:
-                mongo.database.usuarios.update_one(
-                    {'correo': email, f'automation_rules.{service}': {'$exists': False}},
-                    {
-                        '$set': {
-                            f'automation_rules.{service}': [rule]
-                        }
-                    }
-                )
-                print(f"Inicializado array de reglas para {email} en {service}")
-                return True
-                
-        except Exception as e:
-            print(f"Error al guardar regla de automatización: {str(e)}")
-            return False
-    def process_automated_post_request(email, json_data):
-        print(f"Procesando solicitud de automatización para {email}...")
-        results = {}
-        
-        for service, data in json_data.items():
-            if data != "N/A" and isinstance(data, dict) and 'condition' in data and 'action' in data:
-                condition = data['condition']
-                action = data['action']
-                
-                saved = save_automation_rule(email, service, condition, action)
-                
-                # Si se guardó correctamente, configurar la automatización en el servicio
-                if saved:
-                    # Llamar al método específico según el servicio
-                    if service == "gmail":
-                        result = post_automatizado_gmail(email, condition, action)
-                    # elif service == "outlook":
-                    #     result = post_automatizado_outlook(email, condition, action)
-                    # elif service == "notion":
-                    #     result = post_automatizado_notion(email, condition, action)
-                    # elif service == "slack":
-                    #     result = post_automatizado_slack(email, condition, action)
-                    # elif service == "hubspot":
-                    #     result = post_automatizado_hubspot(email, condition, action)
-                    # elif service == "clickup":
-                    #     result = post_automatizado_clickup(email, condition, action)
-                    # elif service == "dropbox":
-                    #     result = post_automatizado_dropbox(email, condition, action)
-                    # elif service == "asana":
-                    #     result = post_automatizado_asana(email, condition, action)
-                    # elif service == "googledrive":
-                    #     result = post_automatizado_googledrive(email, condition, action)
-                    # elif service == "onedrive":
-                    #     result = post_automatizado_onedrive(email, condition, action)
-                    # elif service == "teams":
-                    #     result = post_automatizado_teams(email, condition, action)
-                    else:
-                        result = {"error": f"Servicio no soportado: {service}"}
-                    
-                    results[service] = result
-                else:
-                    results[service] = {"error": "No se pudo guardar la regla"}
-        
-        return results
-
-    def post_automatizado_gmail(email, condition, action):
-        try:
-            integration = get_user_token(email, "Gmail")
-            if not integration or not integration.get('token'):
-                return {"error": "No se pudo obtener el token de acceso para Gmail"}
-            
-            access_token = integration['token']
-        
-            return crear_regla_gmail(access_token, condition, action)
-            
-        except Exception as e:
-            return {"error": f"Error al configurar automatización para Gmail: {str(e)}"}
-
-    def crear_regla_gmail(access_token, condition, action):
-        filter_criteria = {}
-        
-        # Extraer remitente de la condición
-        if any(x in condition.lower() for x in ["correo de", "email de", "mensaje de", "reciba de"]):
-            sender_pattern = r"(?:correo|email|mensaje|reciba) de ([^\s,]+(?:\s+[^\s,]+)*)"
-            sender_match = re.search(sender_pattern, condition, re.IGNORECASE)
-            if sender_match:
-                sender = sender_match.group(1)
-                filter_criteria["from"] = sender
-        
-        # Extraer asunto si está en la condición
-        if "asunto" in condition.lower():
-            subject_pattern = r"asunto (?:que contenga |con |)[\'\"]?([^\'\"]+)[\'\"]?"
-            subject_match = re.search(subject_pattern, condition, re.IGNORECASE)
-            if subject_match:
-                subject = subject_match.group(1)
-                filter_criteria["subject"] = subject
-        
-        # Determinar la acción a realizar
-        action_settings = {}
-        reply_message = None
-        
-        if any(x in action.lower() for x in ["borrar", "eliminar", "borra", "elimina"]):
-            action_settings["removeLabelIds"] = ["INBOX"]
-            action_settings["addLabelIds"] = ["TRASH"]
-        elif any(x in action.lower() for x in ["spam", "no deseado"]):
-            action_settings["removeLabelIds"] = ["INBOX"]
-            action_settings["addLabelIds"] = ["SPAM"]
-        elif any(x in action.lower() for x in ["archivar", "archiva"]):
-            action_settings["removeLabelIds"] = ["INBOX"]
-        elif "mover a" in action.lower() or "mueve a" in action.lower():
-            # Extraer la etiqueta a la que mover
-            label_pattern = r"(?:mover|mueve) a [\'\"]?([^\'\"]+)[\'\"]?"
-            label_match = re.search(label_pattern, action, re.IGNORECASE)
-            if label_match:
-                label_name = label_match.group(1)
-                # Obtener o crear la etiqueta
-                label_id = get_or_create_label(access_token, label_name)
-                action_settings["addLabelIds"] = [label_id]
-        elif any(x in action.lower() for x in ["responder", "contestar", "responde", "contesta"]):
-            # Extraer el mensaje de respuesta
-            reply_pattern = r"(?:responder|contestar|responde|contesta) (?:con |)[\'\"]([^\'\"]+)[\'\"]"
-            reply_match = re.search(reply_pattern, action, re.IGNORECASE)
-            reply_message = reply_match.group(1) if reply_match else "Gracias por tu mensaje"
-            # Las respuestas automáticas se manejan de forma diferente en Gmail
-            # Aquí configuramos una regla de vacaciones temporalmente
-            return configure_gmail_auto_reply(access_token, filter_criteria, reply_message)
-        
-        # Si no hay filtros válidos, no podemos crear la regla
-        if not filter_criteria:
-            return {"error": "No se pudieron extraer criterios válidos de la condición"}
-        
-        # Si no hay acciones válidas, no podemos crear la regla
-        if not action_settings and not reply_message:
-            return {"error": "No se pudo determinar una acción válida"}
-        
-        # Crear el filtro en Gmail
-        url = "https://gmail.googleapis.com/gmail/v1/users/me/settings/filters"
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/json"
-        }
-        
-        filter_data = {
-            "criteria": filter_criteria,
-            "action": action_settings
-        }
-        
-        response = requests.post(url, headers=headers, json=filter_data)
-        
-        if response.status_code in [200, 201]:
-            return {
-                "success": True,
-                "message": "Regla de Gmail creada correctamente",
-                "filter_id": response.json().get("id")
-            }
-        else:
-            return {
-                "success": False,
-                "error": f"Error al crear regla en Gmail: {response.status_code}",
-                "details": response.text
-            }
-    def configure_gmail_auto_reply(access_token, filter_criteria, reply_message):
-        url = "https://gmail.googleapis.com/gmail/v1/users/me/settings/vacation"
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/json"
-        }
-        
-        # Construir un mensaje que indique que es una respuesta automática
-        if "from" in filter_criteria:
-            full_message = f"[Respuesta automática para {filter_criteria['from']}] {reply_message}"
-        else:
-            full_message = f"[Respuesta automática] {reply_message}"
-        
-        data = {
-            "enableAutoReply": True,
-            "responseSubject": "Respuesta Automática",
-            "responseBodyHtml": full_message,
-            "restrictToContacts": False,
-            "restrictToDomain": False
-        }
-        
-        response = requests.put(url, headers=headers, json=data)
-        
-        if response.status_code in [200, 204]:
-            return {
-                "success": True,
-                "message": "Respuesta automática configurada correctamente",
-                "note": "Esta es una configuración general. Para respuestas específicas por remitente, se requiere un servicio personalizado."
-            }
-        else:
-            return {
-                "success": False,
-                "error": f"Error al configurar respuesta automática: {response.status_code}",
-                "details": response.text
-            }
-
-    def get_or_create_label(access_token, label_name):
-        """
-        Busca una etiqueta en Gmail, o la crea si no existe
-        
-        Args:
-            access_token (str): Token de acceso para la API de Gmail
-            label_name (str): Nombre de la etiqueta a buscar o crear
-        
-        Returns:
-            str: ID de la etiqueta
-        """
-        # Buscar etiquetas existentes
-        url = "https://gmail.googleapis.com/gmail/v1/users/me/labels"
-        headers = {
-            "Authorization": f"Bearer {access_token}"
-        }
-        
-        response = requests.get(url, headers=headers)
-        
-        if response.status_code == 200:
-            labels = response.json().get("labels", [])
-            for label in labels:
-                if label["name"].lower() == label_name.lower():
-                    return label["id"]
-            
-            # Si no existe, crear la etiqueta
-            create_url = url
-            label_data = {
-                "name": label_name,
-                "labelListVisibility": "labelShow",
-                "messageListVisibility": "show"
-            }
-            
-            create_response = requests.post(create_url, headers=headers, json=label_data)
-            
-            if create_response.status_code in [200, 201]:
-                return create_response.json()["id"]
-            else:
-                raise Exception(f"Error al crear etiqueta: {create_response.status_code}")
-        else:
-            raise Exception(f"Error al obtener etiquetas: {response.status_code}")

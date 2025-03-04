@@ -1,10 +1,13 @@
 from flask import Flask
 from config import Config
-from app.routes import setup_routes
+from app.routesmain import setup_routes
 from flask_pymongo import PyMongo, ObjectId
 from flask_cors import CORS
 import os
 from dotenv import load_dotenv
+
+from app.routes.authRoutes import setup_auth_routes
+from app.routes.userRoutes import setup_user_routes
 
 load_dotenv()
 
@@ -24,6 +27,8 @@ def create_app():
         print("Error al conectar con MongoDB:", e)
 
     setup_routes(app, mongo)
+    setup_auth_routes(app, mongo)
+    setup_user_routes(app, mongo)
     return app
 
 app = create_app()

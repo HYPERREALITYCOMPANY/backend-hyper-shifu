@@ -17,7 +17,6 @@ import json
 from werkzeug.security import generate_password_hash, check_password_hash
 
 #Importación de rutas
-from .routes.authRoutes import setup_auth_routes
 
 import os
 import quopri
@@ -27,7 +26,7 @@ openai.api_key=Config.CHAT_API_KEY
 
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 def setup_routes(app, mongo):
-    setup_auth_routes(app, mongo)
+    
     stateSlack = ""
     idUser = ""
     notion_bp = Blueprint('notion', __name__)
@@ -37,23 +36,6 @@ def setup_routes(app, mongo):
     @app.route('/')
     def home():
         return ("Este es el backend del proyecto!!")
-
-    @app.route('/check_integrations', methods=['GET'])
-    def check_integrations():
-        email = request.args.get('email')
-
-        if not email:
-            return jsonify({"error": "Correo electrónico no proporcionado"}), 400
-
-        usuario = mongo.database.usuarios.find_one({"correo": email})
-        
-        if not usuario:
-            return jsonify({"error": "Usuario no encontrado"}), 404
-
-        if not usuario.get('integrations') or len(usuario['integrations']) == 0:
-            return jsonify({"message": "Usuario sin integraciones"}), 200
-        
-        return jsonify({"message": "Usuario con integraciones", "integrations": usuario['integrations']}), 200
 
     @app.route('/get_integrations', methods=['GET'])
     def get_integrations():
@@ -114,6 +96,8 @@ def setup_routes(app, mongo):
         idUser = id_user  # Ejemplo: almacenar el ID en la sesión
 
         return jsonify({"message": "ID de usuario asignado correctamente", "user_id": id_user}), 200
+
+        #INICIA CHAT AI (GET)
 
     def to_ascii(text):
         normalized_text = unicodedata.normalize('NFD', text)
@@ -880,7 +864,9 @@ def setup_routes(app, mongo):
         """Extrae texto del contenido HTML."""
         soup = BeautifulSoup(html_content, 'html.parser')
         return soup.get_text()
-    
+
+
+#AYUDAN PARA QUE EL FRONT SE MANDE SOLO EL CODIGO Y ESTO LO MANDA AL ACCESS TOKEN    
     @app.route('/notion-proxy', methods=['POST'])
     def notion_proxy():
         try:

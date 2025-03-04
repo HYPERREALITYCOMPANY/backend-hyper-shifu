@@ -1,12 +1,9 @@
-from flask import Blueprint, request, jsonify, session
+from flask import request, jsonify, session
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_pymongo import ObjectId
-
-auth_bp = Blueprint('auth', __name__)  # Definir el Blueprint
-
 def setup_auth_routes(app, mongo):
 
-    @auth_bp.route('/register', methods=['POST'])
+    @app.route('/register', methods=['POST'])
     def register_user():
         request_data = request.get_json() 
         
@@ -36,7 +33,7 @@ def setup_auth_routes(app, mongo):
         result = mongo.database.usuarios.insert_one(usuario)
         return jsonify({"message": "Usuario registrado exitosamente", "id": str(result.inserted_id)}), 201
 
-    @auth_bp.route('/login', methods=['POST'])
+    @app.route('/login', methods=['POST'])
     def login_user():
         data = request.get_json()
         if not data or not all(k in data for k in ("correo", "password")):
@@ -51,7 +48,7 @@ def setup_auth_routes(app, mongo):
         img = usuario['img']
         return jsonify({"message": "Inicio de sesión exitoso", "user_id": session['user_id'], "user_name": name, "user_img": img }), 200
 
-    @auth_bp.route("/get_user", methods=["GET"])
+    @app.route("/get_user", methods=["GET"])
     def get_user():
         user_id = request.args.get('id')
         if not user_id:
@@ -68,7 +65,7 @@ def setup_auth_routes(app, mongo):
         usuario["_id"] = str(usuario["_id"])
         return jsonify({"user": usuario}), 200
 
-    @auth_bp.route("/update_user", methods=["PUT"])
+    @app.route("/update_user", methods=["PUT"])
     def update_user():
         user_id = request.json.get('id')
         update_data = {
@@ -86,5 +83,3 @@ def setup_auth_routes(app, mongo):
             return jsonify({"error": "Usuario no encontrado"}), 404
 
         return jsonify({"message": "Usuario actualizado con éxito"}), 200
-
-    app.register_blueprint(auth_bp)  # Registrar el Blueprint en la app

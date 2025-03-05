@@ -229,7 +229,8 @@ def setup_routes_chats(app, mongo):
                     f"1. LO MÁS IMPORTANTE: Identifica si es un saludo, una solicitud GET o POST, o si se refiere a la respuesta anterior enviada por la IA.\n"
                     f"   - Si es un saludo, responde con 'Es un saludo'.\n"
                     f"   - Si es una solicitud GET, responde con 'Es una solicitud GET'.\n"
-                    f"   - Si es una solicitud POST, responde con 'Es una solicitud POST'.\n"
+                    f"   - Si es una solicitud POST simple (acción única), responde con 'Es una solicitud POST'.\n"
+                    f"   - Si es una solicitud POST automatizada o quemada (para ejecutar siempre cuando ocurra algo), responde con 'Es una solicitud POST automatizada'.\n"
                     f"   - Si es una solicitud que menciona algo sobre una conversación o respuesta anterior (ejemplo: 'de lo que hablamos antes', 'en la conversación anterior', 'acerca del mensaje previo', 'respuesta anterior', 'de que trataba', etc), responde con 'Se refiere a la respuesta anterior'.\n"
                     f"En caso de ser una solicitud GET o POST, desglosa las partes relevantes para cada API (Gmail, Notion, Slack, HubSpot, Outlook, ClickUp, Dropbox, Asana, Google Drive, OneDrive, Teams).\n"
                     f"Asegúrate de lo siguiente:\n"
@@ -282,7 +283,7 @@ def setup_routes_chats(app, mongo):
                     f"El JSON debe incluir solo información relevante extraída del mensaje del usuario y ser fácilmente interpretable por sistemas automatizados."
                     f"Si el mensaje del usuario no puede ser interpretado para una de las aplicaciones, responde 'N/A' o 'No se puede interpretar'." 
                     f""
-                    f"ESPECIFICAMENTE SI Y SOLO SI LA SOLICITUD ES TIPO POST:\n"
+                    f"ESPECIFICAMENTE SI Y SOLO SI LA SOLICITUD ES TIPO POST SIMPLE:\n"
                     f"OBLIGATORIO: Responde con 'es una solicitud post' seguido del JSON de abajo\n"
                     f"Detecta las acciones solicitadas por el usuario y genera la consulta para la API correspondiente:\n"
                     f"1. **Crear o Agregar elementos** (acciones como 'crear', 'agregar', 'añadir', 'subir', 'agendar'):\n"
@@ -317,6 +318,72 @@ def setup_routes_chats(app, mongo):
                     f"}}\n"
                     f"El JSON debe incluir solo información relevante extraída del mensaje del usuario y ser fácilmente interpretable por sistemas automatizados. "
                     f"Usa 'N/A' si una API no aplica a la solicitud.\n"
+                    f"ESPECIFICAMENTE SI Y SOLO SI LA SOLICITUD ES TIPO POST AUTOMATIZADA (QUEMADA):\n"
+                    f"OBLIGATORIO: Responde con 'es una solicitud post automatizada' seguido del JSON de abajo\n"
+                    f"Detecta los patrones de automatización solicitados por el usuario. Estos se identifican con frases como:\n"
+                    f"- 'Cada vez que...'\n"
+                    f"- 'Siempre que...'\n"
+                    f"- 'Mueve siempre...'\n"
+                    f"- 'Borra automáticamente...'\n"
+                    f"- 'Cuando reciba correos de...'\n"
+                    f"- 'Si un proyecto cambia a...'\n"
+                    f"- 'Contesta automáticamente a...'\n"
+                    f"- Cualquier indicación de acción repetitiva o condicional\n\n"
+                    
+                    f"Para estos casos, construye un JSON con:\n"
+                    f"1. 'condition': La condición que activa la automatización\n"
+                    f"2. 'action': La acción a realizar\n"
+                    f"3. Para cada servicio relevante\n\n"
+                    
+                    f"**Estructura del JSON para la respuesta (con automatizaciones):**\n"
+                    f"{{\n"
+                    f"    \"gmail\": {{\n"
+                    f"        \"condition\": \"<condición que activa la acción, ej: 'Cuando llegue correo de Dominos Pizza'>\",\n"
+                    f"        \"action\": \"<acción a realizar, ej: 'borrar'>\"\n"
+                    f"    }},\n"
+                    f"    \"notion\": {{\n"
+                    f"        \"condition\": \"<condición, ej: 'Cuando un proyecto cambie a En Curso'>\",\n"
+                    f"        \"action\": \"<acción, ej: 'cambiar a prioridad crítica'>\"\n"
+                    f"    }},\n"
+                    f"    \"slack\": {{\n"
+                    f"        \"condition\": \"<condición>\",\n"
+                    f"        \"action\": \"<acción>\"\n"
+                    f"    }},\n"
+                    f"    \"hubspot\": {{\n"
+                    f"        \"condition\": \"<condición>\",\n"
+                    f"        \"action\": \"<acción>\"\n"
+                    f"    }},\n"
+                    f"    \"outlook\": {{\n"
+                    f"        \"condition\": \"<condición>\",\n"
+                    f"        \"action\": \"<acción>\"\n"
+                    f"    }},\n"
+                    f"    \"clickup\": {{\n"
+                    f"        \"condition\": \"<condición>\",\n"
+                    f"        \"action\": \"<acción>\"\n"
+                    f"    }},\n"
+                    f"    \"dropbox\": {{\n"
+                    f"        \"condition\": \"<condición>\",\n"
+                    f"        \"action\": \"<acción>\"\n"
+                    f"    }},\n"
+                    f"    \"asana\": {{\n"
+                    f"        \"condition\": \"<condición>\",\n"
+                    f"        \"action\": \"<acción>\"\n"
+                    f"    }},\n"
+                    f"    \"googledrive\": {{\n"
+                    f"        \"condition\": \"<condición>\",\n"
+                    f"        \"action\": \"<acción>\"\n"
+                    f"    }},\n"
+                    f"    \"onedrive\": {{\n"
+                    f"        \"condition\": \"<condición>\",\n"
+                    f"        \"action\": \"<acción>\"\n"
+                    f"    }},\n"
+                    f"    \"teams\": {{\n"
+                    f"        \"condition\": \"<condición>\",\n"
+                    f"        \"action\": \"<acción>\"\n"
+                    f"    }}\n"
+                    f"}}\n"
+                    f"Usa 'N/A' si una API no aplica a la solicitud de automatización.\n"
+                    f"Asegúrate de que las condiciones sean claras y específicas, y que las acciones sean ejecutables por el sistema.\n"
                     f"Los saludos posibles que deberías detectar incluyen, pero no se limitan a: 'Hola', '¡Hola!', 'Buenos días', 'Buenas', 'Hey', 'Ciao', 'Bonjour', 'Hola a todos', '¡Qué tal!'. "
                     f"Si detectas un saludo, simplemente responde con 'Es un saludo'."
                 )
@@ -562,6 +629,8 @@ def setup_routes_chats(app, mongo):
                                 return jsonify({"error": f"Error al procesar la solicitud: {str(e)}"}), 500
                         except json.JSONDecodeError:
                             return jsonify({"error": "Formato JSON inválido"}), 400
+                elif 'automatizado' in ia_interpretation:
+                    print("hola automatizado")
                 elif 'anterior' in ia_interpretation:
                     reference_prompt = f"El usuario dijo: '{last_message}'\n"
                     reference_prompt += f"La última respuesta de la IA fue: '{last_response}'.\n"
@@ -569,7 +638,12 @@ def setup_routes_chats(app, mongo):
 
                     response_reference = openai.chat.completions.create(
                         model="gpt-3.5-turbo",
-                        messages=[{"role": "system", "content": "Eres un asistente que recuerda la última respuesta."},
+                        messages=[{"role": "system", "content":  """Eres un asistente que identifica saludos o solicitudes. 
+                    - Si el usuario saluda, responde de forma cálida y amigable, como si fuera una conversación fluida.
+                    - Si el usuario comparte cómo se siente o menciona una situación personal, responde con empatía y comprensión.
+                    - Si el usuario solicita automatizaciones o reglas persistentes (quemadas), identifícalas correctamente.
+                    - Siempre mantén una respuesta natural y cercana, evitando un tono robótico.
+            """},
                                 {"role": "user", "content": reference_prompt}],
                         max_tokens=150
                     )

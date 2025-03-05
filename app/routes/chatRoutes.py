@@ -28,6 +28,7 @@ def setup_routes_chats(app, mongo):
     post_to_outlook = functionsPost["post_to_outlook"]
     post_to_clickup = functionsPost["post_to_clickup"]
     post_to_asana = functionsPost["post_to_asana"]
+    post_to_dropbox = functionsPost["post_to_dropbox"]
     global last_searchs
 
     # CHAT GET Y POSTS
@@ -213,7 +214,6 @@ def setup_routes_chats(app, mongo):
     def apiChat():
         print("Hola")
         data = request.get_json()
-        print(data)
         user_messages = data.get("messages", [])
         last_ai_response = ""
         hoy = datetime.today().strftime('%Y-%m-%d')
@@ -523,7 +523,7 @@ def setup_routes_chats(app, mongo):
                                     # 'hubspot': post_to_hubspot,
                                     'outlook': post_to_outlook,
                                     'clickup': post_to_clickup,
-                                    # 'dropbox': post_to_dropbox,
+                                    'dropbox': post_to_dropbox,
                                     'asana': post_to_asana,
                                     # 'googledrive': post_to_googledrive,
                                     # 'onedrive': post_to_onedrive,
@@ -535,10 +535,12 @@ def setup_routes_chats(app, mongo):
                                     if query.lower() != 'n/a' and service in apis:
                                         try:
                                             response = apis[service](query)
+                                            print("RESPONSES", response)
                                             message = response.get('message', None)
                                             # Solo guardamos si hay un mensaje y es distinto a "Sin mensaje"
                                             if message and message != "Sin mensaje":
                                                 post_results_data[service] = message
+                                                
                                         except Exception as e:
                                             # Puedes decidir cómo manejar el error, aquí se ignora si falla
                                             pass

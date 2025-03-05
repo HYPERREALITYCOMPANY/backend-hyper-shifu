@@ -415,10 +415,81 @@ def setup_post_routes(app,mongo):
                 return jsonify({"error": "No se pudo completar la tarea"}), 400
 
         return {"error": "No se encontró una tarea válida en la consulta"}
+        
+    def post_to_dropbox(query):
+        """Procesa la consulta y ejecuta la acción en la API de Dropbox."""
+        email = request.args.get('email')
+        if not email:
+            return jsonify({"error": "Se debe proporcionar un email"}), 400
+        user = mongo.database.usuarios.find_one({"correo": email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+        dropbox_token = user.get("integrations", {}).get("Dropbox", {}).get("token")
+        if not dropbox_token:
+            return jsonify({"error": "Token de Dropbox no disponible"}), 400
+        
+        match = re.search(r'archivo:(.+?) en carpeta:(.+)', query, re.IGNORECASE)
+        if match:
+            file_name = match.group(1).strip()
+            folder_name = match.group(2).strip()
+            
+            url = "https://api.dropboxapi.com/2/files/search_v2"
+            headers = {
+                'Authorization': f"Bearer {dropbox_token}",
+                'Content-Type': 'application/json'
+            }
+            params = {
+                "query": file_name,
+                "options": {
+                    "max_results": 10,
+                    "file_status": "active"
+                }
+            }
+            response = requests.post(url, headers=headers, json=params)
+            response.raise_for_status()
+            results = response.json().get('matches', [])
+
+            file_path = None
+            for result in results:
+                dropbox_file_name = result['metadata']['metadata']['name']
+                dropbox_file_path = result['metadata']['metadata']['path_lower']
+                print(dropbox_file_name)
+                print(dropbox_file_path)
+                
+                if dropbox_file_name.lower().startswith(file_name.lower()):
+                    file_path = dropbox_file_path
+                    break
+            
+            if not file_path:
+                return jsonify({"error": f"Archivo '{file_name}' no encontrado en Dropbox"}), 404
+            
+            folder_path = f"/{folder_name}/{dropbox_file_name}"
+
+            headers = {
+                "Authorization": f"Bearer {dropbox_token}",
+                "Content-Type": "application/json"
+            }
+
+            data = {
+                "from_path": file_path,
+                "to_path": folder_path,
+                "allow_ownership_transfer": False,
+                "allow_shared_folder": True,
+                "autorename": False,
+            }
+
+            url = "https://api.dropboxapi.com/2/files/move_v2"
+            response = requests.post(url, headers=headers, json=data)
+            return {"message": f"🎉 El archivo '{dropbox_file_name}' ha sido movido a la carpeta '{folder_name}' con éxito! 🚀"}    
+
+        return jsonify({"error": "Formato de consulta inválido"}), 400
+
+    
     return {
         "post_to_gmail" : post_to_gmail,
         "post_to_notion" : post_to_notion,
         "post_to_clickup" : post_to_clickup,
         "post_to_asana" : post_to_asana,
         "post_to_outlook" : post_to_outlook,
+        "post_to_dropbox" : post_to_dropbox
     }

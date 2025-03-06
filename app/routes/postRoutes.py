@@ -504,12 +504,12 @@ def setup_post_routes(app,mongo):
         if not google_drive_token:
             return jsonify({"error": "Token de Google Drive no disponible."}), 400
         
-        match = re.search(r'archivo:(.+?)\s*(a|en)\s*carpeta:(.+)', query, re.IGNORECASE)
+        match = re.search(r"(?:mover\s+)?archivo:\s*([\w\s\d\.-]+?)\s+(?:a|en)\s+carpeta:\s*([\w\s\d\.-]+)", query, re.IGNORECASE)
         print("Match encontrado drive:", match)
 
         if match:
             file_name = match.group(1).strip()  # Nombre del archivo
-            folder_name = match.group(3).strip()  # Nombre de la carpeta
+            folder_name = match.group(2).strip()  # Nombre de la carpeta
             print(f"Archivo: {file_name}, Carpeta destino: {folder_name}")
             
             try:
@@ -536,29 +536,27 @@ def setup_post_routes(app,mongo):
         else:
             return jsonify({"error": "No se encontró una acción válida en la consulta."}), 400
 
-
     def get_file_id_by_name(token, file_name):
-        """Obtiene el ID de un archivo por su nombre usando la API de Google Drive."""
         url = "https://www.googleapis.com/drive/v3/files"
         headers = {
             "Authorization": f"Bearer {token}"
         }
-
-        # Usamos urllib.parse.quote para un encoding adecuado de caracteres especiales.
-        file_name = urllib.parse.quote(file_name)
-        print(f"Nombre del archivo codificado: {file_name}")
-
         params = {
-            "q": f"name = '{file_name}' and trashed = false",
-            "fields": "files(id, name, mimeType, webViewLink, size, modifiedTime, owners(displayName, emailAddress))"
+            "q": f"name contains '{file_name.strip()}' and trashed = false",
+            "fields": "files(id, name, parents)"
         }
         response = requests.get(url, headers=headers, params=params)
-        print("Respuesta de Google Drive:", response.json())
+        print("Respuesta completa de Google Drive:", response.json())  # 🔍 Imprime todos los archivos encontrados
         
         if response.status_code == 200:
             files = response.json().get("files", [])
-            if files:
-                return files[0]['id']  # Retorna el primer archivo que coincida con el nombre
+            for f in files:
+                print(f"Archivo disponible: {f['name']} - ID: {f['id']} - Carpeta padre: {f.get('parents', 'Sin carpeta')}")
+
+            # Buscar el archivo ignorando diferencias de mayúsculas y espacios
+            file_name_clean = file_name.strip().lower()
+            return next((f['id'] for f in files if f['name'].strip().lower() == file_name_clean), None)
+        
         return None
 
 
@@ -580,27 +578,39 @@ def setup_post_routes(app,mongo):
                 return folders[0]['id']  # Retorna la primera carpeta que coincida con el nombre
         return None
 
-
     def move_file_to_folder(token, file_id, folder_id):
-        """Mueve el archivo a la carpeta especificada usando la API de Google Drive."""
-        url = f"https://www.googleapis.com/drive/v3/files/{file_id}"
-        headers = {
-            "Authorization": f"Bearer {token}"
-        }
-        data = {
-            "addParents": folder_id
-        }
+        """Mueve el archivo a la carpeta especificada en Google Drive y lo elimina de su ubicación anterior."""
+
+        # 1️⃣ Obtener las carpetas actuales del archivo
+        url_get = f"https://www.googleapis.com/drive/v3/files/{file_id}?fields=parents"
+        headers = {"Authorization": f"Bearer {token}"}
+        
+        response_get = requests.get(url_get, headers=headers)
+
+        if response_get.status_code == 200:
+            current_parents = response_get.json().get("parents", [])
+            if not current_parents:
+                raise Exception(f"El archivo {file_id} no tiene carpetas padre.")
+            current_parents_str = ",".join(current_parents)  # Convertir a string separado por comas
+        else:
+            raise Exception(f"Error al obtener la carpeta actual: {response_get.text}")
+
+        # 2️⃣ Mover el archivo a la nueva carpeta (removiendo la anterior)
+        url_patch = f"https://www.googleapis.com/drive/v3/files/{file_id}"
+
         params = {
-            "removeParents": "root",  # Optional: Eliminar del directorio raíz si se necesita.
+            "addParents": folder_id,
+            "removeParents": current_parents_str,  # 💡 Remueve TODAS las carpetas anteriores
             "fields": "id, parents"
         }
-        response = requests.patch(url, headers=headers, json=data, params=params)
 
-        if response.status_code == 200:
-            print(f"Archivo {file_id} movido a la carpeta {folder_id}.")
+        response_patch = requests.patch(url_patch, headers=headers, params=params)  # 🚨 Aquí pasamos los datos en `params`, no en `json`
+
+        if response_patch.status_code == 200:
+            print(f"✅ Archivo {file_id} movido correctamente a la carpeta {folder_id}.")
         else:
-            raise Exception(f"Error al mover archivo: {response.text}")    
-    
+            raise Exception(f"⚠️ Error al mover archivo: {response_patch.text}")
+
     return {
         "post_to_gmail" : post_to_gmail,
         "post_to_notion" : post_to_notion,

@@ -430,11 +430,65 @@ def setup_post_routes(app,mongo):
             return jsonify({"error": "Token de Dropbox no disponible"}), 400
         
         match = re.search(r'archivo:(.+?) en carpeta:(.+)', query, re.IGNORECASE)
-        print("Match encontrado dropbox:", match, ",")
         if match:
             file_name = match.group(1).strip()
             folder_name = match.group(2).strip()
             
+            url = "https://api.dropboxapi.com/2/files/search_v2"
+            headers = {
+                'Authorization': f"Bearer {dropbox_token}",
+                'Content-Type': 'application/json'
+            }
+            params = {
+                "query": file_name,
+                "options": {
+                    "max_results": 10,
+                    "file_status": "active"
+                }
+            }
+            response = requests.post(url, headers=headers, json=params)
+            response.raise_for_status()
+            results = response.json().get('matches', [])
+
+            file_path = None
+            for result in results:
+                dropbox_file_name = result['metadata']['metadata']['name']
+                dropbox_file_path = result['metadata']['metadata']['path_lower']
+                
+                if dropbox_file_name.lower().startswith(file_name.lower()):
+                    file_path = dropbox_file_path
+                    break
+            
+            if not file_path:
+                return jsonify({"error": f"Archivo '{file_name}' no encontrado en Dropbox"}), 404
+            
+            folder_path = f"/{folder_name}/{dropbox_file_name}"
+
+            headers = {
+                "Authorization": f"Bearer {dropbox_token}",
+                "Content-Type": "application/json"
+            }
+
+            data = {
+                "from_path": file_path,
+                "to_path": folder_path,
+                "allow_ownership_transfer": False,
+                "allow_shared_folder": True,
+                "autorename": False,
+            }
+
+            url = "https://api.dropboxapi.com/2/files/move_v2"
+            response = requests.post(url, headers=headers, json=data)
+            return {"message": f"🎉 El archivo '{dropbox_file_name}' ha sido movido a la carpeta '{folder_name}' con éxito! 🚀"}    
+        
+        # Eliminamos archivos de Dropbox
+        print("Query para eliminación:", query)
+        matchEliminar = re.search(r'(Eliminar\s*archivo|archivo):\s*(.+)', query, re.IGNORECASE)
+        print("Match encontrado dropbox:", matchEliminar, ",")
+        if matchEliminar:
+            file_name = matchEliminar.group(2).strip()  # Usamos el grupo 2 para el nombre del archivo
+
+            # Realizamos la búsqueda en Dropbox
             url = "https://api.dropboxapi.com/2/files/search_v2"
             headers = {
                 'Authorization': f"Bearer {dropbox_token}",
@@ -465,24 +519,16 @@ def setup_post_routes(app,mongo):
             if not file_path:
                 return jsonify({"error": f"Archivo '{file_name}' no encontrado en Dropbox"}), 404
             
-            folder_path = f"/{folder_name}/{dropbox_file_name}"
-
-            headers = {
-                "Authorization": f"Bearer {dropbox_token}",
-                "Content-Type": "application/json"
+            # Eliminamos el archivo
+            delete_url = "https://api.dropboxapi.com/2/files/delete_v2"
+            delete_data = {
+                "path": file_path
             }
 
-            data = {
-                "from_path": file_path,
-                "to_path": folder_path,
-                "allow_ownership_transfer": False,
-                "allow_shared_folder": True,
-                "autorename": False,
-            }
+            delete_response = requests.post(delete_url, headers=headers, json=delete_data)
+            delete_response.raise_for_status()
 
-            url = "https://api.dropboxapi.com/2/files/move_v2"
-            response = requests.post(url, headers=headers, json=data)
-            return {"message": f"🎉 El archivo '{dropbox_file_name}' ha sido movido a la carpeta '{folder_name}' con éxito! 🚀"}    
+            return {"message": f"🎉 El archivo '{file_name}' ha sido eliminado de Dropbox con éxito! 🗑️"}
 
         return jsonify({"error": "Formato de consulta inválido"}), 400
 

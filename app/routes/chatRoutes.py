@@ -230,7 +230,7 @@ def setup_routes_chats(app, mongo):
                     f"   - Si es un saludo, responde con 'Es un saludo'.\n"
                     f"   - Si es una solicitud GET, responde con 'Es una solicitud GET'.\n"
                     f"   - Si es una solicitud POST simple (acción única), responde con 'Es una solicitud POST'.\n"
-                    f"   - Si es una solicitud POST automatizada o quemada (para ejecutar siempre cuando ocurra algo), responde con 'Es una solicitud POST automatizada'.\n"
+                    f"   - Si es una solicitud POST automatizada o quemada (para ejecutar siempre cuando ocurra algo), responde con 'Es una solicitud automatizada'.\n"
                     f"   - Si es una solicitud que menciona algo sobre una conversación o respuesta anterior (ejemplo: 'de lo que hablamos antes', 'en la conversación anterior', 'acerca del mensaje previo', 'respuesta anterior', 'de que trataba', etc), responde con 'Se refiere a la respuesta anterior'.\n"
                     f"En caso de ser una solicitud GET o POST, desglosa las partes relevantes para cada API (Gmail, Notion, Slack, HubSpot, Outlook, ClickUp, Dropbox, Asana, Google Drive, OneDrive, Teams).\n"
                     f"Asegúrate de lo siguiente:\n"
@@ -629,7 +629,7 @@ def setup_routes_chats(app, mongo):
                                 return jsonify({"error": f"Error al procesar la solicitud: {str(e)}"}), 500
                         except json.JSONDecodeError:
                             return jsonify({"error": "Formato JSON inválido"}), 400
-                elif 'automatizado' in ia_interpretation:
+                elif 'automatizada' in ia_interpretation:
                     print("hola automatizado")
                 elif 'anterior' in ia_interpretation:
                     reference_prompt = f"El usuario dijo: '{last_message}'\n"

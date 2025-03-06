@@ -3,6 +3,7 @@ import requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from dateutil.relativedelta import relativedelta
+import urllib
 from config import Config
 from urllib.parse import urlencode
 import base64 
@@ -429,6 +430,7 @@ def setup_post_routes(app,mongo):
             return jsonify({"error": "Token de Dropbox no disponible"}), 400
         
         match = re.search(r'archivo:(.+?) en carpeta:(.+)', query, re.IGNORECASE)
+        print("Match encontrado dropbox:", match, ",")
         if match:
             file_name = match.group(1).strip()
             folder_name = match.group(2).strip()
@@ -484,6 +486,120 @@ def setup_post_routes(app,mongo):
 
         return jsonify({"error": "Formato de consulta inválido"}), 400
 
+    def post_to_googledrive(query):
+        print("HOLA ESTOY ENTRANDO AL METODO POST_TO_GOOGLEDRIVE")
+        print("ESTA ES LA QUERY:", query)
+
+        """Procesa la consulta y ejecuta la acción en la API de Google Drive."""
+        email = request.args.get('email')
+        if not email:
+            return jsonify({"error": "Se debe proporcionar un email"}), 400
+        user = mongo.database.usuarios.find_one({"correo": email})
+
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+        
+        google_drive_token = user.get('integrations', {}).get('Drive', {}).get('token')
+        print("Token de Google Drive:", google_drive_token)
+        if not google_drive_token:
+            return jsonify({"error": "Token de Google Drive no disponible."}), 400
+        
+        match = re.search(r'archivo:(.+?)\s*(a|en)\s*carpeta:(.+)', query, re.IGNORECASE)
+        print("Match encontrado drive:", match)
+
+        if match:
+            file_name = match.group(1).strip()  # Nombre del archivo
+            folder_name = match.group(3).strip()  # Nombre de la carpeta
+            print(f"Archivo: {file_name}, Carpeta destino: {folder_name}")
+            
+            try:
+                # Buscar el archivo por nombre
+                file_id = get_file_id_by_name(google_drive_token, file_name)
+                print("Archivo encontrado:", file_id)
+                if not file_id:
+                    return jsonify({"error": f"Archivo '{file_name}' no encontrado en Google Drive."}), 404
+                
+                # Buscar la carpeta por nombre
+                folder_id = get_folder_id_by_name(google_drive_token, folder_name)
+                print("Carpeta encontrada:", folder_id)
+                if not folder_id:
+                    return jsonify({"error": f"Carpeta '{folder_name}' no encontrada en Google Drive."}), 404
+                
+                # Mover el archivo a la nueva carpeta
+                move_file_to_folder(google_drive_token, file_id, folder_id)
+                
+                return jsonify({"message": f"Archivo '{file_name}' movido exitosamente a la carpeta '{folder_name}'."}), 200
+            
+            except Exception as e:
+                return jsonify({"error": f"Error al procesar la solicitud: {str(e)}"}), 500
+        
+        else:
+            return jsonify({"error": "No se encontró una acción válida en la consulta."}), 400
+
+
+    def get_file_id_by_name(token, file_name):
+        """Obtiene el ID de un archivo por su nombre usando la API de Google Drive."""
+        url = "https://www.googleapis.com/drive/v3/files"
+        headers = {
+            "Authorization": f"Bearer {token}"
+        }
+
+        # Usamos urllib.parse.quote para un encoding adecuado de caracteres especiales.
+        file_name = urllib.parse.quote(file_name)
+        print(f"Nombre del archivo codificado: {file_name}")
+
+        params = {
+            "q": f"name = '{file_name}' and trashed = false",
+            "fields": "files(id, name, mimeType, webViewLink, size, modifiedTime, owners(displayName, emailAddress))"
+        }
+        response = requests.get(url, headers=headers, params=params)
+        print("Respuesta de Google Drive:", response.json())
+        
+        if response.status_code == 200:
+            files = response.json().get("files", [])
+            if files:
+                return files[0]['id']  # Retorna el primer archivo que coincida con el nombre
+        return None
+
+
+    def get_folder_id_by_name(token, folder_name):
+        """Obtiene el ID de una carpeta por su nombre usando la API de Google Drive."""
+        url = "https://www.googleapis.com/drive/v3/files"
+        headers = {
+            "Authorization": f"Bearer {token}"
+        }
+        params = {
+            "q": f"mimeType = 'application/vnd.google-apps.folder' and name = '{folder_name}'",
+            "fields": "files(id)"
+        }
+        response = requests.get(url, headers=headers, params=params)
+        
+        if response.status_code == 200:
+            folders = response.json().get("files", [])
+            if folders:
+                return folders[0]['id']  # Retorna la primera carpeta que coincida con el nombre
+        return None
+
+
+    def move_file_to_folder(token, file_id, folder_id):
+        """Mueve el archivo a la carpeta especificada usando la API de Google Drive."""
+        url = f"https://www.googleapis.com/drive/v3/files/{file_id}"
+        headers = {
+            "Authorization": f"Bearer {token}"
+        }
+        data = {
+            "addParents": folder_id
+        }
+        params = {
+            "removeParents": "root",  # Optional: Eliminar del directorio raíz si se necesita.
+            "fields": "id, parents"
+        }
+        response = requests.patch(url, headers=headers, json=data, params=params)
+
+        if response.status_code == 200:
+            print(f"Archivo {file_id} movido a la carpeta {folder_id}.")
+        else:
+            raise Exception(f"Error al mover archivo: {response.text}")    
     
     return {
         "post_to_gmail" : post_to_gmail,
@@ -491,5 +607,6 @@ def setup_post_routes(app,mongo):
         "post_to_clickup" : post_to_clickup,
         "post_to_asana" : post_to_asana,
         "post_to_outlook" : post_to_outlook,
-        "post_to_dropbox" : post_to_dropbox
+        "post_to_dropbox" : post_to_dropbox,
+        "post_to_googledrive" : post_to_googledrive
     }

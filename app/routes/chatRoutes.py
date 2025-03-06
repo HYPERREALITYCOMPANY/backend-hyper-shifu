@@ -29,6 +29,7 @@ def setup_routes_chats(app, mongo):
     post_to_clickup = functionsPost["post_to_clickup"]
     post_to_asana = functionsPost["post_to_asana"]
     post_to_dropbox = functionsPost["post_to_dropbox"]
+    post_to_googledrive = functionsPost["post_to_googledrive"]
     global last_searchs
 
     # CHAT GET Y POSTS
@@ -592,7 +593,7 @@ def setup_routes_chats(app, mongo):
                                     'clickup': post_to_clickup,
                                     'dropbox': post_to_dropbox,
                                     'asana': post_to_asana,
-                                    # 'googledrive': post_to_googledrive,
+                                    'googledrive': post_to_googledrive,
                                     # 'onedrive': post_to_onedrive,
                                     # 'teams': post_to_teams,
                                 }

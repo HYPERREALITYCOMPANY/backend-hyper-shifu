@@ -481,10 +481,10 @@ def setup_post_routes(app,mongo):
             response = requests.post(url, headers=headers, json=data)
             return {"message": f"🎉 El archivo '{dropbox_file_name}' ha sido movido a la carpeta '{folder_name}' con éxito! 🚀"}    
         
-        # Eliminamos archivos de Dropbox
-        print("Query para eliminación:", query)
+        # =============================================
+        #   🗑️ Eliminamos archivos de Dropbox 🗑️
+        # =============================================
         matchEliminar = re.search(r'(Eliminar\s*archivo|archivo):\s*(.+)', query, re.IGNORECASE)
-        print("Match encontrado dropbox:", matchEliminar, ",")
         if matchEliminar:
             file_name = matchEliminar.group(2).strip()  # Usamos el grupo 2 para el nombre del archivo
 
@@ -511,7 +511,7 @@ def setup_post_routes(app,mongo):
                 dropbox_file_path = result['metadata']['metadata']['path_lower']
                 print(dropbox_file_name)
                 print(dropbox_file_path)
-                
+
                 if dropbox_file_name.lower().startswith(file_name.lower()):
                     file_path = dropbox_file_path
                     break
@@ -533,9 +533,6 @@ def setup_post_routes(app,mongo):
         return jsonify({"error": "Formato de consulta inválido"}), 400
 
     def post_to_googledrive(query):
-        print("HOLA ESTOY ENTRANDO AL METODO POST_TO_GOOGLEDRIVE")
-        print("ESTA ES LA QUERY:", query)
-
         """Procesa la consulta y ejecuta la acción en la API de Google Drive."""
         email = request.args.get('email')
         if not email:
@@ -550,102 +547,55 @@ def setup_post_routes(app,mongo):
         if not google_drive_token:
             return jsonify({"error": "Token de Google Drive no disponible."}), 400
         
-        match = re.search(r'archivo:(.+?)\s*(a|en)\s*carpeta:(.+)', query, re.IGNORECASE)
-        print("Match encontrado drive:", match)
+        # =============================================
+        #   🗑️ Eliminamos archivos de Google Drive 🗑️
+        # =============================================
 
-        if match:
-            file_name = match.group(1).strip()  # Nombre del archivo
-            folder_name = match.group(3).strip()  # Nombre de la carpeta
-            print(f"Archivo: {file_name}, Carpeta destino: {folder_name}")
+        print("Query para eliminación drive:", query)
+        matchEliminarDrive = re.search(r'(Eliminar\s*archivo|archivo):\s*(.+)', query, re.IGNORECASE)
+        print("Match encontrado google drive:", matchEliminarDrive, ",")
+        if matchEliminarDrive:
+            file_name = matchEliminarDrive.group(2).strip()  # Usamos el grupo 2 para el nombre del archivo
+            print("Archivo a eliminar drive:", file_name)
+
+            # Realizamos la búsqueda en Google Drive
+            url = "https://www.googleapis.com/drive/v3/files"
+            headers = {
+                'Authorization': f"Bearer {google_drive_token}",
+            }
+            # Cambiamos a "name contains" para buscar archivos cuyo nombre contenga la cadena proporcionada
+            params = {
+                "q": f"name contains '{file_name}'",  # Permite buscar nombres que contengan 'file_name'
+                "spaces": "drive",
+                "fields": "files(id,name)",
+            }
+            response = requests.get(url, headers=headers, params=params)
+            print("Respuesta Google Drive:", response.json())
+            response.raise_for_status()
+            results = response.json().get('files', [])
+
+            file_id = None
+            for result in results:
+                google_drive_file_name = result['name']
+                google_drive_file_id = result['id']
+                print(google_drive_file_name)
+                print(google_drive_file_id)
+                
+                if google_drive_file_name.lower().startswith(file_name.lower()):
+                    file_id = google_drive_file_id
+                    break
             
-            try:
-                # Buscar el archivo por nombre
-                file_id = get_file_id_by_name(google_drive_token, file_name)
-                print("Archivo encontrado:", file_id)
-                if not file_id:
-                    return jsonify({"error": f"Archivo '{file_name}' no encontrado en Google Drive."}), 404
-                
-                # Buscar la carpeta por nombre
-                folder_id = get_folder_id_by_name(google_drive_token, folder_name)
-                print("Carpeta encontrada:", folder_id)
-                if not folder_id:
-                    return jsonify({"error": f"Carpeta '{folder_name}' no encontrada en Google Drive."}), 404
-                
-                # Mover el archivo a la nueva carpeta
-                move_file_to_folder(google_drive_token, file_id, folder_id)
-                
-                return jsonify({"message": f"Archivo '{file_name}' movido exitosamente a la carpeta '{folder_name}'."}), 200
+            if not file_id:
+                return jsonify({"error": f"Archivo '{file_name}' no encontrado en Google Drive"}), 404
             
-            except Exception as e:
-                return jsonify({"error": f"Error al procesar la solicitud: {str(e)}"}), 500
+            # Eliminamos el archivo de Google Drive
+            delete_url = f"https://www.googleapis.com/drive/v3/files/{file_id}"
+            delete_response = requests.delete(delete_url, headers=headers)
+            delete_response.raise_for_status()
+
+            return {"message": f"🎉 El archivo '{file_name}' ha sido eliminado de Google Drive con éxito! 🗑️"}
         
-        else:
-            return jsonify({"error": "No se encontró una acción válida en la consulta."}), 400
-
-
-    def get_file_id_by_name(token, file_name):
-        """Obtiene el ID de un archivo por su nombre usando la API de Google Drive."""
-        url = "https://www.googleapis.com/drive/v3/files"
-        headers = {
-            "Authorization": f"Bearer {token}"
-        }
-
-        # Usamos urllib.parse.quote para un encoding adecuado de caracteres especiales.
-        file_name = urllib.parse.quote(file_name)
-        print(f"Nombre del archivo codificado: {file_name}")
-
-        params = {
-            "q": f"name = '{file_name}' and trashed = false",
-            "fields": "files(id, name, mimeType, webViewLink, size, modifiedTime, owners(displayName, emailAddress))"
-        }
-        response = requests.get(url, headers=headers, params=params)
-        print("Respuesta de Google Drive:", response.json())
-        
-        if response.status_code == 200:
-            files = response.json().get("files", [])
-            if files:
-                return files[0]['id']  # Retorna el primer archivo que coincida con el nombre
-        return None
-
-
-    def get_folder_id_by_name(token, folder_name):
-        """Obtiene el ID de una carpeta por su nombre usando la API de Google Drive."""
-        url = "https://www.googleapis.com/drive/v3/files"
-        headers = {
-            "Authorization": f"Bearer {token}"
-        }
-        params = {
-            "q": f"mimeType = 'application/vnd.google-apps.folder' and name = '{folder_name}'",
-            "fields": "files(id)"
-        }
-        response = requests.get(url, headers=headers, params=params)
-        
-        if response.status_code == 200:
-            folders = response.json().get("files", [])
-            if folders:
-                return folders[0]['id']  # Retorna la primera carpeta que coincida con el nombre
-        return None
-
-
-    def move_file_to_folder(token, file_id, folder_id):
-        """Mueve el archivo a la carpeta especificada usando la API de Google Drive."""
-        url = f"https://www.googleapis.com/drive/v3/files/{file_id}"
-        headers = {
-            "Authorization": f"Bearer {token}"
-        }
-        data = {
-            "addParents": folder_id
-        }
-        params = {
-            "removeParents": "root",  # Optional: Eliminar del directorio raíz si se necesita.
-            "fields": "id, parents"
-        }
-        response = requests.patch(url, headers=headers, json=data, params=params)
-
-        if response.status_code == 200:
-            print(f"Archivo {file_id} movido a la carpeta {folder_id}.")
-        else:
-            raise Exception(f"Error al mover archivo: {response.text}")    
+        return jsonify({"error": "Formato de consulta inválido"}), 400
     
     return {
         "post_to_gmail" : post_to_gmail,

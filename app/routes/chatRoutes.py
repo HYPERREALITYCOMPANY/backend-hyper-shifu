@@ -7,11 +7,13 @@ import json
 import openai
 from app.routes.searchRoutes import setup_routes_searchs
 from app.routes.postRoutes import setup_post_routes
+from app.routes.rulesRoutes import setup_rules_routes
 
 openai.api_key=Config.CHAT_API_KEY
 def setup_routes_chats(app, mongo):
     functions = setup_routes_searchs(app, mongo)
     functionsPost = setup_post_routes(app, mongo)
+    functions2 = setup_rules_routes(app, mongo)
     search_gmail = functions["search_gmail"]
     search_outlook = functions["search_outlook"]
     search_notion = functions["search_notion"]
@@ -30,6 +32,20 @@ def setup_routes_chats(app, mongo):
     post_to_asana = functionsPost["post_to_asana"]
     post_to_dropbox = functionsPost["post_to_dropbox"]
     post_to_googledrive = functionsPost["post_to_googledrive"]
+
+    functionsAuto = {
+        "post_auto_gmail": functions2["post_auto_gmail"],
+        "post_auto_notion": functions2["post_auto_notion"],
+        "post_auto_clickup": functions2["post_auto_clickup"],
+        "post_auto_asana": functions2["post_auto_asana"],
+        "post_auto_dropbox": functions2["post_auto_dropbox"],
+        "post_auto_googledrive": functions2["post_auto_googledrive"],
+        "post_auto_outlook": functions2["post_auto_outlook"],
+        "post_auto_hubspot": functions2["post_auto_hubspot"],
+        "post_auto_teams": functions2["post_auto_teams"],
+        "post_auto_slack": functions2["post_auto_slack"],
+        "post_auto_onedrive": functions2["post_auto_onedrive"]
+    }
     global last_searchs
 
     # CHAT GET Y POSTS
@@ -631,7 +647,30 @@ def setup_routes_chats(app, mongo):
                         except json.JSONDecodeError:
                             return jsonify({"error": "Formato JSON inválido"}), 400
                 elif 'automatizada' in ia_interpretation:
-                    print("hola automatizado")
+                    start = ia_interpretation.find('{')
+                    end = ia_interpretation.rfind('}') + 1
+                    json_block = ia_interpretation[start:end]
+                    queries = json.loads(json_block)
+
+                    print(queries)
+                    if queries:
+                        try:
+                            for api, data in queries.items():
+                                condition = data.get('condition', '')
+                                action = data.get('action', '')    
+                                if condition and action and condition.lower() != "n/a" and action.lower() != "n/a":
+                                    function_name = f"post_auto_{api}"
+                                    if function_name in functionsAuto:
+                                        function = functionsAuto[function_name]
+                                        response = function(condition, action)
+                                        if response:
+                                            print(response)
+                                        else:
+                                            print(f"No se pudo ejecutar la acción para {api}.")
+                                    else:
+                                        print(f"La función para {api} no está definida en functionsPost.")                     
+                        except json.JSONDecodeError:
+                            return jsonify({"error": "Formato JSON inválido"}), 400
                 elif 'anterior' in ia_interpretation:
                     reference_prompt = f"El usuario dijo: '{last_message}'\n"
                     reference_prompt += f"La última respuesta de la IA fue: '{last_response}'.\n"
@@ -639,7 +678,7 @@ def setup_routes_chats(app, mongo):
 
                     response_reference = openai.chat.completions.create(
                         model="gpt-3.5-turbo",
-                        messages=[{"role": "system", "content":  """Eres un asistente que identifica saludos o solicitudes. 
+                        messages=[{"role": "system", "content":  """Eres un asistente que identifica saludos o solicitudes (get, post simples y post automatizados (quemados)). 
                     - Si el usuario saluda, responde de forma cálida y amigable, como si fuera una conversación fluida.
                     - Si el usuario comparte cómo se siente o menciona una situación personal, responde con empatía y comprensión.
                     - Si el usuario solicita automatizaciones o reglas persistentes (quemadas), identifícalas correctamente.

@@ -2,18 +2,10 @@ from flask import request, jsonify
 import requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from dateutil.relativedelta import relativedelta
-import urllib
 from config import Config
-from urllib.parse import urlencode
-import base64 
-from bs4 import BeautifulSoup
 from datetime import datetime
-import unicodedata
 import re
 import json
-import os
-import quopri
 import openai
 openai.api_key=Config.CHAT_API_KEY
 

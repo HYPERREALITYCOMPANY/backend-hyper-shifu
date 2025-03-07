@@ -46,6 +46,7 @@ def setup_routes_chats(app, mongo):
         "post_auto_slack": functions2["post_auto_slack"],
         "post_auto_onedrive": functions2["post_auto_onedrive"]
     }
+    post_to_onedrive = functionsPost["post_to_onedrive"]
     global last_searchs
 
     # CHAT GET Y POSTS
@@ -610,7 +611,7 @@ def setup_routes_chats(app, mongo):
                                     'dropbox': post_to_dropbox,
                                     'asana': post_to_asana,
                                     'googledrive': post_to_googledrive,
-                                    # 'onedrive': post_to_onedrive,
+                                    'onedrive': post_to_onedrive,
                                     # 'teams': post_to_teams,
                                 }
                                 

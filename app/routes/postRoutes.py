@@ -537,14 +537,9 @@ def setup_post_routes(app,mongo):
         # =============================================
 
         matchRenombrar = re.search(r'archivo:(.+?) a:(.+)', query, re.IGNORECASE)
-
-        print("El match de renombrar: ", matchRenombrar)
         if matchRenombrar:
             file_name = matchRenombrar.group(2).strip()  # Nombre actual del archivo
             new_file_name = matchRenombrar.group(3).strip()  # Nuevo nombre del archivo
-
-            print(f"Archivo a renombrar: {file_name}")
-            print(f"Nuevo nombre: {new_file_name}")
 
             # Realizamos la búsqueda en Dropbox
             url = "https://api.dropboxapi.com/2/files/search_v2"
@@ -564,9 +559,6 @@ def setup_post_routes(app,mongo):
             results = response.json().get('matches', [])
 
             file_path = None
-
-            print(f"Query enviado a Dropbox: {file_name}")
-            print("Resultados encontrados en Dropbox:")
 
             for result in results:
                 dropbox_file_name = result['metadata']['metadata']['name']
@@ -599,9 +591,37 @@ def setup_post_routes(app,mongo):
             rename_response.raise_for_status()
 
             return {"message": f"🎉 El archivo '{file_name}' ha sido renombrado a '{new_file_name}' en Dropbox con éxito! ✏️"}
+        
+        # =============================================
+        #   Creamos carpetas en Dropbox 📂
+        # =============================================
+
+        print ("Query para crear carpeta: ", query)
+        matchCrearCarpetaDrop = re.search(r'crear\s*carpeta\s*[:\-]?\s*(.+)', query, re.IGNORECASE)
+        print("El match de crear carpeta: ", matchCrearCarpetaDrop)
+
+        if matchCrearCarpetaDrop:
+            folder_name = matchCrearCarpetaDrop.group(1).strip()  # Nombre de la carpeta a crear
+            print(f"Creando carpeta '{folder_name}' en Dropbox...") # Hasta aquí todo bien
+
+            url ="https://api.dropboxapi.com/2/files/create_folder_v2"
+            headers = {
+                "Authorization": f"Bearer {dropbox_token}",
+                "Content-Type": "application/json"
+            }
+
+            data = {
+                "path": f"/{folder_name}",
+                "autorename": False
+            }
+
+            response = requests.post(url, headers=headers, json=data)
+            response.raise_for_status()
+            return {"message": f"🎉✨ ¡Éxito total! La carpeta '{folder_name}' ha sido creada con éxito en Dropbox. 🚀🌟"}
 
         return jsonify({"error": "Formato de consulta inválido"}), 400
 
+#####################################################################################################################
     def post_to_googledrive(query):
         """Procesa la consulta y ejecuta la acción en la API de Google Drive."""
         email = request.args.get('email')
@@ -613,7 +633,6 @@ def setup_post_routes(app,mongo):
             return jsonify({"error": "Usuario no encontrado"}), 404
         
         google_drive_token = user.get('integrations', {}).get('Drive', {}).get('token')
-        print("Token de Google Drive:", google_drive_token)
         if not google_drive_token:
             return jsonify({"error": "Token de Google Drive no disponible."}), 400
         
@@ -662,40 +681,41 @@ def setup_post_routes(app,mongo):
     
     def post_to_onedrive(query):
 
-        print("Entrando a OneDrive")
-        print("query onedrive:", query)
-        """Procesa la consulta y ejecuta la acción en la API de OneDrive."""
+        # Obtener email del usuario
         email = request.args.get('email')
         if not email:
             return jsonify({"error": "Se debe proporcionar un email"}), 400
-        user = mongo.database.usuarios.find_one({"correo": email})
 
+        # Buscar usuario en la base de datos
+        user = mongo.database.usuarios.find_one({"correo": email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
-        
+
+        # Obtener el token de OneDrive
         OneDrive_token = user.get('integrations', {}).get('OneDrive', {}).get('token')
         if not OneDrive_token:
-            return jsonify({"error": "Token de Google Drive no disponible."}), 400
-        
-        # =============================================
-        #   🗑️ Eliminamos archivos de OneDrive 🗑️
-        # =============================================
-        
-        matchEliminar = re.search(r'(?:Eliminar\s*archivo|archivo):\s*(.+)', query, re.IGNORECASE)
-        print("matchEliminar OneDrive:", matchEliminar)
-        if matchEliminar:
-            file_name = matchEliminar.group(1).strip()  # Nombre del archivo a eliminar
-            print("file_name:", file_name)
+            return jsonify({"error": "Token de OneDrive no disponible"}), 400
 
-            # Realizamos la búsqueda en OneDrive
-            url = "https://graph.microsoft.com/v1.0/me/drive/root/search(q='{file_name}')" 
-            print("url archivo OneDrive:", url)
+        # ==================================================
+        #   🗑️ Mover archivos a la papelera en OneDrive 🗑️
+        # ==================================================
+
+        matchEliminar = re.search(r'eliminar\s*(archivo)?[:\s]*([\w\.\-_]+)', query, re.IGNORECASE)
+
+        if matchEliminar:
+            file_name = matchEliminar.group(2).strip()
+
+            # Buscar archivo en OneDrive
+            search_url = f"https://graph.microsoft.com/v1.0/me/drive/root/search(q='{file_name}')"
             headers = {
                 'Authorization': f"Bearer {OneDrive_token}",
                 'Content-Type': 'application/json'
             }
 
-            response = requests.get(url, headers=headers)
+            response = requests.get(search_url, headers=headers)
+            if response.status_code == 401:
+                return jsonify({"error": "No autorizado. Verifica el token de acceso."}), 401
+
             response.raise_for_status()
             results = response.json().get('value', [])
 
@@ -707,16 +727,21 @@ def setup_post_routes(app,mongo):
                 if OneDrive_file_name.lower().startswith(file_name.lower()):
                     file_id = OneDrive_file_id
                     break
-                print("OneDrive file_id:", file_id)
-                print("OneDrive file_name:", OneDrive_file_name)
+
             if not file_id:
                 return jsonify({"error": f"Archivo '{file_name}' no encontrado en OneDrive"}), 404
-            # Eliminamos el archivo de OneDrive
-            delete_url = f"https://graph.microsoft.com/v1.0/me/drive/items/{file_id}"
-            delete_response = requests.delete(delete_url, headers=headers)
+
+            # Mover el archivo a la papelera (Enviar a "Recycle Bin" en OneDrive)
+            move_to_trash_url = f"https://graph.microsoft.com/v1.0/me/drive/items/{file_id}"
+            delete_response = requests.delete(move_to_trash_url, headers=headers)
+            
+            if delete_response.status_code == 401:
+                return jsonify({"error": "No autorizado. Verifica el token de acceso."}), 401
+
             delete_response.raise_for_status()
-            return {"message": f"��� El archivo '{file_name}' ha sido eliminado de OneDrive con éxito! ���️"}
-        
+
+            return jsonify({"message": f"🗑️ El archivo '{file_name}' ha sido movido a la papelera en OneDrive con éxito!"})
+
         return jsonify({"error": "Formato de consulta inválido"}), 400
     
     return {

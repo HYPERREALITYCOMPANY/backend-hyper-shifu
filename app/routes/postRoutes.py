@@ -588,7 +588,6 @@ def setup_post_routes(app,mongo):
         #   Creamos carpetas en Dropbox 📂
         # =============================================
 
-        print ("Query para crear carpeta: ", query)
         matchCrearCarpetaDrop = re.search(r'crear\s*carpeta\s*[:\-]?\s*(.+)', query, re.IGNORECASE)
         print("El match de crear carpeta: ", matchCrearCarpetaDrop)
 
@@ -610,6 +609,51 @@ def setup_post_routes(app,mongo):
             response = requests.post(url, headers=headers, json=data)
             response.raise_for_status()
             return {"message": f"🎉✨ ¡Éxito total! La carpeta '{folder_name}' ha sido creada con éxito en Dropbox. 🚀🌟"}
+        
+        print ("Query para restaurar archivo: ", query)
+        matchRestaurarArchivoDrop = re.search(r'restaura\s*archivo\s*[:\-]?\s*(.+)', query, re.IGNORECASE)
+        print("El match de restaurar archivo: ", matchRestaurarArchivoDrop)
+        if matchRestaurarArchivoDrop:
+            file_name = matchRestaurarArchivoDrop.group(1).strip()  # Nombre del archivo a restaurar
+
+            # Realizamos la búsqueda en Dropbox
+            url = "https://api.dropboxapi.com/2/files/restore"
+            headers = {
+                'Authorization': f"Bearer {dropbox_token}",
+                'Content-Type': 'application/json'
+            }
+
+            params = {
+                "path": file_path,  # Ruta del archivo
+                "limit": 1  # Solo necesitamos la última revisión
+            }
+
+            # Hacemos la solicitud para obtener la revisión
+            response = requests.post(url, headers=headers, json=params)
+            revisions = response.json()
+            
+            if 'entries' in revisions and len(revisions['entries']) > 0:
+                # Obtener la última revisión (rev)
+                rev = revisions['entries'][0]['rev']
+                print(f"Última revisión: {rev}")
+                
+                # Ahora, podemos restaurar el archivo desde la papelera usando la revisión
+                url_restore = "https://api.dropboxapi.com/2/files/restore"
+                
+                restore_params = {
+                    "path": file_path,  # Ruta completa del archivo
+                    "rev": rev  # Usamos la revisión obtenida
+                }
+                
+                # Realizamos la solicitud para restaurar el archivo
+                restore_response = requests.post(url_restore, headers=headers, json=restore_params)
+                
+                if restore_response.status_code == 200:
+                    print(f"¡El archivo {file_path} ha sido restaurado exitosamente!")
+                else:
+                    print("Error al restaurar el archivo:", restore_response.json())
+            else:
+                print("No se encontraron revisiones para este archivo.")
 
         return jsonify({"error": "Formato de consulta inválido"}), 400
 
@@ -628,6 +672,28 @@ def setup_post_routes(app,mongo):
         if not google_drive_token:
             return jsonify({"error": "Token de Google Drive no disponible."}), 400
         
+        # =============================================
+        #   📂 Movemos archivos en Google Drive 📂
+        # =============================================
+
+        match = re.search(r'archivo:(.+?) en carpeta:(.+)', query, re.IGNORECASE)
+        print("Query para mover archivo: ", query)
+        print("El match de archivo en carpeta: ", match)
+        if not match:
+            return jsonify({"error": "Formato de consulta incorrecto. Usa 'archivo:NOMBRE en carpeta:NOMBRE'"}), 400
+        
+        file_name = match.group(1).strip()
+        folder_name = match.group(2).strip()
+        print("Nombre del archivo: ", file_name)
+        print("Nombre de la carpeta: ", folder_name)
+        
+        # Buscar el archivo en Google Drive
+        search_url = "https://www.googleapis.com/drive/v3/files"
+        headers = {"Authorization": f"Bearer {google_drive_token}"}
+        params = {"q": f"name contains '{file_name}' and trashed=false", "fields": "files(id, name)"}
+        
+        
+
         # =============================================
         #   🗑️ Eliminamos archivos de Google Drive 🗑️
         # =============================================

@@ -13,6 +13,7 @@ from app.routes.secretaryGetRoutes import setup_routes_secretary_gets
 from app.routes.proxyRoutes import setup_proxy_routes
 from app.routes.chatRoutes import setup_routes_chats
 from app.routes.executeRoutes import setup_execute_routes
+from app.routes.refreshTokens import setup_routes_refresh
 
 load_dotenv()
 
@@ -39,6 +40,7 @@ def create_app():
     setup_proxy_routes(app, mongo)
     setup_routes_chats(app, mongo)
     setup_execute_routes(app, mongo)
+    setup_routes_refresh(app, mongo)
     return app
 
 app = create_app()

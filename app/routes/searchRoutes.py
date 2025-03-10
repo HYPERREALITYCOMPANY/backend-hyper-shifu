@@ -296,7 +296,7 @@ def setup_routes_searchs(app,mongo):
             response.raise_for_status()  # Levantar excepción en caso de error HTTP
 
             data = response.json()
-
+            print(data)
             # Validar respuesta de Slack
             if not data.get('ok'):
                 return jsonify({"error": "Error al buscar en Slack", "details": data.get('error', 'Desconocido')}), response.status_code

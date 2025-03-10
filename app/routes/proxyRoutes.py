@@ -93,13 +93,16 @@ def setup_proxy_routes(app, mongo):
 
             response = requests.post(token_url, data=payload, headers=headers)
             data = response.json()
+            print(data)
 
             access_token = data.get("access_token")
             expires_in = data.get("expires_in")
+            refresh_token = data.get("refresh_token")
 
             return jsonify({
                 "access_token": access_token,
-                "expires_in": expires_in
+                "expires_in": expires_in,
+                "refresh_token": refresh_token
             })
 
         except Exception as e:
@@ -136,25 +139,42 @@ def setup_proxy_routes(app, mongo):
     def hubspot_proxy():
         try:
             data = request.json
+
+            # Extraer datos del payload
+            client_id = data.get('client_id')
+            client_secret = data.get('client_secret')
+            redirect_uri = data.get('redirect_uri')
+            code = data.get('code')
+
+            if not all([client_id, client_secret, redirect_uri, code]):
+                return jsonify({"error": "Missing required fields"}), 400
+
             token_url = 'https://api.hubapi.com/oauth/v1/token'
             payload = {
                 'grant_type': 'authorization_code',
-                'client_id': data.get('client_id'),
-                'client_secret': data.get('client_secret'),
-                'redirect_uri': data.get('redirect_uri'), 
-                'code': data.get('code')
+                'client_id': client_id,
+                'client_secret': client_secret,
+                'redirect_uri': redirect_uri,
+                'code': code
             }
 
             headers = {
                 'Content-Type': 'application/x-www-form-urlencoded',
             }
-            response = requests.post(token_url, data=urlencode(payload), headers=headers)
 
+            # Realizar la solicitud POST para obtener el access_token
+            response = requests.post(token_url, data=urlencode(payload), headers=headers)
+            print(response.json())
             if response.status_code == 200:
                 token_data = response.json()
                 return jsonify(token_data), 200
             else:
+                # En caso de error, proporcionar detalles de la respuesta
                 return jsonify({'error': 'HubSpot API error', 'details': response.json()}), response.status_code
 
+        except requests.exceptions.RequestException as req_error:
+            # Manejo de errores relacionados con la solicitud
+            return jsonify({"error": f"Request failed: {str(req_error)}"}), 500
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            # Manejo de errores generales
+            return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500

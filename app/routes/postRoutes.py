@@ -677,8 +677,6 @@ def setup_post_routes(app,mongo):
         # =============================================
 
         matchMoverArchivo = re.search(r'archivo:(.+?) (en|a) carpeta:(.+)', query, re.IGNORECASE)
-        print("Query para mover archivo: ", query)
-        print("El match de archivo en carpeta: ", matchMoverArchivo)
         if matchMoverArchivo:
             file_name = matchMoverArchivo.group(1).strip()
             folder_name = matchMoverArchivo.group(3).strip()
@@ -759,8 +757,47 @@ def setup_post_routes(app,mongo):
 
             return {"message": f"🎉 El archivo '{file_name}' ha sido eliminado de Google Drive con éxito! 🗑️"}
         
+        # ============================================= 
+        #   📂 Crear carpeta nueva en Google Drive 📂
+        # =============================================
+
+        matchCrearCarpeta = re.search(r'crear\s*carpeta:\s*(.+)', query, re.IGNORECASE)
+        if matchCrearCarpeta:
+            folder_name = matchCrearCarpeta.group(1).strip()
+
+            # Crear la carpeta en Google Drive
+            url = "https://www.googleapis.com/drive/v3/files"
+            headers = {"Authorization": f"Bearer {google_drive_token}"}
+            metadata = {
+                "name": folder_name,
+                "mimeType": "application/vnd.google-apps.folder"
+            }
+            
+            response = requests.post(url, headers=headers, json=metadata)
+            
+            if response.status_code != 200:
+                return jsonify({"error": "No se pudo crear la carpeta"}), 500
+            
+            folder_id = response.json().get('id')
+
+            return {"message": f"🚀✨ ¡Éxito! La carpeta '{folder_name}' ha sido creada en Google Drive 🗂️📂. ¡Todo listo para organizar tus archivos! 🎉"}
+        
+        # ============================================= 
+        #   🗑️ Vaciar la papelera de Google Drive 🗑️
+        # =============================================
+
+        matchVaciarPapelera = re.search(r'vaciar\s*(la\s*)?papelera', query, re.IGNORECASE)
+        if matchVaciarPapelera:
+            # Hacer la solicitud para vaciar la papelera
+            empty_trash_url = "https://www.googleapis.com/drive/v3/files/trash"
+            headers = {"Authorization": f"Bearer {google_drive_token}"}
+
+            response = requests.delete(empty_trash_url, headers=headers)
+            return {"message": "🗑️ ¡La papelera de Google Drive ha sido vaciada con éxito! Todo lo que estaba ahí, ¡ya no está! 🚮"}
+        
         return jsonify({"error": "Formato de consulta inválido"}), 400
-    
+
+#################################################################################################################    
     def post_to_onedrive(query):
 
         # Obtener email del usuario

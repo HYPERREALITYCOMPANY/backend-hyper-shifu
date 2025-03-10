@@ -2,11 +2,17 @@ from flask import request, jsonify
 import requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from app import services
 from config import Config
 from datetime import datetime
 import re
 import json
 import openai
+import base64
+from email.mime.text import MIMEText
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+import google.auth
 openai.api_key=Config.CHAT_API_KEY
 
 def setup_post_routes(app,mongo):
@@ -16,6 +22,7 @@ def setup_post_routes(app,mongo):
             "Content-Type": "application/json"
     }
 
+############################################################################################################################
     def post_to_gmail(query):
         """Procesa la consulta y ejecuta la acción en Gmail API o Google Calendar si aplica."""
         email = request.args.get('email')
@@ -29,6 +36,10 @@ def setup_post_routes(app,mongo):
         gmail_token = user.get('integrations', {}).get('Gmail', {}).get('token')
         if not gmail_token:
             return jsonify({"error": "Token de Gmail no disponible"}), 400
+
+        # =============================================
+        #   Busqueda de correos de gmail 📧
+        # =============================================
 
         match = re.search(r'todos los correos de (.+)', query, re.IGNORECASE)
         if match:
@@ -136,8 +147,57 @@ def setup_post_routes(app,mongo):
                 return {"message": f"¡Tu cita ha sido agendada con éxito! 📅🕒\n\nDetalles:\n- Asunto: {subject}\n- Fecha y hora de inicio: {event['start']['dateTime']}\n- Fecha y hora de fin: {event['end']['dateTime']}\n\n¡Nos vemos pronto! 😊"}
             except Exception as e:
                 print(f"Error al procesar la respuesta: {e}")
+
+        # =============================================
+        #   Crear borrador en gmail para enviar correo 📧
+        # =============================================
+        print("Query para crear borrador en gmail: ", query)
+        match = re.search(r'crear\s*borrador\s*con\s*asunto:\s*(.*?)\s*y\s*cuerpo:\s*(.*)', query, re.IGNORECASE)
+        print("Match de crear borrador: ", match)
+
+        if match:
+            print("Match encontrado!")
+
+            asunto = match.group(1).strip()
+            cuerpo = match.group(2).strip()
+
+            # ✅ Crear mensaje en formato MIME
+            mensaje = MIMEText(cuerpo)
+            mensaje["Subject"] = asunto
+
+            # ✅ Convertir a Base64
+            mensaje_bytes = mensaje.as_bytes()
+            mensaje_base64 = base64.urlsafe_b64encode(mensaje_bytes).decode()
+
+            # ✅ Estructura final del borrador
+            borrador = {
+                "message": {
+                    "raw": mensaje_base64
+                }
+            }
+
+            print("Borrador creado: ", borrador)
+
+            # **Autenticación y conexión con la API de Gmail**
+            try:
+                creds, _ = google.auth.default()  # Aquí se asume que ya tienes credenciales configuradas
+                service = build("gmail", "v1", credentials=creds)
+
+                # **Llamar a la API para crear el borrador**
+                draft = service.users().drafts().create(userId="me", body=borrador).execute()
+
+                print(f'Borrador creado con éxito! ID: {draft["id"]}')
+                print(f'Detalles del mensaje: {draft["message"]}')
+
+            except HttpError as error:
+                print(f"Error al crear el borrador: {error}")
+            
+            else:
+                print("No se encontró un match válido")
+
         return {"error": "No se encontró una acción válida en la consulta"}
 
+##############################################################################################
     def post_to_outlook(query):
         """Procesa la consulta y ejecuta la acción en Outlook API."""
         email = request.args.get('email')
@@ -259,6 +319,7 @@ def setup_post_routes(app,mongo):
                 return results[0]["id"]  # Notion utiliza el "id" de cada página
         return None
 
+#############################################################################################################
     def post_to_notion(query):
         """Procesa la consulta y ejecuta la acción en la API de Notion."""
         email = request.args.get('email')
@@ -306,6 +367,7 @@ def setup_post_routes(app,mongo):
 
         return {"error": "No se encontró una tarea válida en la consulta"}
 
+#####################################################################################################
     def post_to_clickup(query):
         """Procesa la consulta y ejecuta la acción en la API de ClickUp."""
         email = request.args.get('email')
@@ -371,7 +433,7 @@ def setup_post_routes(app,mongo):
 
         return jsonify({"error": "No se encontró una tarea válida en la consulta"}), 400
 
-
+#############################################################################################################
     def post_to_asana(query):
         """Procesa la consulta y ejecuta la acción en la API de Asana."""
         email = request.args.get('email')
@@ -408,7 +470,8 @@ def setup_post_routes(app,mongo):
                 return jsonify({"error": "No se pudo completar la tarea"}), 400
 
         return {"error": "No se encontró una tarea válida en la consulta"}
-        
+
+###################################################################################################        
     def post_to_dropbox(query):
         """Procesa la consulta y ejecuta la acción en la API de Dropbox."""
         email = request.args.get('email')
@@ -421,7 +484,9 @@ def setup_post_routes(app,mongo):
         if not dropbox_token:
             return jsonify({"error": "Token de Dropbox no disponible"}), 400
         
-        print("El query de renombrar: ", query)
+        # =============================================
+        #   📂 Movemos archivos en Dropbox 📂
+        # =============================================
         
         match = re.search(r'archivo:(.+?) en carpeta:(.+)', query, re.IGNORECASE)
         if match:
@@ -525,66 +590,6 @@ def setup_post_routes(app,mongo):
             return {"message": f"🎉 El archivo '{file_name}' ha sido eliminado de Dropbox con éxito! 🗑️"}
         
         # =============================================
-        #   ✏️ Renombramos archivos en Dropbox ✏️
-        # =============================================
-
-        matchRenombrar = re.search(r'archivo:(.+?) a:(.+)', query, re.IGNORECASE)
-        if matchRenombrar:
-            file_name = matchRenombrar.group(2).strip()  # Nombre actual del archivo
-            new_file_name = matchRenombrar.group(3).strip()  # Nuevo nombre del archivo
-
-            # Realizamos la búsqueda en Dropbox
-            url = "https://api.dropboxapi.com/2/files/search_v2"
-            headers = {
-                'Authorization': f"Bearer {dropbox_token}",
-                'Content-Type': 'application/json'
-            }
-            params = {
-                "query": file_name,
-                "options": {
-                    "max_results": 10,
-                    "file_status": "active"
-                }
-            }
-            response = requests.post(url, headers=headers, json=params)
-            response.raise_for_status()
-            results = response.json().get('matches', [])
-
-            file_path = None
-
-            for result in results:
-                dropbox_file_name = result['metadata']['metadata']['name']
-                dropbox_file_path = result['metadata']['metadata']['path_lower']
-                print(f"Encontrado en Dropbox: {dropbox_file_name} -> {dropbox_file_path}")
-
-                if dropbox_file_name.lower() == file_name.lower():
-                    file_path = dropbox_file_path
-                    break
-            
-            if not file_path:
-                return jsonify({"error": f"Archivo '{file_name}' no encontrado en Dropbox"}), 404
-            
-            # Construimos la nueva ruta con el nuevo nombre
-            folder_path = "/".join(file_path.split("/")[:-1])  # Extraemos la carpeta donde está el archivo
-            new_file_path = f"{folder_path}/{new_file_name}"
-
-            print(f"Ruta original: {file_path}")
-            print(f"Ruta nueva: {new_file_path}")
-
-            # Renombramos el archivo usando files/move_v2
-            rename_url = "https://api.dropboxapi.com/2/files/move_v2"
-            rename_data = {
-                "from_path": file_path,
-                "to_path": new_file_path,
-                "autorename": False
-            }
-
-            rename_response = requests.post(rename_url, headers=headers, json=rename_data)
-            rename_response.raise_for_status()
-
-            return {"message": f"🎉 El archivo '{file_name}' ha sido renombrado a '{new_file_name}' en Dropbox con éxito! ✏️"}
-        
-        # =============================================
         #   Creamos carpetas en Dropbox 📂
         # =============================================
 
@@ -659,6 +664,7 @@ def setup_post_routes(app,mongo):
 
 #####################################################################################################################
     def post_to_googledrive(query):
+        print("Query para google drive: ", query)
         """Procesa la consulta y ejecuta la acción en la API de Google Drive."""
         email = request.args.get('email')
         if not email:

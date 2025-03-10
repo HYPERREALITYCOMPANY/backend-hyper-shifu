@@ -318,6 +318,8 @@ def setup_routes_chats(app, mongo):
                     f"   - Ejemplo: Enviar un correo (Esto se envía a Gmail, Outlook, Teams, Slack)\n"
                     f"6. **Agendar o Programar** (acciones como 'agendar', 'programar'):\n"
                     f"   - Ejemplo: Agendar cita en Gmail \n"
+                    f"7. **Crear un borrador** (acciones como 'crear borrador', 'guardar borrador'):\n"
+                    f"   - Ejemplo: Crear un borrador en Gmail con asunto: Prueba borrador cuerpo: Hola que tal te adjunto tal y tal (Esto se envía a Gmail, Outlook, Teams, Slack\n"
                     f"Cuando detectes una solicitud de POST, identifica a qué servicios corresponde basándote en las acciones. Usa 'N/A' para las APIs que no apliquen.\n"
                     f"**Generación de Consulta**: Asegúrate de que las consultas sean claras y sin palabras adicionales como '¿Podrías...?'. Utiliza los datos específicos proporcionados (nombre, fecha, tarea, etc.) para generar las queries."
                     f"**Estructura del JSON para la respuesta (con acciones del usuario):**\n"

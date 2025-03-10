@@ -192,7 +192,7 @@ def setup_post_routes(app,mongo):
         # =============================================
 
         match = re.search(
-            r'enviar\s*correo\s*a\s*([\w\.-]+@[\w\.-]+)\s*con\s*asunto:\s*(.*?)\s*y\s*cuerpo:\s*(.*)',
+            r'enviar\s*correo\s*a\s*([\w\.-@,\s]+)\s*con\s*asunto:\s*(.*?)\s*y\s*cuerpo:\s*(.*)',
             query,
             re.IGNORECASE
         )

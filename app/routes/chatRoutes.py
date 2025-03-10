@@ -32,6 +32,7 @@ def setup_routes_chats(app, mongo):
     post_to_asana = functionsPost["post_to_asana"]
     post_to_dropbox = functionsPost["post_to_dropbox"]
     post_to_googledrive = functionsPost["post_to_googledrive"]
+    post_to_onedrive = functionsPost["post_to_onedrive"]
 
     functionsAuto = {
         "post_auto_gmail": functions2["post_auto_gmail"],
@@ -350,7 +351,36 @@ def setup_routes_chats(app, mongo):
                     f"Para estos casos, construye un JSON con:\n"
                     f"1. 'condition': La condición que activa la automatización\n"
                     f"2. 'action': La acción a realizar\n"
-                    f"3. Para cada servicio relevante\n\n"
+                    f"⚠ **VALIDACIÓN ESTRICTA:** ⚠\n"
+                    f"Incluye **únicamente** los servicios que sean lógicamente aplicables a la acción descrita. **NO agregues servicios irrelevantes.**\n"
+                    f"\n"
+                    f"🔹 **Criterios de inclusión por tipo de automatización:**\n"
+                    f"- **Si la automatización menciona correos**, **SOLO** incluir 'gmail' y/o 'outlook'.\n"
+                    f"- **Si la automatización menciona proyectos o tareas**, **SOLO** incluir 'notion', 'asana' y/o 'clickup'.\n"
+                    f"- **Si la automatización menciona archivos**, **SOLO** incluir 'googledrive', 'dropbox' y/o 'onedrive'.\n"
+                    f"- **Si la automatización menciona mensajería/chat**, **SOLO** incluir 'slack' y/o 'teams'.\n"
+                    f"- **Si la automatización menciona contactos, CRM o ventas**, **SOLO** incluir 'hubspot'.\n"
+                    f"\n"
+                    f"🚫 **NO agregues un servicio si no está relacionado con la acción descrita en la VALIDACIÓN ESTRICTA.**\n"
+                    f"🚫 **No pongas claves con 'N/A', simplemente excluye el servicio si no aplica.**\n"
+                    f"\n"
+                    f"Ejemplo correcto:\n"
+                    f"Solicitud: 'Cuando una tarea esté 'En curso', cambia la prioridad a crítica.'\n"
+                    f"Respuesta esperada:\n"
+                    f"{{\n"
+                    f"    \"notion\": {{\n"
+                    f"        \"condition\": \"Cuando una tarea esté 'En curso'\",\n"
+                    f"        \"action\": \"cambiar la prioridad a crítica\"\n"
+                    f"    }},\n"
+                    f"    \"clickup\": {{\n"
+                    f"        \"condition\": \"Cuando una tarea esté 'En curso'\",\n"
+                    f"        \"action\": \"cambiar la prioridad a crítica\"\n"
+                    f"    }},\n"
+                    f"    \"asana\": {{\n"
+                    f"        \"condition\": \"Cuando una tarea esté 'En curso'\",\n"
+                    f"        \"action\": \"cambiar la prioridad a crítica\"\n"
+                    f"    }}\n"
+                    f"}}\n"
                     
                     f"**Estructura del JSON para la respuesta (con automatizaciones):**\n"
                     f"{{\n"
@@ -610,7 +640,7 @@ def setup_routes_chats(app, mongo):
                                     'dropbox': post_to_dropbox,
                                     'asana': post_to_asana,
                                     'googledrive': post_to_googledrive,
-                                    # 'onedrive': post_to_onedrive,
+                                    'onedrive': post_to_onedrive,
                                     # 'teams': post_to_teams,
                                 }
                                 

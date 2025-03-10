@@ -603,6 +603,77 @@ def setup_post_routes(app,mongo):
         else:
             raise Exception(f"⚠️ Error al mover archivo: {response_patch.text}")
 
+    def post_to_onedrive(query):
+        print("Entrando a OneDrive")
+        print("query onedrive:", query)
+
+        # Obtener email del usuario
+        email = request.args.get('email')
+        if not email:
+            return jsonify({"error": "Se debe proporcionar un email"}), 400
+
+        # Buscar usuario en la base de datos
+        user = mongo.database.usuarios.find_one({"correo": email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+
+        # Obtener el token de OneDrive
+        OneDrive_token = user.get('integrations', {}).get('OneDrive', {}).get('token')
+        if not OneDrive_token:
+            return jsonify({"error": "Token de OneDrive no disponible"}), 400
+
+        # ==================================================
+        #   🗑 Mover archivos a la papelera en OneDrive 🗑
+        # ==================================================
+
+        matchEliminar = re.search(r'eliminar\s*(archivo)?[:\s]*([\w\.\-_]+)', query, re.IGNORECASE)
+        print("matchEliminar OneDrive:", matchEliminar)
+
+        if matchEliminar:
+            file_name = matchEliminar.group(2).strip()
+            print("file_name:", file_name)
+
+            # Buscar archivo en OneDrive
+            search_url = f"https://graph.microsoft.com/v1.0/me/drive/root/search(q='{file_name}')"
+            headers = {
+                'Authorization': f"Bearer {OneDrive_token}",
+                'Content-Type': 'application/json'
+            }
+
+            response = requests.get(search_url, headers=headers)
+            print(response)
+            if response.status_code == 401:
+                return jsonify({"error": "No autorizado. Verifica el token de acceso."}), 401
+
+            response.raise_for_status()
+            results = response.json().get('value', [])
+
+            file_id = None
+            for result in results:
+                OneDrive_file_name = result['name']
+                OneDrive_file_id = result['id']
+                
+                if OneDrive_file_name.lower().startswith(file_name.lower()):
+                    file_id = OneDrive_file_id
+                    break
+
+            if not file_id:
+                return jsonify({"error": f"Archivo '{file_name}' no encontrado en OneDrive"}), 404
+
+            # Mover el archivo a la papelera (Enviar a "Recycle Bin" en OneDrive)
+            move_to_trash_url = f"https://graph.microsoft.com/v1.0/me/drive/items/{file_id}"
+            delete_response = requests.delete(move_to_trash_url, headers=headers)
+            
+            if delete_response.status_code == 401:
+                return jsonify({"error": "No autorizado. Verifica el token de acceso."}), 401
+
+            delete_response.raise_for_status()
+
+            return jsonify({"message": f"🗑 El archivo '{file_name}' ha sido movido a la papelera en OneDrive con éxito!"})
+
+        return jsonify({"error": "Formato de consulta inválido"}), 400
+
+
     return {
         "post_to_gmail" : post_to_gmail,
         "post_to_notion" : post_to_notion,
@@ -610,5 +681,6 @@ def setup_post_routes(app,mongo):
         "post_to_asana" : post_to_asana,
         "post_to_outlook" : post_to_outlook,
         "post_to_dropbox" : post_to_dropbox,
-        "post_to_googledrive" : post_to_googledrive
+        "post_to_googledrive" : post_to_googledrive,
+        "post_to_onedrive": post_to_onedrive,
     }

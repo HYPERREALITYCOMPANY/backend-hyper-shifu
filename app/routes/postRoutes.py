@@ -628,113 +628,169 @@ def setup_post_routes(app,mongo):
         if not google_drive_token:
             return jsonify({"error": "Token de Google Drive no disponible."}), 400
         
-        match = re.search(r"(?:mover\s+)?archivo:\s*([\w\s\d\.-]+?)\s+(?:a|en)\s+carpeta:\s*([\w\s\d\.-]+)", query, re.IGNORECASE)
-        print("Match encontrado drive:", match)
+        # =============================================
+        #   🗑️ Eliminamos archivos de Google Drive 🗑️
+        # =============================================
+        matchEliminarDrive = re.search(r'(Eliminar\s*archivo|archivo):\s*(.+)', query, re.IGNORECASE)
+        if matchEliminarDrive:
+            file_name = matchEliminarDrive.group(2).strip()  # Usamos el grupo 2 para el nombre del archivo
 
-        if match:
-            file_name = match.group(1).strip()  # Nombre del archivo
-            folder_name = match.group(2).strip()  # Nombre de la carpeta
-            print(f"Archivo: {file_name}, Carpeta destino: {folder_name}")
+            # Realizamos la búsqueda en Google Drive
+            url = "https://www.googleapis.com/drive/v3/files"
+            headers = {
+                'Authorization': f"Bearer {google_drive_token}",
+            }
+            # Cambiamos a "name contains" para buscar archivos cuyo nombre contenga la cadena proporcionada
+            params = {
+                "q": f"name contains '{file_name}'",  # Permite buscar nombres que contengan 'file_name'
+                "spaces": "drive",
+                "fields": "files(id,name)",
+            }
+            response = requests.get(url, headers=headers, params=params)
+            response.raise_for_status()
+            results = response.json().get('files', [])
+
+            file_id = None
+            for result in results:
+                google_drive_file_name = result['name']
+                google_drive_file_id = result['id']
+                
+                if google_drive_file_name.lower().startswith(file_name.lower()):
+                    file_id = google_drive_file_id
+                    break
             
-            try:
-                # Buscar el archivo por nombre
-                file_id = get_file_id_by_name(google_drive_token, file_name)
-                print("Archivo encontrado:", file_id)
-                if not file_id:
-                    return jsonify({"error": f"Archivo '{file_name}' no encontrado en Google Drive."}), 404
-                
-                # Buscar la carpeta por nombre
-                folder_id = get_folder_id_by_name(google_drive_token, folder_name)
-                print("Carpeta encontrada:", folder_id)
-                if not folder_id:
-                    return jsonify({"error": f"Carpeta '{folder_name}' no encontrada en Google Drive."}), 404
-                
-                # Mover el archivo a la nueva carpeta
-                move_file_to_folder(google_drive_token, file_id, folder_id)
-                
-                return jsonify({"message": f"Archivo '{file_name}' movido exitosamente a la carpeta '{folder_name}'."}), 200
+            if not file_id:
+                return jsonify({"error": f"Archivo '{file_name}' no encontrado en Google Drive"}), 404
             
-            except Exception as e:
-                return jsonify({"error": f"Error al procesar la solicitud: {str(e)}"}), 500
+            # Eliminamos el archivo de Google Drive
+            delete_url = f"https://www.googleapis.com/drive/v3/files/{file_id}"
+            delete_response = requests.delete(delete_url, headers=headers)
+            delete_response.raise_for_status()
+
+            return {"message": f"🎉 El archivo '{file_name}' ha sido eliminado de Google Drive con éxito! 🗑️"}
         
-        else:
-            return jsonify({"error": "No se encontró una acción válida en la consulta."}), 400
+        return jsonify({"error": "Formato de consulta inválido"}), 400
+    
+    def post_to_onedrive(query):
 
-    def get_file_id_by_name(token, file_name):
-        url = "https://www.googleapis.com/drive/v3/files"
-        headers = {
-            "Authorization": f"Bearer {token}"
-        }
-        params = {
-            "q": f"name contains '{file_name.strip()}' and trashed = false",
-            "fields": "files(id, name, parents)"
-        }
-        response = requests.get(url, headers=headers, params=params)
-        print("Respuesta completa de Google Drive:", response.json())  # 🔍 Imprime todos los archivos encontrados
-        
-        if response.status_code == 200:
-            files = response.json().get("files", [])
-            for f in files:
-                print(f"Archivo disponible: {f['name']} - ID: {f['id']} - Carpeta padre: {f.get('parents', 'Sin carpeta')}")
+        # Obtener email del usuario
+        email = request.args.get('email')
+        if not email:
+            return jsonify({"error": "Se debe proporcionar un email"}), 400
 
-            # Buscar el archivo ignorando diferencias de mayúsculas y espacios
-            file_name_clean = file_name.strip().lower()
-            return next((f['id'] for f in files if f['name'].strip().lower() == file_name_clean), None)
-        
-        return None
+        # Buscar usuario en la base de datos
+        user = mongo.database.usuarios.find_one({"correo": email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
 
+        # Obtener el token de OneDrive
+        OneDrive_token = user.get('integrations', {}).get('OneDrive', {}).get('token')
+        if not OneDrive_token:
+            return jsonify({"error": "Token de OneDrive no disponible"}), 400
 
-    def get_folder_id_by_name(token, folder_name):
-        """Obtiene el ID de una carpeta por su nombre usando la API de Google Drive."""
-        url = "https://www.googleapis.com/drive/v3/files"
-        headers = {
-            "Authorization": f"Bearer {token}"
-        }
-        params = {
-            "q": f"mimeType = 'application/vnd.google-apps.folder' and name = '{folder_name}'",
-            "fields": "files(id)"
-        }
-        response = requests.get(url, headers=headers, params=params)
-        
-        if response.status_code == 200:
-            folders = response.json().get("files", [])
-            if folders:
-                return folders[0]['id']  # Retorna la primera carpeta que coincida con el nombre
-        return None
+        # ==================================================
+        #   🗑️ Mover archivos a la papelera en OneDrive 🗑️
+        # ==================================================
 
-    def move_file_to_folder(token, file_id, folder_id):
-        """Mueve el archivo a la carpeta especificada en Google Drive y lo elimina de su ubicación anterior."""
+        matchEliminar = re.search(r'eliminar\s*(archivo)?[:\s]*([\w\.\-_]+)', query, re.IGNORECASE)
 
-        # 1️⃣ Obtener las carpetas actuales del archivo
-        url_get = f"https://www.googleapis.com/drive/v3/files/{file_id}?fields=parents"
-        headers = {"Authorization": f"Bearer {token}"}
-        
-        response_get = requests.get(url_get, headers=headers)
+        if matchEliminar:
+            file_name = matchEliminar.group(2).strip()
 
-        if response_get.status_code == 200:
-            current_parents = response_get.json().get("parents", [])
-            if not current_parents:
-                raise Exception(f"El archivo {file_id} no tiene carpetas padre.")
-            current_parents_str = ",".join(current_parents)  # Convertir a string separado por comas
-        else:
-            raise Exception(f"Error al obtener la carpeta actual: {response_get.text}")
+            # Buscar archivo en OneDrive
+            search_url = f"https://graph.microsoft.com/v1.0/me/drive/root/search(q='{file_name}')"
+            headers = {
+                'Authorization': f"Bearer {OneDrive_token}",
+                'Content-Type': 'application/json'
+            }
 
-        # 2️⃣ Mover el archivo a la nueva carpeta (removiendo la anterior)
-        url_patch = f"https://www.googleapis.com/drive/v3/files/{file_id}"
+            response = requests.get(search_url, headers=headers)
+            if response.status_code == 401:
+                return jsonify({"error": "No autorizado. Verifica el token de acceso."}), 401
 
-        params = {
-            "addParents": folder_id,
-            "removeParents": current_parents_str,  # 💡 Remueve TODAS las carpetas anteriores
-            "fields": "id, parents"
-        }
+            response.raise_for_status()
+            results = response.json().get('value', [])
 
-        response_patch = requests.patch(url_patch, headers=headers, params=params)  # 🚨 Aquí pasamos los datos en `params`, no en `json`
+            file_id = None
+            for result in results:
+                OneDrive_file_name = result['name']
+                OneDrive_file_id = result['id']
+                
+                if OneDrive_file_name.lower().startswith(file_name.lower()):
+                    file_id = OneDrive_file_id
+                    break
 
-        if response_patch.status_code == 200:
-            print(f"✅ Archivo {file_id} movido correctamente a la carpeta {folder_id}.")
-        else:
-            raise Exception(f"⚠️ Error al mover archivo: {response_patch.text}")
+            if not file_id:
+                return jsonify({"error": f"Archivo '{file_name}' no encontrado en OneDrive"}), 404
 
+    def post_to_onedrive(query):
+        print("Entrando a OneDrive")
+        print("query onedrive:", query)
+
+        # Obtener email del usuario
+        email = request.args.get('email')
+        if not email:
+            return jsonify({"error": "Se debe proporcionar un email"}), 400
+
+        # Buscar usuario en la base de datos
+        user = mongo.database.usuarios.find_one({"correo": email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+
+        # Obtener el token de OneDrive
+        OneDrive_token = user.get('integrations', {}).get('OneDrive', {}).get('token')
+        if not OneDrive_token:
+            return jsonify({"error": "Token de OneDrive no disponible"}), 400
+
+        # ==================================================
+        #   🗑 Mover archivos a la papelera en OneDrive 🗑
+        # ==================================================
+
+        matchEliminar = re.search(r'eliminar\s*(archivo)?[:\s]*([\w\.\-_]+)', query, re.IGNORECASE)
+        print("matchEliminar OneDrive:", matchEliminar)
+
+        if matchEliminar:
+            file_name = matchEliminar.group(2).strip()
+            print("file_name:", file_name)
+
+            # Buscar archivo en OneDrive
+            search_url = f"https://graph.microsoft.com/v1.0/me/drive/root/search(q='{file_name}')"
+            headers = {
+                'Authorization': f"Bearer {OneDrive_token}",
+                'Content-Type': 'application/json'
+            }
+
+            response = requests.get(search_url, headers=headers)
+            print(response)
+            if response.status_code == 401:
+                return jsonify({"error": "No autorizado. Verifica el token de acceso."}), 401
+
+            response.raise_for_status()
+            results = response.json().get('value', [])
+
+            file_id = None
+            for result in results:
+                OneDrive_file_name = result['name']
+                OneDrive_file_id = result['id']
+                
+                if OneDrive_file_name.lower().startswith(file_name.lower()):
+                    file_id = OneDrive_file_id
+                    break
+
+            if not file_id:
+                return jsonify({"error": f"Archivo '{file_name}' no encontrado en OneDrive"}), 404
+            # Mover el archivo a la papelera (Enviar a "Recycle Bin" en OneDrive)
+            move_to_trash_url = f"https://graph.microsoft.com/v1.0/me/drive/items/{file_id}"
+            delete_response = requests.delete(move_to_trash_url, headers=headers)
+            
+            if delete_response.status_code == 401:
+                return jsonify({"error": "No autorizado. Verifica el token de acceso."}), 401
+
+            delete_response.raise_for_status()
+            return jsonify({"message": f"🗑 El archivo '{file_name}' ha sido movido a la papelera en OneDrive con éxito!"})
+
+        return jsonify({"error": "Formato de consulta inválido"}), 400
+    
     return {
         "post_to_gmail" : post_to_gmail,
         "post_to_notion" : post_to_notion,
@@ -742,5 +798,6 @@ def setup_post_routes(app,mongo):
         "post_to_asana" : post_to_asana,
         "post_to_outlook" : post_to_outlook,
         "post_to_dropbox" : post_to_dropbox,
-        "post_to_googledrive" : post_to_googledrive
+        "post_to_googledrive" : post_to_googledrive,
+        "post_to_onedrive" : post_to_onedrive
     }

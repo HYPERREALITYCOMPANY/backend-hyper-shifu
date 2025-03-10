@@ -10,9 +10,6 @@ import json
 import openai
 import base64
 from email.mime.text import MIMEText
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
-import google.auth
 openai.api_key=Config.CHAT_API_KEY
 
 def setup_post_routes(app,mongo):
@@ -151,13 +148,10 @@ def setup_post_routes(app,mongo):
         # =============================================
         #   Crear borrador en gmail para enviar correo 📧
         # =============================================
-        print("Query para crear borrador en gmail: ", query)
+
         match = re.search(r'crear\s*borrador\s*con\s*asunto:\s*(.*?)\s*y\s*cuerpo:\s*(.*)', query, re.IGNORECASE)
-        print("Match de crear borrador: ", match)
 
         if match:
-            print("Match encontrado!")
-
             asunto = match.group(1).strip()
             cuerpo = match.group(2).strip()
 
@@ -176,24 +170,71 @@ def setup_post_routes(app,mongo):
                 }
             }
 
-            print("Borrador creado: ", borrador)
-
-            # **Autenticación y conexión con la API de Gmail**
-            try:
-                creds, _ = google.auth.default()  # Aquí se asume que ya tienes credenciales configuradas
-                service = build("gmail", "v1", credentials=creds)
-
-                # **Llamar a la API para crear el borrador**
-                draft = service.users().drafts().create(userId="me", body=borrador).execute()
-
-                print(f'Borrador creado con éxito! ID: {draft["id"]}')
-                print(f'Detalles del mensaje: {draft["message"]}')
-
-            except HttpError as error:
-                print(f"Error al crear el borrador: {error}")
+            url = "https://www.googleapis.com/gmail/v1/users/me/drafts"
+            headers = {"Authorization": f"Bearer {gmail_token}", "Content-Type": "application/json"}
+            response = requests.post(url, json=borrador, headers=headers)
             
-            else:
-                print("No se encontró un match válido")
+            # 📌 Imprimir la respuesta para debug
+            
+            try:
+                response_json = response.json()
+
+                if response.status_code == 200:
+                    return {"message": f"📩 ¡Borrador creado con éxito! El correo con asunto '{asunto}' ha sido guardado en Gmail. 🚀"}
+                else:
+                    return {"error": f"⚠️ No se pudo crear el borrador. Error: {response_json}"}
+
+            except Exception as e:
+                return {"error": "⚠️ Error inesperado al procesar la respuesta de Gmail."}
+        
+        # =============================================
+        #   📤 Enviar correo en Gmail (Mejorado) ✉️
+        # =============================================
+
+        match = re.search(
+            r'enviar\s*correo\s*a\s*([\w\.-]+@[\w\.-]+)\s*con\s*asunto:\s*(.*?)\s*y\s*cuerpo:\s*(.*)',
+            query,
+            re.IGNORECASE
+        )
+
+        if match:
+
+            destinatario = match.group(1).strip()  # 📌 Captura el correo
+            asunto = match.group(2).strip()  # 📌 Captura el asunto
+            cuerpo = match.group(3).strip()  # 📌 Captura el cuerpo
+
+            # ✅ Si el usuario no puso dominio, asumimos @gmail.com
+            if "@" not in destinatario:
+                destinatario += "@gmail.com"
+
+            # ✅ Crear mensaje en formato MIME
+            mensaje = MIMEText(cuerpo)
+            mensaje["To"] = destinatario
+            mensaje["Subject"] = asunto
+
+            # ✅ Convertir a Base64
+            mensaje_bytes = mensaje.as_bytes()
+            mensaje_base64 = base64.urlsafe_b64encode(mensaje_bytes).decode()
+
+            # ✅ Estructura final del correo
+            correo = {
+                "raw": mensaje_base64
+            }
+
+            url = "https://www.googleapis.com/gmail/v1/users/me/messages/send"
+            headers = {"Authorization": f"Bearer {gmail_token}", "Content-Type": "application/json"}
+            response = requests.post(url, json=correo, headers=headers)
+
+            try:
+                response_json = response.json()
+
+                if response.status_code == 200:
+                    return {"message": f"📤 ¡Correo enviado con éxito! ✉️ El mensaje con asunto '{asunto}' fue enviado a {destinatario}. 🚀"}
+                else:
+                    return {"error": f"⚠️ No se pudo enviar el correo. Error: {response_json}"}
+
+            except Exception as e:
+                return {"error": "⚠️ Error inesperado al procesar la respuesta de Gmail."}
 
         return {"error": "No se encontró una acción válida en la consulta"}
 
@@ -568,8 +609,6 @@ def setup_post_routes(app,mongo):
             for result in results:
                 dropbox_file_name = result['metadata']['metadata']['name']
                 dropbox_file_path = result['metadata']['metadata']['path_lower']
-                print(dropbox_file_name)
-                print(dropbox_file_path)
 
                 if dropbox_file_name.lower().startswith(file_name.lower()):
                     file_path = dropbox_file_path
@@ -594,11 +633,9 @@ def setup_post_routes(app,mongo):
         # =============================================
 
         matchCrearCarpetaDrop = re.search(r'crear\s*carpeta\s*[:\-]?\s*(.+)', query, re.IGNORECASE)
-        print("El match de crear carpeta: ", matchCrearCarpetaDrop)
 
         if matchCrearCarpetaDrop:
             folder_name = matchCrearCarpetaDrop.group(1).strip()  # Nombre de la carpeta a crear
-            print(f"Creando carpeta '{folder_name}' en Dropbox...") # Hasta aquí todo bien
 
             url ="https://api.dropboxapi.com/2/files/create_folder_v2"
             headers = {
@@ -615,9 +652,10 @@ def setup_post_routes(app,mongo):
             response.raise_for_status()
             return {"message": f"🎉✨ ¡Éxito total! La carpeta '{folder_name}' ha sido creada con éxito en Dropbox. 🚀🌟"}
         
-        print ("Query para restaurar archivo: ", query)
+        # =============================================
+        #   Restaurar archivos en Dropbox 🗑️
+        # =============================================
         matchRestaurarArchivoDrop = re.search(r'restaura\s*archivo\s*[:\-]?\s*(.+)', query, re.IGNORECASE)
-        print("El match de restaurar archivo: ", matchRestaurarArchivoDrop)
         if matchRestaurarArchivoDrop:
             file_name = matchRestaurarArchivoDrop.group(1).strip()  # Nombre del archivo a restaurar
 
@@ -640,7 +678,6 @@ def setup_post_routes(app,mongo):
             if 'entries' in revisions and len(revisions['entries']) > 0:
                 # Obtener la última revisión (rev)
                 rev = revisions['entries'][0]['rev']
-                print(f"Última revisión: {rev}")
                 
                 # Ahora, podemos restaurar el archivo desde la papelera usando la revisión
                 url_restore = "https://api.dropboxapi.com/2/files/restore"
@@ -654,9 +691,7 @@ def setup_post_routes(app,mongo):
                 restore_response = requests.post(url_restore, headers=headers, json=restore_params)
                 
                 if restore_response.status_code == 200:
-                    print(f"¡El archivo {file_path} ha sido restaurado exitosamente!")
-                else:
-                    print("Error al restaurar el archivo:", restore_response.json())
+                    return(f"¡El archivo {file_path} ha sido restaurado exitosamente!")
             else:
                 print("No se encontraron revisiones para este archivo.")
 
@@ -664,7 +699,7 @@ def setup_post_routes(app,mongo):
 
 #####################################################################################################################
     def post_to_googledrive(query):
-        print("Query para google drive: ", query)
+        
         """Procesa la consulta y ejecuta la acción en la API de Google Drive."""
         email = request.args.get('email')
         if not email:

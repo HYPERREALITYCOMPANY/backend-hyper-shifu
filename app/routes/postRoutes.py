@@ -421,8 +421,9 @@ def setup_post_routes(app,mongo):
         if not dropbox_token:
             return jsonify({"error": "Token de Dropbox no disponible"}), 400
         
+        print("El query de renombrar: ", query)
+        
         match = re.search(r'archivo:(.+?) en carpeta:(.+)', query, re.IGNORECASE)
-        print("Match encontrado dropbox:", match, ",")
         if match:
             file_name = match.group(1).strip()
             folder_name = match.group(2).strip()
@@ -447,8 +448,6 @@ def setup_post_routes(app,mongo):
             for result in results:
                 dropbox_file_name = result['metadata']['metadata']['name']
                 dropbox_file_path = result['metadata']['metadata']['path_lower']
-                print(dropbox_file_name)
-                print(dropbox_file_path)
                 
                 if dropbox_file_name.lower().startswith(file_name.lower()):
                     file_path = dropbox_file_path
@@ -475,13 +474,147 @@ def setup_post_routes(app,mongo):
             url = "https://api.dropboxapi.com/2/files/move_v2"
             response = requests.post(url, headers=headers, json=data)
             return {"message": f"🎉 El archivo '{dropbox_file_name}' ha sido movido a la carpeta '{folder_name}' con éxito! 🚀"}    
+        
+        # =============================================
+        #   🗑️ Eliminamos archivos de Dropbox 🗑️
+        # =============================================
+        matchEliminar = re.search(r'(Eliminar\s*archivo|archivo):\s*(.+)', query, re.IGNORECASE)
+        if matchEliminar:
+            file_name = matchEliminar.group(2).strip()  # Usamos el grupo 2 para el nombre del archivo
+
+            # Realizamos la búsqueda en Dropbox
+            url = "https://api.dropboxapi.com/2/files/search_v2"
+            headers = {
+                'Authorization': f"Bearer {dropbox_token}",
+                'Content-Type': 'application/json'
+            }
+            params = {
+                "query": file_name,
+                "options": {
+                    "max_results": 10,
+                    "file_status": "active"
+                }
+            }
+            response = requests.post(url, headers=headers, json=params)
+            response.raise_for_status()
+            results = response.json().get('matches', [])
+
+            file_path = None
+            for result in results:
+                dropbox_file_name = result['metadata']['metadata']['name']
+                dropbox_file_path = result['metadata']['metadata']['path_lower']
+                print(dropbox_file_name)
+                print(dropbox_file_path)
+
+                if dropbox_file_name.lower().startswith(file_name.lower()):
+                    file_path = dropbox_file_path
+                    break
+            
+            if not file_path:
+                return jsonify({"error": f"Archivo '{file_name}' no encontrado en Dropbox"}), 404
+            
+            # Eliminamos el archivo
+            delete_url = "https://api.dropboxapi.com/2/files/delete_v2"
+            delete_data = {
+                "path": file_path
+            }
+
+            delete_response = requests.post(delete_url, headers=headers, json=delete_data)
+            delete_response.raise_for_status()
+
+            return {"message": f"🎉 El archivo '{file_name}' ha sido eliminado de Dropbox con éxito! 🗑️"}
+        
+        # =============================================
+        #   ✏️ Renombramos archivos en Dropbox ✏️
+        # =============================================
+
+        matchRenombrar = re.search(r'archivo:(.+?) a:(.+)', query, re.IGNORECASE)
+        if matchRenombrar:
+            file_name = matchRenombrar.group(2).strip()  # Nombre actual del archivo
+            new_file_name = matchRenombrar.group(3).strip()  # Nuevo nombre del archivo
+
+            # Realizamos la búsqueda en Dropbox
+            url = "https://api.dropboxapi.com/2/files/search_v2"
+            headers = {
+                'Authorization': f"Bearer {dropbox_token}",
+                'Content-Type': 'application/json'
+            }
+            params = {
+                "query": file_name,
+                "options": {
+                    "max_results": 10,
+                    "file_status": "active"
+                }
+            }
+            response = requests.post(url, headers=headers, json=params)
+            response.raise_for_status()
+            results = response.json().get('matches', [])
+
+            file_path = None
+
+            for result in results:
+                dropbox_file_name = result['metadata']['metadata']['name']
+                dropbox_file_path = result['metadata']['metadata']['path_lower']
+                print(f"Encontrado en Dropbox: {dropbox_file_name} -> {dropbox_file_path}")
+
+                if dropbox_file_name.lower() == file_name.lower():
+                    file_path = dropbox_file_path
+                    break
+            
+            if not file_path:
+                return jsonify({"error": f"Archivo '{file_name}' no encontrado en Dropbox"}), 404
+            
+            # Construimos la nueva ruta con el nuevo nombre
+            folder_path = "/".join(file_path.split("/")[:-1])  # Extraemos la carpeta donde está el archivo
+            new_file_path = f"{folder_path}/{new_file_name}"
+
+            print(f"Ruta original: {file_path}")
+            print(f"Ruta nueva: {new_file_path}")
+
+            # Renombramos el archivo usando files/move_v2
+            rename_url = "https://api.dropboxapi.com/2/files/move_v2"
+            rename_data = {
+                "from_path": file_path,
+                "to_path": new_file_path,
+                "autorename": False
+            }
+
+            rename_response = requests.post(rename_url, headers=headers, json=rename_data)
+            rename_response.raise_for_status()
+
+            return {"message": f"🎉 El archivo '{file_name}' ha sido renombrado a '{new_file_name}' en Dropbox con éxito! ✏️"}
+        
+        # =============================================
+        #   Creamos carpetas en Dropbox 📂
+        # =============================================
+
+        print ("Query para crear carpeta: ", query)
+        matchCrearCarpetaDrop = re.search(r'crear\s*carpeta\s*[:\-]?\s*(.+)', query, re.IGNORECASE)
+        print("El match de crear carpeta: ", matchCrearCarpetaDrop)
+
+        if matchCrearCarpetaDrop:
+            folder_name = matchCrearCarpetaDrop.group(1).strip()  # Nombre de la carpeta a crear
+            print(f"Creando carpeta '{folder_name}' en Dropbox...") # Hasta aquí todo bien
+
+            url ="https://api.dropboxapi.com/2/files/create_folder_v2"
+            headers = {
+                "Authorization": f"Bearer {dropbox_token}",
+                "Content-Type": "application/json"
+            }
+
+            data = {
+                "path": f"/{folder_name}",
+                "autorename": False
+            }
+
+            response = requests.post(url, headers=headers, json=data)
+            response.raise_for_status()
+            return {"message": f"🎉✨ ¡Éxito total! La carpeta '{folder_name}' ha sido creada con éxito en Dropbox. 🚀🌟"}
 
         return jsonify({"error": "Formato de consulta inválido"}), 400
 
+#####################################################################################################################
     def post_to_googledrive(query):
-        print("HOLA ESTOY ENTRANDO AL METODO POST_TO_GOOGLEDRIVE")
-        print("ESTA ES LA QUERY:", query)
-
         """Procesa la consulta y ejecuta la acción en la API de Google Drive."""
         email = request.args.get('email')
         if not email:
@@ -492,7 +625,6 @@ def setup_post_routes(app,mongo):
             return jsonify({"error": "Usuario no encontrado"}), 404
         
         google_drive_token = user.get('integrations', {}).get('Drive', {}).get('token')
-        print("Token de Google Drive:", google_drive_token)
         if not google_drive_token:
             return jsonify({"error": "Token de Google Drive no disponible."}), 400
         
@@ -603,77 +735,6 @@ def setup_post_routes(app,mongo):
         else:
             raise Exception(f"⚠️ Error al mover archivo: {response_patch.text}")
 
-    def post_to_onedrive(query):
-        print("Entrando a OneDrive")
-        print("query onedrive:", query)
-
-        # Obtener email del usuario
-        email = request.args.get('email')
-        if not email:
-            return jsonify({"error": "Se debe proporcionar un email"}), 400
-
-        # Buscar usuario en la base de datos
-        user = mongo.database.usuarios.find_one({"correo": email})
-        if not user:
-            return jsonify({"error": "Usuario no encontrado"}), 404
-
-        # Obtener el token de OneDrive
-        OneDrive_token = user.get('integrations', {}).get('OneDrive', {}).get('token')
-        if not OneDrive_token:
-            return jsonify({"error": "Token de OneDrive no disponible"}), 400
-
-        # ==================================================
-        #   🗑 Mover archivos a la papelera en OneDrive 🗑
-        # ==================================================
-
-        matchEliminar = re.search(r'eliminar\s*(archivo)?[:\s]*([\w\.\-_]+)', query, re.IGNORECASE)
-        print("matchEliminar OneDrive:", matchEliminar)
-
-        if matchEliminar:
-            file_name = matchEliminar.group(2).strip()
-            print("file_name:", file_name)
-
-            # Buscar archivo en OneDrive
-            search_url = f"https://graph.microsoft.com/v1.0/me/drive/root/search(q='{file_name}')"
-            headers = {
-                'Authorization': f"Bearer {OneDrive_token}",
-                'Content-Type': 'application/json'
-            }
-
-            response = requests.get(search_url, headers=headers)
-            print(response)
-            if response.status_code == 401:
-                return jsonify({"error": "No autorizado. Verifica el token de acceso."}), 401
-
-            response.raise_for_status()
-            results = response.json().get('value', [])
-
-            file_id = None
-            for result in results:
-                OneDrive_file_name = result['name']
-                OneDrive_file_id = result['id']
-                
-                if OneDrive_file_name.lower().startswith(file_name.lower()):
-                    file_id = OneDrive_file_id
-                    break
-
-            if not file_id:
-                return jsonify({"error": f"Archivo '{file_name}' no encontrado en OneDrive"}), 404
-
-            # Mover el archivo a la papelera (Enviar a "Recycle Bin" en OneDrive)
-            move_to_trash_url = f"https://graph.microsoft.com/v1.0/me/drive/items/{file_id}"
-            delete_response = requests.delete(move_to_trash_url, headers=headers)
-            
-            if delete_response.status_code == 401:
-                return jsonify({"error": "No autorizado. Verifica el token de acceso."}), 401
-
-            delete_response.raise_for_status()
-
-            return jsonify({"message": f"🗑 El archivo '{file_name}' ha sido movido a la papelera en OneDrive con éxito!"})
-
-        return jsonify({"error": "Formato de consulta inválido"}), 400
-
-
     return {
         "post_to_gmail" : post_to_gmail,
         "post_to_notion" : post_to_notion,
@@ -681,6 +742,5 @@ def setup_post_routes(app,mongo):
         "post_to_asana" : post_to_asana,
         "post_to_outlook" : post_to_outlook,
         "post_to_dropbox" : post_to_dropbox,
-        "post_to_googledrive" : post_to_googledrive,
-        "post_to_onedrive": post_to_onedrive,
+        "post_to_googledrive" : post_to_googledrive
     }

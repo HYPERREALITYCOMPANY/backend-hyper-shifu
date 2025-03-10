@@ -676,23 +676,47 @@ def setup_post_routes(app,mongo):
         #   📂 Movemos archivos en Google Drive 📂
         # =============================================
 
-        match = re.search(r'archivo:(.+?) en carpeta:(.+)', query, re.IGNORECASE)
+        matchMoverArchivo = re.search(r'archivo:(.+?) (en|a) carpeta:(.+)', query, re.IGNORECASE)
         print("Query para mover archivo: ", query)
-        print("El match de archivo en carpeta: ", match)
-        if not match:
-            return jsonify({"error": "Formato de consulta incorrecto. Usa 'archivo:NOMBRE en carpeta:NOMBRE'"}), 400
-        
-        file_name = match.group(1).strip()
-        folder_name = match.group(2).strip()
-        print("Nombre del archivo: ", file_name)
-        print("Nombre de la carpeta: ", folder_name)
-        
-        # Buscar el archivo en Google Drive
-        search_url = "https://www.googleapis.com/drive/v3/files"
-        headers = {"Authorization": f"Bearer {google_drive_token}"}
-        params = {"q": f"name contains '{file_name}' and trashed=false", "fields": "files(id, name)"}
-        
-        
+        print("El match de archivo en carpeta: ", matchMoverArchivo)
+        if matchMoverArchivo:
+            file_name = matchMoverArchivo.group(1).strip()
+            folder_name = matchMoverArchivo.group(3).strip()
+
+            # Buscar el archivo en Google Drive
+            search_url = "https://www.googleapis.com/drive/v3/files"
+            headers = {"Authorization": f"Bearer {google_drive_token}"}
+            params = {
+                "q": f"name = \"{file_name}\" and trashed=false",
+                "fields": "files(id, name)"
+            }
+            
+            response = requests.get(search_url, headers=headers, params=params)
+            if response.status_code != 200 or not response.json().get('files'):
+                return jsonify({"error": "No se encontró el archivo"}), 404
+            
+            file_id = response.json()['files'][0]['id']
+
+            # Buscar la carpeta en Google Drive
+            params = {
+                "q": f"name = \"{folder_name}\" and mimeType = \"application/vnd.google-apps.folder\" and trashed=false",
+                "fields": "files(id, name)"
+            }
+
+            response = requests.get(search_url, headers=headers, params=params)
+            if response.status_code != 200 or not response.json().get('files'):
+                return jsonify({"error": "No se encontró la carpeta"}), 404
+            
+            folder_id = response.json()['files'][0]['id']
+
+            # Mover el archivo a la carpeta
+            file_url = f"https://www.googleapis.com/drive/v3/files/{file_id}"
+            update_data = {
+                "addParents": folder_id
+            }
+
+            response = requests.patch(file_url, headers=headers, params=update_data)
+            return {"message": f"🎉 El archivo '{file_name}' ha sido movido a la carpeta '{folder_name}' en Google Drive con éxito!"}
 
         # =============================================
         #   🗑️ Eliminamos archivos de Google Drive 🗑️

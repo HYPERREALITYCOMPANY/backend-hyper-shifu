@@ -40,6 +40,7 @@ def setup_routes_refresh(app, mongo):
                     new_access_token = refresh_asana_token(refresh_token)
                 elif integration_name == "HubSpot":
                     new_access_token = refresh_hubspot_token(refresh_token)
+                
                 # Agregar más condiciones aquí para otras integraciones
 
                 if new_access_token:
@@ -57,7 +58,7 @@ def setup_routes_refresh(app, mongo):
     def save_access_token_to_db(user_email, integration_name, access_token):
         try:
             integration_data = {
-                "access_token": access_token,
+                "token": access_token,
                 "last_refreshed": datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')  # Fecha actual en formato ISO UTC
             }
 

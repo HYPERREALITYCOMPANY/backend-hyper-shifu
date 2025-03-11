@@ -25,22 +25,21 @@ def create_app():
     
     app.config['MONGO_URI'] = os.getenv('MONGO_URI')
     mongo = PyMongo(app)
-    mongo = mongo.db.get_collection("Prueba")
-
+    db = mongo.db
     try:
         print("Conexión exitosa a MongoDB!")
     except Exception as e:
         print("Error al conectar con MongoDB:", e)
 
-    setup_routes(app, mongo)
-    setup_auth_routes(app, mongo)
-    setup_user_routes(app, mongo)
-    setup_integrations_routes(app, mongo)
-    setup_routes_secretary_posts(app, mongo)
-    setup_proxy_routes(app, mongo)
-    setup_routes_chats(app, mongo)
-    setup_execute_routes(app, mongo)
-    setup_routes_refresh(app, mongo)
+    setup_routes(app, db)
+    setup_auth_routes(app, db)
+    setup_user_routes(app, db)
+    setup_integrations_routes(app, db)
+    setup_routes_secretary_posts(app, db)
+    setup_proxy_routes(app, db)
+    setup_routes_chats(app, db)
+    setup_execute_routes(app, db)
+    setup_routes_refresh(app, db)
     return app
 
 app = create_app()

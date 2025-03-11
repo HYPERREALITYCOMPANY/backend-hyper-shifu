@@ -149,7 +149,9 @@ def setup_post_routes(app,mongo):
         #   Crear borrador en gmail para enviar correo 📧
         # =============================================
 
+        print("crear borrador query:", query)
         match = re.search(r'crear\s*borrador\s*con\s*asunto:\s*(.*?)\s*y\s*cuerpo:\s*(.*)', query, re.IGNORECASE)
+        print("match crear borrador:", match)
 
         if match:
             asunto = match.group(1).strip()
@@ -726,7 +728,7 @@ def setup_post_routes(app,mongo):
             search_url = "https://www.googleapis.com/drive/v3/files"
             headers = {"Authorization": f"Bearer {google_drive_token}"}
             params = {
-                "q": f"name = \"{file_name}\" and trashed=false",
+                "q": f"name contains \"{file_name}\" and trashed=false",
                 "fields": "files(id, name)"
             }
             

@@ -2,11 +2,14 @@ from flask import request, jsonify
 import requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from app import services
 from config import Config
 from datetime import datetime
 import re
 import json
 import openai
+import base64
+from email.mime.text import MIMEText
 openai.api_key=Config.CHAT_API_KEY
 
 def setup_post_routes(app,mongo):
@@ -16,6 +19,7 @@ def setup_post_routes(app,mongo):
             "Content-Type": "application/json"
     }
 
+############################################################################################################################
     def post_to_gmail(query):
         """Procesa la consulta y ejecuta la acción en Gmail API o Google Calendar si aplica."""
         email = request.args.get('email')
@@ -29,6 +33,10 @@ def setup_post_routes(app,mongo):
         gmail_token = user.get('integrations', {}).get('Gmail', {}).get('token')
         if not gmail_token:
             return jsonify({"error": "Token de Gmail no disponible"}), 400
+
+        # =============================================
+        #   Busqueda de correos de gmail 📧
+        # =============================================
 
         match = re.search(r'todos los correos de (.+)', query, re.IGNORECASE)
         if match:
@@ -136,8 +144,101 @@ def setup_post_routes(app,mongo):
                 return {"message": f"¡Tu cita ha sido agendada con éxito! 📅🕒\n\nDetalles:\n- Asunto: {subject}\n- Fecha y hora de inicio: {event['start']['dateTime']}\n- Fecha y hora de fin: {event['end']['dateTime']}\n\n¡Nos vemos pronto! 😊"}
             except Exception as e:
                 print(f"Error al procesar la respuesta: {e}")
+
+        # =============================================
+        #   Crear borrador en gmail para enviar correo 📧
+        # =============================================
+
+        match = re.search(r'crear\s*borrador\s*con\s*asunto:\s*(.*?)\s*y\s*cuerpo:\s*(.*)', query, re.IGNORECASE)
+
+        if match:
+            asunto = match.group(1).strip()
+            cuerpo = match.group(2).strip()
+
+            # ✅ Crear mensaje en formato MIME
+            mensaje = MIMEText(cuerpo)
+            mensaje["Subject"] = asunto
+
+            # ✅ Convertir a Base64
+            mensaje_bytes = mensaje.as_bytes()
+            mensaje_base64 = base64.urlsafe_b64encode(mensaje_bytes).decode()
+
+            # ✅ Estructura final del borrador
+            borrador = {
+                "message": {
+                    "raw": mensaje_base64
+                }
+            }
+
+            url = "https://www.googleapis.com/gmail/v1/users/me/drafts"
+            headers = {"Authorization": f"Bearer {gmail_token}", "Content-Type": "application/json"}
+            response = requests.post(url, json=borrador, headers=headers)
+            
+            # 📌 Imprimir la respuesta para debug
+            
+            try:
+                response_json = response.json()
+
+                if response.status_code == 200:
+                    return {"message": f"📩 ¡Borrador creado con éxito! El correo con asunto '{asunto}' ha sido guardado en Gmail. 🚀"}
+                else:
+                    return {"error": f"⚠️ No se pudo crear el borrador. Error: {response_json}"}
+
+            except Exception as e:
+                return {"error": "⚠️ Error inesperado al procesar la respuesta de Gmail."}
+        
+        # =============================================
+        #   📤 Enviar correo en Gmail (Mejorado) ✉️
+        # =============================================
+
+        match = re.search(
+            r'enviar\s*correo\s*a\s*([\w\.-@,\s]+)\s*con\s*asunto:\s*(.*?)\s*y\s*cuerpo:\s*(.*)',
+            query,
+            re.IGNORECASE
+        )
+
+        if match:
+
+            destinatario = match.group(1).strip()  # 📌 Captura el correo
+            asunto = match.group(2).strip()  # 📌 Captura el asunto
+            cuerpo = match.group(3).strip()  # 📌 Captura el cuerpo
+
+            # ✅ Si el usuario no puso dominio, asumimos @gmail.com
+            if "@" not in destinatario:
+                destinatario += "@gmail.com"
+
+            # ✅ Crear mensaje en formato MIME
+            mensaje = MIMEText(cuerpo)
+            mensaje["To"] = destinatario
+            mensaje["Subject"] = asunto
+
+            # ✅ Convertir a Base64
+            mensaje_bytes = mensaje.as_bytes()
+            mensaje_base64 = base64.urlsafe_b64encode(mensaje_bytes).decode()
+
+            # ✅ Estructura final del correo
+            correo = {
+                "raw": mensaje_base64
+            }
+
+            url = "https://www.googleapis.com/gmail/v1/users/me/messages/send"
+            headers = {"Authorization": f"Bearer {gmail_token}", "Content-Type": "application/json"}
+            response = requests.post(url, json=correo, headers=headers)
+
+            try:
+                response_json = response.json()
+
+                if response.status_code == 200:
+                    return {"message": f"📤 ¡Correo enviado con éxito! ✉️ El mensaje con asunto '{asunto}' fue enviado a {destinatario}. 🚀"}
+                else:
+                    return {"error": f"⚠️ No se pudo enviar el correo. Error: {response_json}"}
+
+            except Exception as e:
+                return {"error": "⚠️ Error inesperado al procesar la respuesta de Gmail."}
+
         return {"error": "No se encontró una acción válida en la consulta"}
 
+##############################################################################################
     def post_to_outlook(query):
         """Procesa la consulta y ejecuta la acción en Outlook API."""
         email = request.args.get('email')
@@ -259,6 +360,7 @@ def setup_post_routes(app,mongo):
                 return results[0]["id"]  # Notion utiliza el "id" de cada página
         return None
 
+#############################################################################################################
     def post_to_notion(query):
         """Procesa la consulta y ejecuta la acción en la API de Notion."""
         email = request.args.get('email')
@@ -306,6 +408,7 @@ def setup_post_routes(app,mongo):
 
         return {"error": "No se encontró una tarea válida en la consulta"}
 
+#####################################################################################################
     def post_to_clickup(query):
         """Procesa la consulta y ejecuta la acción en la API de ClickUp."""
         email = request.args.get('email')
@@ -371,7 +474,7 @@ def setup_post_routes(app,mongo):
 
         return jsonify({"error": "No se encontró una tarea válida en la consulta"}), 400
 
-
+#############################################################################################################
     def post_to_asana(query):
         """Procesa la consulta y ejecuta la acción en la API de Asana."""
         email = request.args.get('email')
@@ -408,7 +511,8 @@ def setup_post_routes(app,mongo):
                 return jsonify({"error": "No se pudo completar la tarea"}), 400
 
         return {"error": "No se encontró una tarea válida en la consulta"}
-        
+
+###################################################################################################        
     def post_to_dropbox(query):
         """Procesa la consulta y ejecuta la acción en la API de Dropbox."""
         email = request.args.get('email')
@@ -421,7 +525,9 @@ def setup_post_routes(app,mongo):
         if not dropbox_token:
             return jsonify({"error": "Token de Dropbox no disponible"}), 400
         
-        print("El query de renombrar: ", query)
+        # =============================================
+        #   📂 Movemos archivos en Dropbox 📂
+        # =============================================
         
         match = re.search(r'archivo:(.+?) en carpeta:(.+)', query, re.IGNORECASE)
         if match:
@@ -503,8 +609,6 @@ def setup_post_routes(app,mongo):
             for result in results:
                 dropbox_file_name = result['metadata']['metadata']['name']
                 dropbox_file_path = result['metadata']['metadata']['path_lower']
-                print(dropbox_file_name)
-                print(dropbox_file_path)
 
                 if dropbox_file_name.lower().startswith(file_name.lower()):
                     file_path = dropbox_file_path
@@ -525,76 +629,13 @@ def setup_post_routes(app,mongo):
             return {"message": f"🎉 El archivo '{file_name}' ha sido eliminado de Dropbox con éxito! 🗑️"}
         
         # =============================================
-        #   ✏️ Renombramos archivos en Dropbox ✏️
-        # =============================================
-
-        matchRenombrar = re.search(r'archivo:(.+?) a:(.+)', query, re.IGNORECASE)
-        if matchRenombrar:
-            file_name = matchRenombrar.group(2).strip()  # Nombre actual del archivo
-            new_file_name = matchRenombrar.group(3).strip()  # Nuevo nombre del archivo
-
-            # Realizamos la búsqueda en Dropbox
-            url = "https://api.dropboxapi.com/2/files/search_v2"
-            headers = {
-                'Authorization': f"Bearer {dropbox_token}",
-                'Content-Type': 'application/json'
-            }
-            params = {
-                "query": file_name,
-                "options": {
-                    "max_results": 10,
-                    "file_status": "active"
-                }
-            }
-            response = requests.post(url, headers=headers, json=params)
-            response.raise_for_status()
-            results = response.json().get('matches', [])
-
-            file_path = None
-
-            for result in results:
-                dropbox_file_name = result['metadata']['metadata']['name']
-                dropbox_file_path = result['metadata']['metadata']['path_lower']
-                print(f"Encontrado en Dropbox: {dropbox_file_name} -> {dropbox_file_path}")
-
-                if dropbox_file_name.lower() == file_name.lower():
-                    file_path = dropbox_file_path
-                    break
-            
-            if not file_path:
-                return jsonify({"error": f"Archivo '{file_name}' no encontrado en Dropbox"}), 404
-            
-            # Construimos la nueva ruta con el nuevo nombre
-            folder_path = "/".join(file_path.split("/")[:-1])  # Extraemos la carpeta donde está el archivo
-            new_file_path = f"{folder_path}/{new_file_name}"
-
-            print(f"Ruta original: {file_path}")
-            print(f"Ruta nueva: {new_file_path}")
-
-            # Renombramos el archivo usando files/move_v2
-            rename_url = "https://api.dropboxapi.com/2/files/move_v2"
-            rename_data = {
-                "from_path": file_path,
-                "to_path": new_file_path,
-                "autorename": False
-            }
-
-            rename_response = requests.post(rename_url, headers=headers, json=rename_data)
-            rename_response.raise_for_status()
-
-            return {"message": f"🎉 El archivo '{file_name}' ha sido renombrado a '{new_file_name}' en Dropbox con éxito! ✏️"}
-        
-        # =============================================
         #   Creamos carpetas en Dropbox 📂
         # =============================================
 
-        print ("Query para crear carpeta: ", query)
         matchCrearCarpetaDrop = re.search(r'crear\s*carpeta\s*[:\-]?\s*(.+)', query, re.IGNORECASE)
-        print("El match de crear carpeta: ", matchCrearCarpetaDrop)
 
         if matchCrearCarpetaDrop:
             folder_name = matchCrearCarpetaDrop.group(1).strip()  # Nombre de la carpeta a crear
-            print(f"Creando carpeta '{folder_name}' en Dropbox...") # Hasta aquí todo bien
 
             url ="https://api.dropboxapi.com/2/files/create_folder_v2"
             headers = {
@@ -610,11 +651,55 @@ def setup_post_routes(app,mongo):
             response = requests.post(url, headers=headers, json=data)
             response.raise_for_status()
             return {"message": f"🎉✨ ¡Éxito total! La carpeta '{folder_name}' ha sido creada con éxito en Dropbox. 🚀🌟"}
+        
+        # =============================================
+        #   Restaurar archivos en Dropbox 🗑️
+        # =============================================
+        matchRestaurarArchivoDrop = re.search(r'restaura\s*archivo\s*[:\-]?\s*(.+)', query, re.IGNORECASE)
+        if matchRestaurarArchivoDrop:
+            file_name = matchRestaurarArchivoDrop.group(1).strip()  # Nombre del archivo a restaurar
+
+            # Realizamos la búsqueda en Dropbox
+            url = "https://api.dropboxapi.com/2/files/restore"
+            headers = {
+                'Authorization': f"Bearer {dropbox_token}",
+                'Content-Type': 'application/json'
+            }
+
+            params = {
+                "path": file_path,  # Ruta del archivo
+                "limit": 1  # Solo necesitamos la última revisión
+            }
+
+            # Hacemos la solicitud para obtener la revisión
+            response = requests.post(url, headers=headers, json=params)
+            revisions = response.json()
+            
+            if 'entries' in revisions and len(revisions['entries']) > 0:
+                # Obtener la última revisión (rev)
+                rev = revisions['entries'][0]['rev']
+                
+                # Ahora, podemos restaurar el archivo desde la papelera usando la revisión
+                url_restore = "https://api.dropboxapi.com/2/files/restore"
+                
+                restore_params = {
+                    "path": file_path,  # Ruta completa del archivo
+                    "rev": rev  # Usamos la revisión obtenida
+                }
+                
+                # Realizamos la solicitud para restaurar el archivo
+                restore_response = requests.post(url_restore, headers=headers, json=restore_params)
+                
+                if restore_response.status_code == 200:
+                    return(f"¡El archivo {file_path} ha sido restaurado exitosamente!")
+            else:
+                print("No se encontraron revisiones para este archivo.")
 
         return jsonify({"error": "Formato de consulta inválido"}), 400
 
 #####################################################################################################################
     def post_to_googledrive(query):
+        
         """Procesa la consulta y ejecuta la acción en la API de Google Drive."""
         email = request.args.get('email')
         if not email:
@@ -628,6 +713,50 @@ def setup_post_routes(app,mongo):
         if not google_drive_token:
             return jsonify({"error": "Token de Google Drive no disponible."}), 400
         
+        # =============================================
+        #   📂 Movemos archivos en Google Drive 📂
+        # =============================================
+
+        matchMoverArchivo = re.search(r'archivo:(.+?) (en|a) carpeta:(.+)', query, re.IGNORECASE)
+        if matchMoverArchivo:
+            file_name = matchMoverArchivo.group(1).strip()
+            folder_name = matchMoverArchivo.group(3).strip()
+
+            # Buscar el archivo en Google Drive
+            search_url = "https://www.googleapis.com/drive/v3/files"
+            headers = {"Authorization": f"Bearer {google_drive_token}"}
+            params = {
+                "q": f"name = \"{file_name}\" and trashed=false",
+                "fields": "files(id, name)"
+            }
+            
+            response = requests.get(search_url, headers=headers, params=params)
+            if response.status_code != 200 or not response.json().get('files'):
+                return jsonify({"error": "No se encontró el archivo"}), 404
+            
+            file_id = response.json()['files'][0]['id']
+
+            # Buscar la carpeta en Google Drive
+            params = {
+                "q": f"name = \"{folder_name}\" and mimeType = \"application/vnd.google-apps.folder\" and trashed=false",
+                "fields": "files(id, name)"
+            }
+
+            response = requests.get(search_url, headers=headers, params=params)
+            if response.status_code != 200 or not response.json().get('files'):
+                return jsonify({"error": "No se encontró la carpeta"}), 404
+            
+            folder_id = response.json()['files'][0]['id']
+
+            # Mover el archivo a la carpeta
+            file_url = f"https://www.googleapis.com/drive/v3/files/{file_id}"
+            update_data = {
+                "addParents": folder_id
+            }
+
+            response = requests.patch(file_url, headers=headers, params=update_data)
+            return {"message": f"🎉 El archivo '{file_name}' ha sido movido a la carpeta '{folder_name}' en Google Drive con éxito!"}
+
         # =============================================
         #   🗑️ Eliminamos archivos de Google Drive 🗑️
         # =============================================
@@ -669,8 +798,107 @@ def setup_post_routes(app,mongo):
 
             return {"message": f"🎉 El archivo '{file_name}' ha sido eliminado de Google Drive con éxito! 🗑️"}
         
+        # ============================================= 
+        #   📂 Crear carpeta nueva en Google Drive 📂
+        # =============================================
+
+        matchCrearCarpeta = re.search(r'crear\s*carpeta:\s*(.+)', query, re.IGNORECASE)
+        if matchCrearCarpeta:
+            folder_name = matchCrearCarpeta.group(1).strip()
+
+            # Crear la carpeta en Google Drive
+            url = "https://www.googleapis.com/drive/v3/files"
+            headers = {"Authorization": f"Bearer {google_drive_token}"}
+            metadata = {
+                "name": folder_name,
+                "mimeType": "application/vnd.google-apps.folder"
+            }
+            
+            response = requests.post(url, headers=headers, json=metadata)
+            
+            if response.status_code != 200:
+                return jsonify({"error": "No se pudo crear la carpeta"}), 500
+            
+            folder_id = response.json().get('id')
+
+            return {"message": f"🚀✨ ¡Éxito! La carpeta '{folder_name}' ha sido creada en Google Drive 🗂️📂. ¡Todo listo para organizar tus archivos! 🎉"}
+        
+        # ============================================= 
+        #   🗑️ Vaciar la papelera de Google Drive 🗑️
+        # =============================================
+
+        matchVaciarPapelera = re.search(r'vaciar\s*(la\s*)?papelera', query, re.IGNORECASE)
+        if matchVaciarPapelera:
+            # Hacer la solicitud para vaciar la papelera
+            empty_trash_url = "https://www.googleapis.com/drive/v3/files/trash"
+            headers = {"Authorization": f"Bearer {google_drive_token}"}
+
+            response = requests.delete(empty_trash_url, headers=headers)
+            return {"message": "🗑️ ¡La papelera de Google Drive ha sido vaciada con éxito! Todo lo que estaba ahí, ¡ya no está! 🚮"}
+        
+        # ============================================= 
+        #   📂 Compartir archivo o carpeta en Google Drive 📂
+        # =============================================
+
+        print("Query para compartir archivo o carpeta en Google Drive", query)
+        matchCompartirArchivo = re.search(r'compartir\s*(archivo|carpeta)\s*[:\s]*(\S.*)\s*con\s*(.+)', query, re.IGNORECASE)
+        print("Match compartir archivo", matchCompartirArchivo)
+
+        if matchCompartirArchivo:
+            tipo_archivo = matchCompartirArchivo.group(1).strip()  # 'archivo' o 'carpeta'
+            archivo_o_carpeta = matchCompartirArchivo.group(2).strip()  # Nombre del archivo o carpeta
+            destinatarios = matchCompartirArchivo.group(3).strip()  # Los destinatarios a quienes compartir
+
+            # Imprimir para debug
+            print(f"Tipo de archivo: {tipo_archivo}")
+            print(f"Archivo/Carpeta: {archivo_o_carpeta}")
+            print(f"Destinatarios: {destinatarios}")
+
+            # Buscar el archivo o carpeta en Google Drive
+            url = "https://www.googleapis.com/drive/v3/files"
+            headers = {"Authorization": f"Bearer {google_drive_token}"}
+            params = {
+                "q": f"name contains '{archivo_o_carpeta}'",
+                "spaces": "drive",
+                "fields": "files(id,name)",
+            }
+            response = requests.get(url, headers=headers, params=params)
+            response.raise_for_status()
+            results = response.json().get('files', [])
+            
+            print("resultado de la busqueda", results)
+
+            if results:
+                file_id = results[0]['id']
+                print(f"Se encontró el archivo/carpetta con ID: {file_id}")
+
+                # Ahora, compartimos el archivo o carpeta con los destinatarios
+                for destinatario in destinatarios.split(','):
+                    email = destinatario.strip()  # Asegurarse de que no tenga espacios extra
+
+                    # Crear el permiso para compartir con el destinatario
+                    permission_url = f"https://www.googleapis.com/drive/v3/files/{file_id}/permissions"
+                    permission_data = {
+                        "type": "user",
+                        "role": "reader",  # Puede ser 'reader' (solo lectura) o 'writer' (lectura y escritura)
+                        "emailAddress": email
+                    }
+
+                    permission_response = requests.post(permission_url, headers=headers, json=permission_data)
+                    
+                    if permission_response.status_code == 200:
+                        print(f"Archivo compartido con éxito con: {email}")
+                    else:
+                        print(f"Error al compartir el archivo con {email}: {permission_response.json()}")
+
+                return {"message": f"📤 ¡El archivo o carpeta '{archivo_o_carpeta}' ha sido compartido con éxito!"}
+
+            else:
+                return {"error": "⚠️ No se encontró el archivo o carpeta con ese nombre."}        
+
         return jsonify({"error": "Formato de consulta inválido"}), 400
-    
+
+#################################################################################################################    
     def post_to_onedrive(query):
 
         # Obtener email del usuario

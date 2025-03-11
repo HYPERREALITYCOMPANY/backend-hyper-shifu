@@ -14,7 +14,8 @@ def setup_routes_refresh(app, mongo):
         refresh_tokens = {}
 
         for integration_name, integration in integrations.items():
-            if "refresh_token" in integration:
+            # Solo incluir si existe el refresh_token y su valor no es "n/a"
+            if "refresh_token" in integration and integration["refresh_token"] != "n/a":
                 refresh_tokens[integration_name] = integration["refresh_token"]
         
         return refresh_tokens
@@ -53,7 +54,7 @@ def setup_routes_refresh(app, mongo):
         try:
             integration_data = {
                 "access_token": access_token,
-                "last_refreshed": datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')  # Fecha actual en formato ISO UTC
+                "last_refreshed": datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')  # Fecha actual en formato ISO UTC
             }
 
             # Actualizar el token de la integración en MongoDB, sobrescribiendo el documento de esa integración
@@ -117,7 +118,7 @@ def setup_routes_refresh(app, mongo):
             # Recibimos el correo del usuario
             data = request.json
             user_email = data["userEmail"]
-            # Obtenemos los refresh tokens de la base de datos
+            # Obtenemos los refresh tokens de la base de datos (solo aquellos distintos de "n/a")
             integrations = get_refresh_tokens_from_db(user_email)
             # Refrescamos los tokens
             refreshed_tokens = refresh_tokens(integrations, user_email)

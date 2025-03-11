@@ -22,23 +22,23 @@ def setup_integrations_routes(app, mongo):
         refresh_token = request_data.get("refresh_token")
         expires_in = request_data.get("expires_in")
 
-        # Verificamos que se hayan enviado todos los campos obligatorios
-        if not all([user_email, integration_name, token, refresh_token, expires_in]):
-            return jsonify({"error": "Faltan campos obligatorios: email, integration, token, refresh_token y expires_in"}), 400
-
+        if not all([user_email, integration_name, token, refresh_token]):
+            return jsonify({"error": "Faltan campos obligatorios"}), 400
         user = mongo.database.usuarios.find_one({"correo": user_email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
-        # Creamos el diccionario de datos de integración con token, refresh_token, expires_in y la fecha actual
         integration_data = {
             "token": token,
-            "refresh_token": refresh_token,
-            "expires_in": int(expires_in),
-            "timestamp": datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+            "timestamp": datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+            "refresh_token": refresh_token
         }
 
-        # Actualizamos la base de datos sobrescribiendo la integración
+        if integration_name not in ["Notion", "Slack", "ClickUp"]:
+            if expires_in is None:
+                return jsonify({"error": "El campo 'expires_in' es obligatorio para esta integración"}), 400
+            integration_data["expires_in"] = int(expires_in)
+
         mongo.database.usuarios.update_one(
             {"correo": user_email},
             {"$set": {f"integrations.{integration_name}": integration_data}}

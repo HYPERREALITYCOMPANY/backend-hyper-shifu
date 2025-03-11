@@ -50,7 +50,6 @@ def setup_routes_chats(app, mongo):
     post_to_onedrive = functionsPost["post_to_onedrive"]
     global last_searchs
 
-    # CHAT GET Y POSTS
     def generate_prompt(query, search_results):
         # Extraer solo la información relevante de cada fuente
         results = {}
@@ -66,6 +65,7 @@ def setup_routes_chats(app, mongo):
                 return f"{size_in_bytes / (1024**2):.2f} MB"
             else:
                 return f"{size_in_bytes / (1024**3):.2f} GB"
+
         # Gmail Results (extraer información relevante)
         gmail_results = "\n".join([ 
             f"De: {email.get('from', 'Desconocido')} | Asunto: {email.get('subject', 'Sin asunto')} | Fecha: {email.get('date', 'Sin fecha')} | Body: {email.get('body', 'Sin cuerpo')}" 
@@ -106,7 +106,6 @@ def setup_routes_chats(app, mongo):
                         f"Nombre: {contact.get('firstname', 'N/A')} {contact.get('lastname', 'N/A')} | Correo: {contact.get('email', 'N/A')} | Teléfono: {contact.get('phone', 'N/A')} | Compañía: {contact.get('company', 'N/A')}"
                         for contact in contacts
                     ]))
-
             if "companies" in hubspot_data:
                 companies = hubspot_data["companies"]
                 if isinstance(companies, list) and companies:
@@ -114,7 +113,6 @@ def setup_routes_chats(app, mongo):
                         f"Nombre: {company.get('name', 'N/A')} | Industria: {company.get('industry', 'N/A')} | Tamaño: {company.get('size', 'N/A')}"
                         for company in companies
                     ]))
-
             if "deals" in hubspot_data:
                 deals = hubspot_data["deals"]
                 if isinstance(deals, list) and deals:
@@ -122,23 +120,22 @@ def setup_routes_chats(app, mongo):
                         f"Nombre: {deal.get('dealname', 'N/A')} | Estado: {deal.get('dealstage', 'N/A')} | Monto: {deal.get('amount', 'N/A')}"
                         for deal in deals
                     ]))
-
         except Exception as e:
             hubspot_results.append(f"Error procesando datos de HubSpot: {str(e)}")
 
         hubspot_results = "\n".join(hubspot_results) or "No se encontraron resultados relacionados en HubSpot."
 
-        # ClickUp Results (Filtrar por tarea específica)
+        # ClickUp Results (extraer información relevante)
         clickup_results = "\n".join([
             f"Tarea: {task.get('task_name', 'Sin nombre')} | "
             f"Estado: {task.get('status', 'Sin estado')} | "
             f"Prioridad: {task.get('priority', 'Sin prioridad')} | "
             f"Asignado a: {', '.join(task.get('assignees', ['Sin asignar']))} | "
-            f"Fecha de vencimiento: {task.get('due_date') if task.get('due_date') else 'Sin fecha'} | "
+            f"Fecha de vencimiento: {task.get('due_date', 'Sin fecha')} | "
             f"Lista: {task.get('list', 'Sin lista')} | "
             f"URL: {task.get('url', 'Sin URL')}"
             for task in search_results.get('clickup', []) if isinstance(task, dict)
-        ]) or "No se encontraron tareas relacionadas con 'Shiffu' en ClickUp."
+        ]) or "No se encontraron tareas relacionadas en ClickUp."
 
         # Dropbox Results
         dropbox_results = "\n".join([
@@ -169,65 +166,66 @@ def setup_routes_chats(app, mongo):
             for msg in search_results.get('teams', []) if isinstance(msg, dict)
         ]) or "No se encontraron mensajes relacionados en Teams."
 
+        # Google Drive Results
         google_drive_results = "\n".join([
             f"Archivo: {file.get('title', 'Sin nombre')} | "
             f"Tamaño: {format_size(file.get('size'))} | "
             f"Modificado: {file.get('modified', 'Sin fecha')} | "
-            f"Propietario: {file.get('owner', 'Desconocido')} ({file.get('owner_email', 'Sin correo')}) | "
+            f"Propietario: {file.get('owner', 'Desconocido')} ({file.get('owner_email', 'Sin correo')})"
             for file in search_results.get('googledrive', []) if isinstance(file, dict)
         ]) or "No se encontraron archivos relacionados en Google Drive."
 
-
-        # Crear el prompt final
+        # Crear el prompt final con instrucciones adicionales para filtrar la información específica
         prompt = f"""Respuesta concisa a la consulta: "{query}"
 
-        Resultados de la búsqueda:
+    Resultados de la búsqueda:
 
-        Gmail:
-        {gmail_results}
+    Gmail:
+    {gmail_results}
 
-        Notion:
-        {notion_results}
+    Notion:
+    {notion_results}
 
-        Slack:
-        {slack_results}
+    Slack:
+    {slack_results}
 
-        Outlook:
-        {outlook_results}
+    Outlook:
+    {outlook_results}
 
-        HubSpot:
-        {hubspot_results}
+    HubSpot:
+    {hubspot_results}
 
-        ClickUp:
-        {clickup_results}
+    ClickUp:
+    {clickup_results}
 
-        Dropbox:
-        {dropbox_results}
+    Dropbox:
+    {dropbox_results}
 
-        Google Drive:
-        {google_drive_results}
+    Google Drive:
+    {google_drive_results}
 
-        Asana:
-        {asana_results}
+    Asana:
+    {asana_results}
 
-        OneDrive:
-        {onedrive_results}
+    OneDrive:
+    {onedrive_results}
 
-        Teams:
-        {teams_results}
+    Teams:
+    {teams_results}
 
-        Responde de forma humana, concisa y en parrafo:
-        Quiero que respondas a la query que mando el usuario en base a la informacion que se te agrego por cada api, solo puedes y debes usar esa información para contestar
-        - En dado caso que no exista información en ninguna api, contesta de manera amable que si puede mejorar su prompt o lo que desea encontrar
-        - En dado caso exista la información en una api y en unas no, solo contesta con la que si existe la información.
-        - En el caso de HubSpot, cuando se soliciten contactos de una compañía y el campo 'compañía' esté vacío, valida que el nombre de la empresa pueda obtenerse del dominio del correo electrónico (es decir, todo lo que sigue después del '@'). Si el dominio es, por ejemplo, 'empresa.com', entonces considera que la empresa es 'empresa'. Asegúrate de no responder con registros irrelevantes y solo muestre los resultados de contactos relacionados con el dominio del correo o con el nombre de la compañía.
-        Necesito que tu respuesta sea concisa a la query enviada por el usuario (toma el formato de "Suggested Answers" de Guru para guiarte) incluye emojis de ser posible para hacer mas amigable la interacción con el usuario.
-        No respondas 'Respuesta:' si no que responde de manera natural como si fuese una conversación, tampoco agregues enlaces.
-        Analiza antes de responder ya que algunas apis te devuelven información general, si tu piensas que no se responde de manera amena la pregunta contesta de manera amable si puede mejorar su prompt o que desea encontrar
-        Información relevante a tomar en cuenta bodys de correos, fechas y Remitente (De:)
-        """
+    Responde de forma humana, concisa y en párrafo:
+    Quiero que respondas a la query enviada por el usuario utilizando únicamente la información específica que se encuentra en cada API, descartando datos generales o irrelevantes. Es decir, si la query solicita detalles puntuales (por ejemplo, el estado de un proyecto con un nombre determinado, o información de un correo específico en Gmail), debes extraer y usar únicamente los registros que correspondan a esa solicitud y omitir el resto.
+    - Si no existe información en ninguna API, contesta de manera amable sugiriendo mejorar el prompt o especificar mejor lo que se desea encontrar.
+    - Si existe información en algunas APIs y en otras no, responde únicamente con los datos disponibles.
+    - En el caso de HubSpot, cuando se soliciten contactos de una compañía y el campo 'compañía' esté vacío, valida que el nombre de la empresa pueda obtenerse del dominio del correo electrónico (todo lo que sigue después de '@'). Por ejemplo, si el dominio es 'empresa.com', considera que la empresa es 'empresa'. No incluyas registros irrelevantes; muestra solo los contactos relacionados con el dominio o con el nombre de la compañía.
+    - Recuerda utilizar la información de los bodys de correos, fechas y remitentes (De:) para filtrar y responder de manera precisa.
+
+    Necesito que tu respuesta sea concisa, siguiendo el estilo de "Suggested Answers" de Guru, e incluye emojis para hacer la interacción más amigable. No incluyas la palabra 'Respuesta:'; contesta de forma natural y sin enlaces.
+    Analiza cuidadosamente la información proporcionada; si consideras que la query no puede responderse de manera amena o precisa, sugiere amablemente que el usuario mejore su prompt o especifique lo que desea encontrar.
+    """
         print(prompt)
         return prompt
+
 
     @app.route("/api/chatAi", methods=["POST"])
     def apiChat():

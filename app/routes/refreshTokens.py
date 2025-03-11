@@ -2,6 +2,10 @@ from flask import request, jsonify
 import requests
 import os
 import datetime  # Para obtener la fecha actual
+from dotenv import load_dotenv
+
+# Cargar las variables de entorno desde el archivo .env
+load_dotenv()
 
 def setup_routes_refresh(app, mongo):
     # Función para obtener las integraciones y refresh_tokens desde la base de datos

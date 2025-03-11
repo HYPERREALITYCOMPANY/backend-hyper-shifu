@@ -53,23 +53,23 @@ def setup_routes_refresh(app, mongo):
 
         return refreshed_tokens
 
-    # Función para guardar el access_token en la base de datos,
-    # almacenando la fecha actual y sobrescribiendo la integración para no guardar el refresh_token
     def save_access_token_to_db(user_email, integration_name, access_token):
         try:
-            integration_data = {
-                "token": access_token,
-                "last_refreshed": datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')  # Fecha actual en formato ISO UTC
+            update_data = {
+                f"integrations.{integration_name}.token": access_token,
+                f"integrations.{integration_name}.timestamp": datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
             }
-
-            # Actualizar el token de la integración en MongoDB, sobrescribiendo el documento de esa integración
+            
+            # Actualizar solo los campos token y timestamp en MongoDB
             mongo.database.usuarios.update_one(
                 {"correo": user_email},
-                {"$set": {f"integrations.{integration_name}": integration_data}}
+                {"$set": update_data}
             )
-            print(f"Token de {integration_name} guardado correctamente en la base de datos")
+            
+            print(f"Token de {integration_name} actualizado correctamente en la base de datos")
         except Exception as e:
-            print(f"Error al guardar el token en la base de datos: {e}")
+            print(f"Error al actualizar el token en la base de datos: {e}")
+
 
     # Funciones para refrescar el token de cada integración
     def refresh_gmail_token(refresh_token):
@@ -120,7 +120,6 @@ def setup_routes_refresh(app, mongo):
     @app.route("/refresh_tokens", methods=["POST"])
     def refresh_tokens_endpoint():
         try:
-            # Recibimos el correo del usuario
             data = request.json
             user_email = data["userEmail"]
             # Obtenemos los refresh tokens de la base de datos (solo aquellos distintos de "n/a")

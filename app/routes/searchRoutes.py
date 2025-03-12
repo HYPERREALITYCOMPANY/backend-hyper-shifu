@@ -15,8 +15,11 @@ import os
 import quopri
 import openai
 openai.api_key=Config.CHAT_API_KEY
+from flask_caching import Cache
+from app.utils.utils import get_user_from_db
 
-def setup_routes_searchs(app,mongo):
+def setup_routes_searchs(app, mongo, cache):
+    cache = Cache(app)
     def to_ascii(text):
         normalized_text = unicodedata.normalize('NFD', text)
         ascii_text = ''.join(
@@ -48,7 +51,7 @@ def setup_routes_searchs(app,mongo):
     def search_gmail(query):
         email = request.args.get('email')
         try:
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -186,7 +189,7 @@ def setup_routes_searchs(app,mongo):
         simplified_results = []
         try:
             # Verificar usuario en la base de datos
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -265,7 +268,7 @@ def setup_routes_searchs(app,mongo):
         email = request.args.get('email')
         try:
             # Verificar existencia de usuario
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -329,7 +332,7 @@ def setup_routes_searchs(app,mongo):
     def search_outlook(query):
         email = request.args.get('email')
         try:
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -404,7 +407,7 @@ def setup_routes_searchs(app,mongo):
 
         # Buscar usuario en la base de datos
         email = request.args.get("email")
-        user = mongo.database.usuarios.find_one({'correo': email})
+        user = get_user_from_db(email, cache, mongo)
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -559,7 +562,7 @@ def setup_routes_searchs(app,mongo):
     def search_clickup(query):
         email = request.args.get('email')
         try:
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -630,7 +633,7 @@ def setup_routes_searchs(app,mongo):
     def search_dropbox(query):
         email = request.args.get('email')
         try:
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -769,7 +772,7 @@ def setup_routes_searchs(app,mongo):
     def search_asana(query):
         email = request.args.get('email')
         try:
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -858,7 +861,7 @@ def setup_routes_searchs(app,mongo):
             return jsonify({"error": "Faltan parámetros (email y query)"}), 400
 
         try:
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -922,7 +925,7 @@ def setup_routes_searchs(app,mongo):
         email = request.args.get('email')
         try:
             # Obtener el usuario desde la base de datos
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -1045,9 +1048,12 @@ def setup_routes_searchs(app,mongo):
                 if channel.get('displayName', '').lower() == channel_name.lower():
                     return team_id, channel.get('id')
             return None, None
-        
+     
     @app.route('/search/google_drive', methods=["GET"])
-    def search_google_drive(query):
+    def search_google_drive():
+        print(query)
+        print(email)
+        query = request.args.get('query')
         email = request.args.get('email')
 
         if not query:
@@ -1055,7 +1061,8 @@ def setup_routes_searchs(app,mongo):
 
         try:
             # 📌 Recuperar token de Google Drive
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
+            print(user)
             if not user:
                 return jsonify({"error": "Usuario no encontrado."}), 404
 
@@ -1068,30 +1075,33 @@ def setup_routes_searchs(app,mongo):
                 "Accept": "application/json"
             }
             
-            # Reformatear la consulta para eliminar "carpeta:" si está presente
+            # Determinar si la búsqueda es de archivo o carpeta
+            search_name = ""
+            search_mime = ""
             if query.startswith("carpeta:"):
-                query = query[len("carpeta:"):]  # Solo queda el nombre de la carpeta
+                search_name = query[len("carpeta:"):].strip()
+                search_mime = " and mimeType = 'application/vnd.google-apps.folder'"
+            elif query.startswith("archivo:"):
+                search_name = query[len("archivo:"):].strip()
+            else:
+                return jsonify({"error": "Formato de consulta no válido. Use 'archivo:' o 'carpeta:'"}), 400
 
-            folder_query = f"name = '{query}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-            folder_params = {"q": folder_query, "fields": "files(id, name)"}
-            folder_response = requests.get("https://www.googleapis.com/drive/v3/files", headers=headers, params=folder_params)
-            folder_data = folder_response.json()
-            if "files" not in folder_data or not folder_data["files"]:
-                return jsonify([])  # No se encontraron carpetas
-
-            folder_id = folder_data["files"][0]["id"]
-            
-            # Buscar archivos dentro de la carpeta
-            files_query = f"'{folder_id}' in parents and trashed = false"
-            files_params = {
-                "q": files_query,
+            # Realizar la búsqueda en Google Drive con `trashed = false` para evitar archivos eliminados
+            params = {
+                "q": f"name contains \"{search_name}\" and trashed = false{search_mime}",
+                "spaces": "drive",
                 "fields": "files(id, name, mimeType, webViewLink, size, modifiedTime, owners(displayName, emailAddress))"
             }
-            files_response = requests.get("https://www.googleapis.com/drive/v3/files", headers=headers, params=files_params)
-            files_data = files_response.json()
+            print("Parametros: ", params)
+            response = requests.get("https://www.googleapis.com/drive/v3/files", headers=headers, params=params)
+            print("Response: ", response)
+            data = response.json()
+            print("Data: ", data)
+            if "files" not in data or not data["files"]:
+                return jsonify([])  # No se encontraron resultados
 
             search_results = []
-            for file in files_data.get("files", []):
+            for file in data.get("files", []):
                 search_results.append({
                     "title": file.get("name", "Desconocido"),
                     "type": file.get("mimeType", "Desconocido"),
@@ -1108,6 +1118,7 @@ def setup_routes_searchs(app,mongo):
             return jsonify({"error": "Error en la solicitud a Google Drive", "details": str(e)}), 500
         except Exception as e:
             return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+
         
     return {
         "search_gmail": search_gmail,

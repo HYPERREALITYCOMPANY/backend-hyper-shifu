@@ -3,14 +3,16 @@ import requests
 import os
 import datetime  # Para obtener la fecha actual
 from dotenv import load_dotenv
+from flask_caching import Cache
+from app.utils.utils import get_user_from_db
 
 # Cargar las variables de entorno desde el archivo .env
 load_dotenv()
 
-def setup_routes_refresh(app, mongo):
+def setup_routes_refresh(app, mongo, cache):
     # Función para obtener las integraciones y refresh_tokens desde la base de datos
     def get_refresh_tokens_from_db(user_email):
-        user_data = mongo.database.usuarios.find_one({"correo": user_email})
+        user_data = get_user_from_db(user_email, cache, mongo)
         if not user_data or "integrations" not in user_data:
             raise ValueError("El usuario no tiene integraciones guardadas en la base de datos.")
         
@@ -59,7 +61,10 @@ def setup_routes_refresh(app, mongo):
                 f"integrations.{integration_name}.token": access_token,
                 f"integrations.{integration_name}.timestamp": datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
             }
-            
+
+            # Eliminar el caché del usuario antes de actualizar el token
+            cache.delete(user_email)  # Borra el caché para que se recargue la información
+
             # Actualizar solo los campos token y timestamp en MongoDB
             mongo.database.usuarios.update_one(
                 {"correo": user_email},
@@ -131,3 +136,15 @@ def setup_routes_refresh(app, mongo):
         except Exception as e:
             print(f"Error al refrescar los tokens: {e}")
             return jsonify({"success": False, "message": "Error al refrescar los tokens"}), 500
+
+
+def get_user_from_db(email, cache, mongo):
+    cached_user = cache.get(email)
+    if cached_user:
+        return cached_user  # Devuelve el usuario desde caché
+
+    user = mongo.database.usuarios.find_one({'correo': email})
+    if user:
+        cache.set(email, user, timeout=1800)  # Guarda en caché por 30 minutos
+
+    return user

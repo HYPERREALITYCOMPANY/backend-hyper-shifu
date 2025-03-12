@@ -8,12 +8,14 @@ import openai
 from app.routes.searchRoutes import setup_routes_searchs
 from app.routes.postRoutes import setup_post_routes
 from app.routes.rulesRoutes import setup_rules_routes
-
+from flask_caching import Cache
+from app.utils.utils import get_user_from_db
 openai.api_key=Config.CHAT_API_KEY
-def setup_routes_chats(app, mongo):
-    functions = setup_routes_searchs(app, mongo)
-    functionsPost = setup_post_routes(app, mongo)
-    functions2 = setup_rules_routes(app, mongo)
+def setup_routes_chats(app, mongo, cache):
+    cache = Cache(app)
+    functions = setup_routes_searchs(app, mongo, cache)
+    functionsPost = setup_post_routes(app, mongo, cache)
+    functions2 = setup_rules_routes(app, mongo, cache)
     search_gmail = functions["search_gmail"]
     search_outlook = functions["search_outlook"]
     search_notion = functions["search_notion"]
@@ -455,7 +457,7 @@ def setup_routes_chats(app, mongo):
                         {"role": "system", "content": "Eres un asistente que identifica saludos o solicitudes."},
                         {"role": "user", "content": prompt}
                     ],
-                    max_tokens=1800
+                    max_tokens=2500
                 )
                 ia_interpretation = response.choices[0].message.content.strip().lower()
                 print(ia_interpretation)
@@ -503,7 +505,7 @@ def setup_routes_chats(app, mongo):
                                 return jsonify({"error": "Se deben proporcionar tanto el email como la consulta"}), 400
 
                             try:
-                                user = mongo.database.usuarios.find_one({'correo': email})
+                                user = get_user_from_db(email, cache, mongo)
                                 if not user:
                                     return jsonify({"error": "Usuario no encontrado"}), 404
                             except Exception as e:
@@ -572,14 +574,15 @@ def setup_routes_chats(app, mongo):
                                 search_results_data['asana'] = ["No se encontró ningún valor en Asana"]
 
                             try:
-                                onedrive_results = search_onedrive(onedrive_query)
-                                search_results_data['onedrive'] = onedrive_results.get_json() if hasattr(onedrive_results, 'get_json') else onedrive_results
-                            except Exception:
-                                search_results_data['onedrive'] = ["No se encontró ningún valor en OneDrive"]
-
-                            try:
                                 googledrive = search_google_drive(googledrive_query)
                                 search_results_data['googledrive'] = googledrive.get_json() if hasattr(googledrive, 'get_json') else googledrive
+                            except Exception:
+                                search_results_data['googledrive'] = ["No se encontró ningún valor en Google Drive"]
+
+
+                            try:
+                                onedrive_results = search_onedrive(onedrive_query)
+                                search_results_data['onedrive'] = onedrive_results.get_json() if hasattr(onedrive_results, 'get_json') else onedrive_results
                             except Exception:
                                 search_results_data['onedrive'] = ["No se encontró ningún valor en OneDrive"]
 
@@ -636,7 +639,7 @@ def setup_routes_chats(app, mongo):
                                 return jsonify({"error": "Se deben proporcionar tanto el email como los datos"}), 400
 
                             try:
-                                user = mongo.database.usuarios.find_one({'correo': email})
+                                user = get_user_from_db(email, cache, mongo)
                                 if not user:
                                     return jsonify({"error": "Usuario no encontrado"}), 404
 

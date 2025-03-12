@@ -11,8 +11,11 @@ import openai
 import base64
 from email.mime.text import MIMEText
 openai.api_key=Config.CHAT_API_KEY
+from flask_caching import Cache
+from app.utils.utils import get_user_from_db
 
-def setup_post_routes(app,mongo):
+def setup_post_routes(app, mongo, cache):
+    cache = Cache(app)
     def get_clickup_headers(token):
         return {
             "Authorization": token,
@@ -26,7 +29,7 @@ def setup_post_routes(app,mongo):
         if not email:
             return jsonify({"error": "Se debe proporcionar un email"}), 400
 
-        user = mongo.database.usuarios.find_one({'correo': email})
+        user = get_user_from_db(email, cache, mongo)
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -245,7 +248,7 @@ def setup_post_routes(app,mongo):
         if not email:
             return jsonify({"error": "Se debe proporcionar un email"}), 400
 
-        user = mongo.database.usuarios.find_one({'correo': email})
+        user = get_user_from_db(email, cache, mongo)
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -367,7 +370,7 @@ def setup_post_routes(app,mongo):
         if not email:
             return jsonify({"error": "Se debe proporcionar un email"}), 400
 
-        user = mongo.database.usuarios.find_one({'correo': email})
+        user = get_user_from_db(email, cache, mongo)
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -415,7 +418,7 @@ def setup_post_routes(app,mongo):
         if not email:
             return jsonify({"error": "Se debe proporcionar un email"}), 400
 
-        user = mongo.database.usuarios.find_one({'correo': email})
+        user = get_user_from_db(email, cache, mongo)
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -481,7 +484,7 @@ def setup_post_routes(app,mongo):
         if not email:
             return jsonify({"error": "Se debe proporcionar un email"}), 400
 
-        user = mongo.database.usuarios.find_one({'correo': email})
+        user = get_user_from_db(email, cache, mongo)
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -518,7 +521,7 @@ def setup_post_routes(app,mongo):
         email = request.args.get('email')
         if not email:
             return jsonify({"error": "Se debe proporcionar un email"}), 400
-        user = mongo.database.usuarios.find_one({"correo": email})
+        user = get_user_from_db(email, cache, mongo)
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
         dropbox_token = user.get("integrations", {}).get("Dropbox", {}).get("token")
@@ -704,7 +707,7 @@ def setup_post_routes(app,mongo):
         email = request.args.get('email')
         if not email:
             return jsonify({"error": "Se debe proporcionar un email"}), 400
-        user = mongo.database.usuarios.find_one({"correo": email})
+        user = get_user_from_db(email, cache, mongo)
 
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
@@ -907,7 +910,7 @@ def setup_post_routes(app,mongo):
             return jsonify({"error": "Se debe proporcionar un email"}), 400
 
         # Buscar usuario en la base de datos
-        user = mongo.database.usuarios.find_one({"correo": email})
+        user = get_user_from_db(email, cache, mongo)
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -961,7 +964,7 @@ def setup_post_routes(app,mongo):
             return jsonify({"error": "Se debe proporcionar un email"}), 400
 
         # Buscar usuario en la base de datos
-        user = mongo.database.usuarios.find_one({"correo": email})
+        user = get_user_from_db(email, cache, mongo)
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 

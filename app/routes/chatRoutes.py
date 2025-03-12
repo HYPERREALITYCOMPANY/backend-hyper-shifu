@@ -284,7 +284,7 @@ def setup_routes_chats(app, mongo, cache):
                     f"- Si el usuario usa términos como 'mensaje sobre', 'hablamos de', 'tema de conversación', extrae las palabras clave y úsalas en \"message:<palabras clave>\".\n"
                     f"- Si no se puede interpretar una búsqueda específica para Teams, devuelve \"N/A\".\n"
                     f"- SI EL USUARIO MENCIONA EXPLICITAMENTE 'TEAMS' O 'MICROSOFT TEAMS' HAZ LA QUERY\n"
-                     f"- SI EL USUARIO MENCIONA EXPLICITAMENTE 'TEAMS' O 'MICROSOFT TEAMS' HAZ LA QUERY"
+                    f"- SI EL USUARIO MENCIONA EXPLICITAMENTE 'TEAMS' O 'MICROSOFT TEAMS' HAZ LA QUERY"
                     f"Estructura del JSON:\n"
                     f"{{\n"
                     f"    \"gmail\": \"<query para Gmail> Se conciso y evita palabras de solicitud y solo pon la query y evita los is:unread\",\n"

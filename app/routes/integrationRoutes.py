@@ -1,7 +1,7 @@
 from flask import request, jsonify
 from datetime import datetime
 
-def setup_integrations_routes(app, mongo):
+def setup_integrations_routes(app, mongo, cache):
     @app.route('/get_integrations', methods=['GET'])
     def get_integrations():
         user_email = request.args.get("email")

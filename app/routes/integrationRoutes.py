@@ -1,15 +1,12 @@
 from flask import request, jsonify
 from datetime import datetime
-from flask_caching import Cache
-from app.utils.utils import get_user_from_db
 
 def setup_integrations_routes(app, mongo, cache):
-    cache = Cache(app)
     @app.route('/get_integrations', methods=['GET'])
     def get_integrations():
         user_email = request.args.get("email")
         
-        user = get_user_from_db(user_email, cache, mongo)
+        user = mongo.database.usuarios.find_one({"correo": user_email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -27,7 +24,7 @@ def setup_integrations_routes(app, mongo, cache):
 
         if not all([user_email, integration_name, token, refresh_token]):
             return jsonify({"error": "Faltan campos obligatorios"}), 400
-        user = get_user_from_db(user_email, cache, mongo)
+        user = mongo.database.usuarios.find_one({"correo": user_email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 

@@ -1,7 +1,7 @@
 from flask import request, jsonify, session
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_pymongo import ObjectId
-def setup_auth_routes(app, mongo, cache):
+def setup_auth_routes(app, mongo):
 
     @app.route('/register', methods=['POST'])
     def register_user():

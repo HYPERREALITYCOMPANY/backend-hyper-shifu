@@ -4,11 +4,8 @@ from config import Config
 import openai
 openai.api_key=Config.CHAT_API_KEY
 from app.routes.secretaryGetRoutes import setup_routes_secretary_gets
-from flask_caching import Cache
-from app.utils.utils import get_user_from_db
-def setup_routes_secretary_posts(app, mongo, cache):
-    cache = Cache(app)
-    functions = setup_routes_secretary_gets(app, mongo, cache)
+def setup_routes_secretary_posts(app, mongo):
+    functions = setup_routes_secretary_gets(app, mongo)
     get_gmail_headers = functions["get_gmail_headers"]
     get_outlook_headers = functions["get_outlook_headers"]
     get_slack_headers = functions["get_slack_headers"]
@@ -74,7 +71,7 @@ def setup_routes_secretary_posts(app, mongo, cache):
         user_text = data.get("action_text")
         message_id = data.get("message_id")
 
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -108,7 +105,7 @@ def setup_routes_secretary_posts(app, mongo, cache):
         user_text = data.get("action_text")
         message_id = data.get("message_id")
 
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -143,7 +140,7 @@ def setup_routes_secretary_posts(app, mongo, cache):
         user_text = data.get("action_text")
         page_id = data.get("message_id")
 
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -175,7 +172,7 @@ def setup_routes_secretary_posts(app, mongo, cache):
         user_text = data.get("action_text")
         file_id = data.get("file_id")
 
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -206,7 +203,7 @@ def setup_routes_secretary_posts(app, mongo, cache):
         message_ts = data.get("message_id")
         channel = data.get("channel")
 
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -233,7 +230,7 @@ def setup_routes_secretary_posts(app, mongo, cache):
         user_text = data.get("action_text")
         task_id = data.get("message_id")
 
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -269,7 +266,7 @@ def setup_routes_secretary_posts(app, mongo, cache):
         user_text = data.get("action_text")
         task_id = data.get("message_id")
 
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -300,7 +297,7 @@ def setup_routes_secretary_posts(app, mongo, cache):
         user_text = data.get("action_text")
         deal_id = data.get("deal_id")
 
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -325,7 +322,7 @@ def setup_routes_secretary_posts(app, mongo, cache):
         user_text = data.get("action_text")
         file_path = data.get("file_path")
 
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -349,7 +346,7 @@ def setup_routes_secretary_posts(app, mongo, cache):
         user_text = data.get("action_text")
         file_id = data.get("file_id")
 
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -374,7 +371,7 @@ def setup_routes_secretary_posts(app, mongo, cache):
         message_id = data.get("message_id")
         channel_id = data.get("channel_id")
 
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 

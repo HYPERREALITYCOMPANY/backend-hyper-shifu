@@ -2,7 +2,7 @@ from flask import request, jsonify
 import requests
 from urllib.parse import urlencode
 import base64 
-def setup_proxy_routes(app, mongo, cache):
+def setup_proxy_routes(app, mongo):
     @app.route("/clickup-proxy", methods=["POST"])
     def clickup_proxy():
         try:

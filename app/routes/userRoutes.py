@@ -1,6 +1,10 @@
-from flask import request, jsonify
+from flask import Blueprint, request, jsonify
+from flask_pymongo import ObjectId
+from datetime import datetime
 
-def setup_user_routes(app, mongo, cache):
+user_bp = Blueprint("user", __name__)
+
+def setup_user_routes(app, mongo):
     
     @app.route('/check_integrations', methods=['GET'])
     def check_integrations():

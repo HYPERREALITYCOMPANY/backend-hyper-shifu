@@ -7,10 +7,8 @@ from datetime import datetime
 import re
 import json
 import openai
-from flask_caching import Cache
-from app.utils.utils import get_user_from_db
-def setup_execute_routes(app,mongo, cache):
-    cache = Cache(app)
+
+def setup_execute_routes(app,mongo):
     @app.route('/execute/gmail', methods=['GET'])
     def execute_gmail_rules():
         email = request.args.get('email')
@@ -18,7 +16,7 @@ def setup_execute_routes(app,mongo, cache):
             return jsonify({"error": "Se debe proporcionar un email"}), 400
 
         # Buscar el usuario en la base de datos
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -125,7 +123,7 @@ def setup_execute_routes(app,mongo, cache):
             return jsonify({"error": "Se debe proporcionar un email"}), 400
 
         # Buscar el usuario en la base de datos
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -214,7 +212,7 @@ def setup_execute_routes(app,mongo, cache):
         if not email:
             return jsonify({"error": "Se debe proporcionar un email"}), 400
 
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -277,7 +275,7 @@ def setup_execute_routes(app,mongo, cache):
         if not email:
             return jsonify({"error": "Se debe proporcionar un email"}), 400
 
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -348,7 +346,7 @@ def setup_execute_routes(app,mongo, cache):
                 return jsonify({"error": "Se debe proporcionar un email"}), 400
 
             # Buscar el usuario en la base de datos
-            user = get_user_from_db(email, cache, mongo)
+            user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 

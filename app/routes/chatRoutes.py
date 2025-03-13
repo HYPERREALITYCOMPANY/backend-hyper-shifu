@@ -694,27 +694,40 @@ def setup_routes_chats(app, mongo, cache):
                     start = ia_interpretation.find('{')
                     end = ia_interpretation.rfind('}') + 1
                     json_block = ia_interpretation[start:end]
-                    queries = json.loads(json_block)
 
-                    print(queries)
-                    if queries:
-                        try:
+                    try:
+                        queries = json.loads(json_block)
+                        print(queries)
+
+                        if queries:
+                            responses = []
+
                             for api, data in queries.items():
                                 condition = data.get('condition', '')
-                                action = data.get('action', '')    
+                                action = data.get('action', '')
+
                                 if condition and action and condition.lower() != "n/a" and action.lower() != "n/a":
                                     function_name = f"post_auto_{api}"
+                                    
                                     if function_name in functionsAuto:
                                         function = functionsAuto[function_name]
                                         response = function(condition, action)
+
                                         if response:
-                                            print(response)
+                                            responses.append(response)
                                         else:
-                                            print(f"No se pudo ejecutar la acción para {api}.")
+                                            responses.append(f"No se pudo ejecutar la acción para {api}.")
                                     else:
-                                        print(f"La función para {api} no está definida en functionsPost.")                     
-                        except json.JSONDecodeError:
-                            return jsonify({"error": "Formato JSON inválido"}), 400
+                                        responses.append(f"La función para {api} no está definida en functionsPost.")
+
+                            if responses:
+                                return jsonify({"message": responses}), 200
+                            else:
+                                return jsonify({"message": "No se crearon tus reglas, ¿podrías reformularlas?"}), 400
+
+                    except json.JSONDecodeError:
+                        return jsonify({"error": "Formato JSON inválido"}), 400
+
                 elif 'anterior' in ia_interpretation:
                     reference_prompt = f"El usuario dijo: '{last_message}'\n"
                     reference_prompt += f"La última respuesta de la IA fue: '{last_response}'.\n"
@@ -727,7 +740,7 @@ def setup_routes_chats(app, mongo, cache):
                     - Si el usuario comparte cómo se siente o menciona una situación personal, responde con empatía y comprensión.
                     - Si el usuario solicita automatizaciones o reglas persistentes (quemadas), identifícalas correctamente.
                     - Siempre mantén una respuesta natural y cercana, evitando un tono robótico.
-            """},
+                    """},
                                 {"role": "user", "content": reference_prompt}],
                         max_tokens=150
                     )

@@ -148,10 +148,7 @@ def setup_post_routes(app,mongo):
         # =============================================
         #   Crear borrador en gmail para enviar correo 📧
         # =============================================
-
-        print("crear borrador query:", query)
         match = re.search(r'crear\s*borrador\s*con\s*asunto:\s*(.*?)\s*y\s*cuerpo:\s*(.*)', query, re.IGNORECASE)
-        print("match crear borrador:", match)
 
         if match:
             asunto = match.group(1).strip()
@@ -712,6 +709,7 @@ def setup_post_routes(app,mongo):
             return jsonify({"error": "Usuario no encontrado"}), 404
         
         google_drive_token = user.get('integrations', {}).get('Drive', {}).get('token')
+        print("google drive token:", google_drive_token)
         if not google_drive_token:
             return jsonify({"error": "Token de Google Drive no disponible."}), 400
         
@@ -740,7 +738,7 @@ def setup_post_routes(app,mongo):
 
             # Buscar la carpeta en Google Drive
             params = {
-                "q": f"name = \"{folder_name}\" and mimeType = \"application/vnd.google-apps.folder\" and trashed=false",
+                "q": f"name contains \"{folder_name}\" and mimeType = \"application/vnd.google-apps.folder\" and trashed=false",
                 "fields": "files(id, name)"
             }
 
@@ -841,8 +839,6 @@ def setup_post_routes(app,mongo):
         # ============================================= 
         #   📂 Compartir archivo o carpeta en Google Drive 📂
         # =============================================
-
-        print("Query para compartir archivo o carpeta en Google Drive", query)
         matchCompartirArchivo = re.search(r'compartir\s*(archivo|carpeta)\s*[:\s]*(\S.*)\s*con\s*(.+)', query, re.IGNORECASE)
         print("Match compartir archivo", matchCompartirArchivo)
 
@@ -860,7 +856,7 @@ def setup_post_routes(app,mongo):
             url = "https://www.googleapis.com/drive/v3/files"
             headers = {"Authorization": f"Bearer {google_drive_token}"}
             params = {
-                "q": f"name contains '{archivo_o_carpeta}'",
+                "q": f"name = '{archivo_o_carpeta}'",
                 "spaces": "drive",
                 "fields": "files(id,name)",
             }
@@ -954,8 +950,6 @@ def setup_post_routes(app,mongo):
                 return jsonify({"error": f"Archivo '{file_name}' no encontrado en OneDrive"}), 404
 
     def post_to_onedrive(query):
-        print("Entrando a OneDrive")
-        print("query onedrive:", query)
 
         # Obtener email del usuario
         email = request.args.get('email')
@@ -977,11 +971,9 @@ def setup_post_routes(app,mongo):
         # ==================================================
 
         matchEliminar = re.search(r'eliminar\s*(archivo)?[:\s]*([\w\.\-_]+)', query, re.IGNORECASE)
-        print("matchEliminar OneDrive:", matchEliminar)
 
         if matchEliminar:
             file_name = matchEliminar.group(2).strip()
-            print("file_name:", file_name)
 
             # Buscar archivo en OneDrive
             search_url = f"https://graph.microsoft.com/v1.0/me/drive/root/search(q='{file_name}')"
@@ -991,7 +983,6 @@ def setup_post_routes(app,mongo):
             }
 
             response = requests.get(search_url, headers=headers)
-            print(response)
             if response.status_code == 401:
                 return jsonify({"error": "No autorizado. Verifica el token de acceso."}), 401
 

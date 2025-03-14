@@ -1,6 +1,7 @@
 from flask import request, jsonify, session
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_pymongo import ObjectId
+from utils.utils import get_user_from_db
 def setup_auth_routes(app, mongo):
 
     @app.route('/register', methods=['POST'])
@@ -39,15 +40,23 @@ def setup_auth_routes(app, mongo):
         if not data or not all(k in data for k in ("correo", "password")):
             return jsonify({"error": "Faltan campos obligatorios"}), 400
         
-        usuario = mongo.database.usuarios.find_one({"correo": data["correo"]})
+        # Usa Redis para obtener el usuario
+        usuario = get_user_from_db(data["correo"], cache, mongo)
+
         if not usuario or not check_password_hash(usuario["password"], data["password"]):
             return jsonify({"error": "Credenciales incorrectas"}), 401
 
         session['user_id'] = str(usuario['_id'])
         name = usuario['nombre'] + " " + usuario['apellido']
         img = usuario['img']
-        return jsonify({"message": "Inicio de sesión exitoso", "user_id": session['user_id'], "user_name": name, "user_img": img }), 200
-
+        
+        return jsonify({
+            "message": "Inicio de sesión exitoso",
+            "user_id": session['user_id'],
+            "user_name": name,
+            "user_img": img 
+        }), 200
+    
     @app.route("/get_user", methods=["GET"])
     def get_user():
         user_id = request.args.get('id')

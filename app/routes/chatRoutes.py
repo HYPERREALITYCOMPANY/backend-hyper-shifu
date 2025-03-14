@@ -311,6 +311,7 @@ def setup_routes_chats(app, mongo):
                     f"     - Ejemplo: 'crear carpeta: nombreejemplo en: Dropbox' → Se interpretará como 'crear carpeta: nombreejemplo en: Dropbox'.\n"
                     f"     - OBLIGATORIO: Si no se menciona un servicio, se usará Google Drive por defecto: 'crear carpeta: nombreejemplo en: googledrive'.\n"
                     f"     - OBLIGATORIO: si no se menciona el nombre que se le quiere poner a la carpeta, se usará 'n/a' por defecto\n"
+                    f"   - Si el usuario no indica el nombre de la carpeta, obligatoriamente tiene que llamarse 'n/a'\n"
                     
                     f"2. **Modificar o Editar elementos** (acciones como 'editar', 'modificar', 'actualizar', 'mover'):\n"
                     f"   - Ejemplo: Editar una tarea, archivo. (Esto se envía a Notion, Asana, ClickUp)\n"
@@ -327,7 +328,9 @@ def setup_routes_chats(app, mongo):
                     f"   - Permite mover archivos o carpetas dentro de plataformas como **Google Drive, OneDrive y Dropbox**.\n"
                     f"   - Ejemplo: Mover un archivo o correo a una carpeta, o poner correos en spam. (Esto se envía a **Gmail** y **Outlook**)\n"
                     f"   - **Formato de query:** 'archivo: [nombre_archivo] a carpeta: [nombre_carpeta]' este formarto es OBLIGATORIO para cualquier consulta que diga mueve, pasa, mueveme un archivo o expresiones similares.\n"
-                    
+                    f"   - Si el usuario no indica el nombre de la carpeta, obligatoriamente tiene que llamarse 'n/a'\n"
+                    f"   - Si el usuario no indica el nombre del archivo, obligatoriamente tiene que llamarse 'n/a'\n"
+
                     f"5. **Enviar** (acciones como 'enviar', 'mandar', 'mándame', 'enviar por correo'):\n"
                     f"   - Ejemplo: Enviar un correo (Esto se envía a Gmail, Outlook, Teams, Slack)\n"
                     f"   - Si el usuario menciona solo un nombre de usuario sin dominio (por ejemplo, 'gallodelacruz'), asume que es un correo de Gmail y completa con '@gmail.com'.\n"

@@ -540,13 +540,6 @@ def setup_post_routes(app,mongo):
             file_name = matchRestaurarArchivoDrop.group(1).strip()  # Nombre del archivo a restaurar
             print("file_name:", file_name)
 
-            # Asegúrate de definir la ruta completa del archivo (file_path)
-            # Esto podría ser un archivo en Dropbox, por ejemplo
-            # Deberías tener la ruta completa para el archivo en el parámetro 'file_path'
-            file_path = f"/path/to/your/file/{file_name}"
-
-            print("file_path:", file_path)  # Para asegurarse de que 'file_path' está correcto
-
             # Realizamos la búsqueda en Dropbox
             url = "https://api.dropboxapi.com/2/files/restore"
             headers = {
@@ -584,9 +577,12 @@ def setup_post_routes(app,mongo):
                 restore_response = requests.post(url_restore, headers=headers, json=restore_params)
                 
                 if restore_response.status_code == 200:
-                    return(f"¡El archivo {file_path} ha sido restaurado exitosamente!")
+                    return {"message": f"🎉 ¡El archivo '{file_name}' ha sido restaurado exitosamente! 🙌 ¡Todo listo para seguir trabajando! 📂"}
+                else:
+                    return {"message": "⚠️ ¡No se pudo restaurar el archivo! Intenta de nuevo o revisa si el archivo está disponible."}
+
             else:
-                print("No se encontraron revisiones para este archivo.")
+                return {"message": "⚠️ ¡No se encontraron revisiones disponibles para este archivo! 😔 Asegúrate de que el archivo tenga una versión previa para restaurar."}
         
         # =============================================
         #   Creamos carpetas en Dropbox 📂
@@ -597,6 +593,9 @@ def setup_post_routes(app,mongo):
 
         if matchCrearCarpetaDrop:
             folder_name = matchCrearCarpetaDrop.group(1).strip()  # Nombre de la carpeta a crear
+
+            if folder_name == 'n/a':
+                return {"message": "⚠️ ¡Ups! No se especificó el nombre de la carpeta. 📂 Por favor, intenta de nuevo con el nombre de la carpeta que quieres crear en Dropbox. ✍️"}
 
             url ="https://api.dropboxapi.com/2/files/create_folder_v2"
             headers = {
@@ -622,7 +621,17 @@ def setup_post_routes(app,mongo):
         if match:
             file_name = match.group(1).strip()
             folder_name = match.group(2).strip()
-            
+
+            print("file_name:", file_name)
+            print("folder_name:", folder_name)
+
+            if file_name == 'n/a':
+                return {"message": "⚠️ ¡Ups! No se especificó el nombre del archivo. 📂 Por favor, indica el nombre del archivo que deseas mover. ✍️"}
+            # Si no se especifica la carpeta de destino
+            if folder_name == 'n/a':
+                return {"message": "⚠️ ¡Ups! No se especificó la carpeta de destino. 🗂️ Por favor, indica la carpeta a la que deseas mover el archivo. ✍️"}
+
+            # Realizamos la búsqueda del archivo en Dropbox
             url = "https://api.dropboxapi.com/2/files/search_v2"
             headers = {
                 'Authorization': f"Bearer {dropbox_token}",
@@ -640,24 +649,29 @@ def setup_post_routes(app,mongo):
             results = response.json().get('matches', [])
 
             file_path = None
+            if len(results) == 0:
+                return {"message": f"⚠️ No se encontró el archivo '{file_name}' en Dropbox. Revisa el nombre e intenta de nuevo. 📂"}
+
+            # Si hay varios archivos con nombres similares
+            if len(results) > 1:
+                file_list = [result['metadata']['metadata']['name'] for result in results]
+                return {"message": f"⚠️ Encontramos varios archivos con nombres similares. 📂 Por favor, elige el archivo correcto:\n\n" + "\n".join(file_list)}
+
+            # Si solo se encuentra un archivo
             for result in results:
                 dropbox_file_name = result['metadata']['metadata']['name']
                 dropbox_file_path = result['metadata']['metadata']['path_lower']
-                
+
                 if dropbox_file_name.lower().startswith(file_name.lower()):
                     file_path = dropbox_file_path
                     break
-            
+
             if not file_path:
-                return jsonify({"error": f"Archivo '{file_name}' no encontrado en Dropbox"}), 404
-            
+                return {"message": f"⚠️ No se encontró el archivo '{file_name}' en Dropbox. Revisa el nombre e intenta de nuevo. 📂"}
+
             folder_path = f"/{folder_name}/{dropbox_file_name}"
 
-            headers = {
-                "Authorization": f"Bearer {dropbox_token}",
-                "Content-Type": "application/json"
-            }
-
+            # Realizamos el movimiento del archivo
             data = {
                 "from_path": file_path,
                 "to_path": folder_path,
@@ -666,8 +680,10 @@ def setup_post_routes(app,mongo):
                 "autorename": False,
             }
 
-            url = "https://api.dropboxapi.com/2/files/move_v2"
-            response = requests.post(url, headers=headers, json=data)
+            url_move = "https://api.dropboxapi.com/2/files/move_v2"
+            move_response = requests.post(url_move, headers=headers, json=data)
+            move_response.raise_for_status()
+
             return {"message": f"🎉 El archivo '{dropbox_file_name}' ha sido movido a la carpeta '{folder_name}' con éxito! 🚀"}    
         
         # =============================================
@@ -694,18 +710,22 @@ def setup_post_routes(app,mongo):
             response.raise_for_status()
             results = response.json().get('matches', [])
 
-            file_path = None
-            for result in results:
-                dropbox_file_name = result['metadata']['metadata']['name']
-                dropbox_file_path = result['metadata']['metadata']['path_lower']
+            if file_name == 'n/a':
+                return {"message": "⚠️ ¡Ups! No se especificó el nombre del archivo que deseas eliminar. 📂 Por favor, indícalo e intentalo de nuevo. ✍️"}
 
-                if dropbox_file_name.lower().startswith(file_name.lower()):
-                    file_path = dropbox_file_path
-                    break
-            
-            if not file_path:
-                return jsonify({"error": f"Archivo '{file_name}' no encontrado en Dropbox"}), 404
-            
+            if not results:
+                return {"message": f"❌ ¡Oh no! No encontramos un archivo que coincida con '{file_name}' en Dropbox. Revisa y prueba de nuevo. 🔍"}
+
+            if len(results) > 1:
+                # Si hay varios resultados con nombres similares, mostramos una lista de opciones
+                similar_files = "\n".join([f"{index + 1}. {result['metadata']['metadata']['name']}" for index, result in enumerate(results)])
+                return {
+                    "message": f"⚠️ ¡Encontramos varios archivos con nombres similares! Por favor, decide el archivo correcto e intentalo de nuevo:\n{similar_files} 📝"
+                }
+
+            # Si encontramos el archivo, eliminamos
+            file_path = results[0]['metadata']['metadata']['path_lower']
+
             # Eliminamos el archivo
             delete_url = "https://api.dropboxapi.com/2/files/delete_v2"
             delete_data = {
@@ -741,18 +761,22 @@ def setup_post_routes(app,mongo):
             response.raise_for_status()
             results = response.json().get('matches', [])
 
-            folder_path = None
-            for result in results:
-                dropbox_folder_name = result['metadata']['metadata']['name']
-                dropbox_folder_path = result['metadata']['metadata']['path_lower']
+            if folder_name == 'n/a':
+                return {"message": "⚠️ ¡Ups! No se especificó el nombre de la carpeta que deseas eliminar. 📂 Por favor, indícalo para poder proceder. ✍️"}
 
-                if dropbox_folder_name.lower().startswith(folder_name.lower()):
-                    folder_path = dropbox_folder_path
-                    break
-            
-            if not folder_path:
-                return jsonify({"error": f"Carpeta '{folder_name}' no encontrada en Dropbox"}), 404
-            
+            if not results:
+                return {"message": f"❌ ¡Oh no! No encontramos una carpeta que coincida con '{folder_name}' en Dropbox. Revisa y prueba de nuevo. 🔍"}
+
+            if len(results) > 1:
+                # Si hay varios resultados con nombres similares, mostramos una lista de opciones
+                similar_folders = "\n".join([f"{index + 1}. {result['metadata']['metadata']['name']}" for index, result in enumerate(results)])
+                return {
+                    "message": f"⚠️ ¡Encontramos varias carpetas con nombres similares! Por favor, selecciona la carpeta correcta:\n{similar_folders} 📝"
+                }
+
+            # Si encontramos la carpeta, eliminamos
+            folder_path = results[0]['metadata']['metadata']['path_lower']
+
             # Eliminamos la carpeta
             delete_url = "https://api.dropboxapi.com/2/files/delete_v2"
             delete_data = {

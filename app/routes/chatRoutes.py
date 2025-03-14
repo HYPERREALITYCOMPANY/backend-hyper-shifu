@@ -716,31 +716,26 @@ def setup_routes_chats(app, mongo, cache):
                         queries = json.loads(json_block)
                         print(queries)
 
-                        if queries:
-                            responses = []
+                        post_results_data = {}
 
-                            for api, data in queries.items():
-                                condition = data.get('condition', '')
-                                action = data.get('action', '')
+                        for api, data in queries.items():
+                            condition = data.get('condition', '').lower()
+                            action = data.get('action', '').lower()
 
-                                if condition and action and condition.lower() != "n/a" and action.lower() != "n/a":
-                                    function_name = f"post_auto_{api}"
+                            if condition != "n/a" and action != "n/a" and api in functionsAuto:
+                                try:
+                                    function = functionsAuto[f"post_auto_{api}"]
+                                    response = function(condition, action)
                                     
-                                    if function_name in functionsAuto:
-                                        function = functionsAuto[function_name]
-                                        response = function(condition, action)
-
-                                        if response:
-                                            responses.append(response)
-                                        else:
-                                            responses.append(f"No se pudo ejecutar la acción para {api}.")
-                                    else:
-                                        responses.append(f"La función para {api} no está definida en functionsPost.")
-
-                            if responses:
-                                return jsonify({"message": responses}), 200
-                            else:
-                                return jsonify({"message": "No se crearon tus reglas, ¿podrías reformularlas?"}), 400
+                                    if response:
+                                        message = response.get('message', None)
+                                        if message and message != "Sin mensaje":
+                                            post_results_data[api] = message
+                                except Exception as e:
+                                    pass  # Manejo de errores opcional
+                        
+                        final_message = next(iter(post_results_data.values()), "No se crearon tus reglas, ¿podrías reformularlas?")
+                        return jsonify({"message": final_message}), 200 if post_results_data else 400
 
                     except json.JSONDecodeError:
                         return jsonify({"error": "Formato JSON inválido"}), 400

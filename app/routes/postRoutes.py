@@ -202,18 +202,19 @@ def setup_post_routes(app,mongo):
             asunto = match.group(2).strip()  # 📌 Captura el asunto
             cuerpo = match.group(3).strip()  # 📌 Captura el cuerpo
 
-            # ✅ Validar si se especificó el destinatario
-            if not destinatario:
-                return {"error": "⚠️ Debes especificar un destinatario para el correo. Intenta de nuevo."}
+            print(f"Destinatario: {destinatario}, Asunto: {asunto}, Cuerpo: {cuerpo}")
 
-            # ✅ Si el usuario no puso dominio, asumimos @gmail.com
-            if "@" not in destinatario:
-                destinatario += "@gmail.com"
+            # ✅ Validar si se especificó el destinatario
+            if destinatario == 'destinatario':
+                return {"message": "⚠️ ¡Oops! 😅 Parece que olvidaste poner el correo de destino. 📧 Por favor, incluye una dirección válida para que podamos enviarlo. ✉️"}
 
             # ✅ Crear mensaje en formato MIME
             mensaje = MIMEText(cuerpo)
             mensaje["To"] = destinatario
             mensaje["Subject"] = asunto
+
+            # ✅ Agregar el campo 'From' al mensaje
+            mensaje["From"] = "me"  # Usamos 'me' que indica la cuenta autenticada
 
             # ✅ Convertir a Base64
             mensaje_bytes = mensaje.as_bytes()
@@ -238,7 +239,6 @@ def setup_post_routes(app,mongo):
 
             except Exception as e:
                 return {"error": "⚠️ Error inesperado al procesar la respuesta de Gmail."}
-
 
         return {"error": "No se encontró una acción válida en la consulta"}
 
@@ -518,6 +518,7 @@ def setup_post_routes(app,mongo):
 
 ###################################################################################################        
     def post_to_dropbox(query):
+        print("query restaurar archivo:", query)
         """Procesa la consulta y ejecuta la acción en la API de Dropbox."""
         email = request.args.get('email')
         if not email:
@@ -529,6 +530,89 @@ def setup_post_routes(app,mongo):
         if not dropbox_token:
             return jsonify({"error": "Token de Dropbox no disponible"}), 400
         
+        # =============================================
+        #   Restaurar archivos en Dropbox 🗑️
+        # =============================================
+        
+        matchRestaurarArchivoDrop = re.search(r'restaurar\s*archivo:\s*(.+)', query, re.IGNORECASE)
+        print("matchRestaurArchivoDrop:", matchRestaurarArchivoDrop)
+        if matchRestaurarArchivoDrop:
+            file_name = matchRestaurarArchivoDrop.group(1).strip()  # Nombre del archivo a restaurar
+            print("file_name:", file_name)
+
+            # Asegúrate de definir la ruta completa del archivo (file_path)
+            # Esto podría ser un archivo en Dropbox, por ejemplo
+            # Deberías tener la ruta completa para el archivo en el parámetro 'file_path'
+            file_path = f"/path/to/your/file/{file_name}"
+
+            print("file_path:", file_path)  # Para asegurarse de que 'file_path' está correcto
+
+            # Realizamos la búsqueda en Dropbox
+            url = "https://api.dropboxapi.com/2/files/restore"
+            headers = {
+                'Authorization': f"Bearer {dropbox_token}",
+                'Content-Type': 'application/json'
+            }
+
+            params = {
+                "path": file_path,  # Ruta del archivo
+                "limit": 1  # Solo necesitamos la última revisión
+            }
+
+            print("params:", params)
+
+            # Hacemos la solicitud para obtener la revisión
+            response = requests.post(url, headers=headers, json=params)
+            print("response:", response.json())
+            revisions = response.json()
+            print("revisions:", revisions)
+
+            # Verificamos si obtenemos alguna revisión
+            if 'entries' in revisions and len(revisions['entries']) > 0:
+                # Obtener la última revisión (rev)
+                rev = revisions['entries'][0]['rev']
+                
+                # Ahora, podemos restaurar el archivo desde la papelera usando la revisión
+                url_restore = "https://api.dropboxapi.com/2/files/restore"
+                
+                restore_params = {
+                    "path": file_path,  # Ruta completa del archivo
+                    "rev": rev  # Usamos la revisión obtenida
+                }
+
+                # Realizamos la solicitud para restaurar el archivo
+                restore_response = requests.post(url_restore, headers=headers, json=restore_params)
+                
+                if restore_response.status_code == 200:
+                    return(f"¡El archivo {file_path} ha sido restaurado exitosamente!")
+            else:
+                print("No se encontraron revisiones para este archivo.")
+        
+        # =============================================
+        #   Creamos carpetas en Dropbox 📂
+        # =============================================
+
+        matchCrearCarpetaDrop = re.search(r'crear\s*carpeta:\s*(.+?)\s*en\s*:\s*dropbox', query, re.IGNORECASE)
+        print("ENTRAMOS A CREAR CARPETA EN DROPBOX")
+
+        if matchCrearCarpetaDrop:
+            folder_name = matchCrearCarpetaDrop.group(1).strip()  # Nombre de la carpeta a crear
+
+            url ="https://api.dropboxapi.com/2/files/create_folder_v2"
+            headers = {
+                "Authorization": f"Bearer {dropbox_token}",
+                "Content-Type": "application/json"
+            }
+
+            data = {
+                "path": f"/{folder_name}",
+                "autorename": False
+            }
+
+            response = requests.post(url, headers=headers, json=data)
+            response.raise_for_status()
+            return {"message": f"🎉✨ ¡Éxito total! La carpeta '{folder_name}' ha sido creada con éxito en Dropbox. 🚀🌟"}
+    
         # =============================================
         #   📂 Movemos archivos en Dropbox 📂
         # =============================================
@@ -679,77 +763,6 @@ def setup_post_routes(app,mongo):
             delete_response.raise_for_status()
 
             return {"message": f"🎉 La carpeta '{folder_name}' ha sido eliminada de Dropbox con éxito! 🗑️"}
-        
-        # =============================================
-        #   Creamos carpetas en Dropbox 📂
-        # =============================================
-
-        print("query crear carpeta:", query)
-
-        matchCrearCarpetaDrop = re.search(r'crear\s*carpeta\s*[:\-]?\s*(.+)', query, re.IGNORECASE)
-        print("ENTRAMOS A CREAR CARPETA EN DROPBOX")
-        print("matchCrearCarpetaDrop:", matchCrearCarpetaDrop)
-
-        if matchCrearCarpetaDrop:
-            folder_name = matchCrearCarpetaDrop.group(1).strip()  # Nombre de la carpeta a crear
-
-            url ="https://api.dropboxapi.com/2/files/create_folder_v2"
-            headers = {
-                "Authorization": f"Bearer {dropbox_token}",
-                "Content-Type": "application/json"
-            }
-
-            data = {
-                "path": f"/{folder_name}",
-                "autorename": False
-            }
-
-            response = requests.post(url, headers=headers, json=data)
-            response.raise_for_status()
-            return {"message": f"🎉✨ ¡Éxito total! La carpeta '{folder_name}' ha sido creada con éxito en Dropbox. 🚀🌟"}
-        
-        # =============================================
-        #   Restaurar archivos en Dropbox 🗑️
-        # =============================================
-        matchRestaurarArchivoDrop = re.search(r'restaura\s*archivo\s*[:\-]?\s*(.+)', query, re.IGNORECASE)
-        if matchRestaurarArchivoDrop:
-            file_name = matchRestaurarArchivoDrop.group(1).strip()  # Nombre del archivo a restaurar
-
-            # Realizamos la búsqueda en Dropbox
-            url = "https://api.dropboxapi.com/2/files/restore"
-            headers = {
-                'Authorization': f"Bearer {dropbox_token}",
-                'Content-Type': 'application/json'
-            }
-
-            params = {
-                "path": file_path,  # Ruta del archivo
-                "limit": 1  # Solo necesitamos la última revisión
-            }
-
-            # Hacemos la solicitud para obtener la revisión
-            response = requests.post(url, headers=headers, json=params)
-            revisions = response.json()
-            
-            if 'entries' in revisions and len(revisions['entries']) > 0:
-                # Obtener la última revisión (rev)
-                rev = revisions['entries'][0]['rev']
-                
-                # Ahora, podemos restaurar el archivo desde la papelera usando la revisión
-                url_restore = "https://api.dropboxapi.com/2/files/restore"
-                
-                restore_params = {
-                    "path": file_path,  # Ruta completa del archivo
-                    "rev": rev  # Usamos la revisión obtenida
-                }
-                
-                # Realizamos la solicitud para restaurar el archivo
-                restore_response = requests.post(url_restore, headers=headers, json=restore_params)
-                
-                if restore_response.status_code == 200:
-                    return(f"¡El archivo {file_path} ha sido restaurado exitosamente!")
-            else:
-                print("No se encontraron revisiones para este archivo.")
 
         return jsonify({"error": "Formato de consulta inválido"}), 400
 
@@ -773,8 +786,7 @@ def setup_post_routes(app,mongo):
         # =============================================
         #   📂 Movemos archivos en Google Drive 📂
         # =============================================
-
-        print("query:", query)
+        
         matchMoverArchivo = re.search(r'archivo:(.+?) a carpeta:(.+)', query, re.IGNORECASE)
         print("ENTRAMOS A MOVER ARCHIVO EN GOOGLE DRIVE") 
         print("matchMoverArchivo:", matchMoverArchivo)
@@ -795,11 +807,15 @@ def setup_post_routes(app,mongo):
             
             response = requests.get(search_url, headers=headers, params=params)
             if response.status_code != 200 or not response.json().get('files'):
-                return jsonify({"error": "No se encontró el archivo"}), 404
+                return ({"message": "⚠️ No se encontró un archivo con ese nombre. ¿Podrías verificar y especificar el nombre correcto?"})
             
-            print("response:", response.json())
-            
-            file_id = response.json()['files'][0]['id']
+            # Si hay varios archivos con el mismo nombre, solicitamos que elija uno
+            files = response.json().get('files', [])
+            if len(files) > 1:
+                options = "\n".join([f"{i + 1}. {file['name']}" for i, file in enumerate(files)])
+                return ({"message": f"⚠️ Se encontraron varios archivos con el nombre '{file_name}'. Por favor, elige uno, copia el nombre completo e intentalo de nuevo:\n{options}"})
+
+            file_id = files[0]['id']
 
             # Buscar la carpeta en Google Drive
             params = {
@@ -869,7 +885,7 @@ def setup_post_routes(app,mongo):
         #   📂 Crear carpeta nueva en Google Drive 📂
         # =============================================
 
-        matchCrearCarpeta = re.search(r'crear\s*carpeta:\s*(.+)', query, re.IGNORECASE)
+        matchCrearCarpeta = re.search(r'crear\s*carpeta:\s*(.+?)\s+en\s*:\s*googledrive', query, re.IGNORECASE)
         if matchCrearCarpeta:
             folder_name = matchCrearCarpeta.group(1).strip()
 
@@ -944,9 +960,8 @@ def setup_post_routes(app,mongo):
                     # Crear el permiso para compartir con el destinatario
                     permission_url = f"https://www.googleapis.com/drive/v3/files/{file_id}/permissions"
                     permission_data = {
-                        "type": "user",
-                        "role": "reader",  # Puede ser 'reader' (solo lectura) o 'writer' (lectura y escritura)
-                        "emailAddress": email
+                        "type": "anyone",  # Esto lo haría accesible para cualquier persona
+                        "role": "reader",  # Puede ser 'reader' o 'writer'
                     }
 
                     permission_response = requests.post(permission_url, headers=headers, json=permission_data)

@@ -303,20 +303,27 @@ def setup_routes_chats(app, mongo):
                     f"ESPECIFICAMENTE SI Y SOLO SI LA SOLICITUD ES TIPO POST SIMPLE:\n"
                     f"OBLIGATORIO: Responde con 'es una solicitud post' seguido del JSON de abajo\n"
                     f"Detecta las acciones solicitadas por el usuario y genera la consulta para la API correspondiente:\n"
+                    
                     f"1. **Crear o Agregar elementos** (acciones como 'crear', 'agregar', 'añadir', 'subir', 'agendar', 'hacer', 'querer'):\n"
                     f"   - Ejemplo: Crear un contacto, tarea, archivo. (Esto se envía a Notion, Asana, ClickUp)\n"
-                    f"   - Si se menciona **'crear carpeta, hacer carpeta, quiero una carpeta o expresiones similares que involucren crear una nueva carpeta'**, la query OBLIGATORIAMENTE tiene que decir 'crear carpeta: nombreejemplo' \n"
+                    f"   - Si se menciona **'crear carpeta, hacer carpeta, quiero una carpeta o expresiones similares que involucren crear una nueva carpeta'**, la query OBLIGATORIAMENTE tiene que decir 'crear carpeta: nombreejemplo en: dropbox|googledrive|onedrive'. Si no se especifica, se asume Google Drive.\n"
+                    f"     - Ejemplo: 'crear carpeta: nombreejemplo en: Dropbox' → Se interpretará como 'crear carpeta: nombreejemplo en: Dropbox'.\n"
+                    f"     - Si no se menciona un servicio, se usará Google Drive por defecto: 'crear carpeta: nombreejemplo en: googledrive'.\n"
+                    
                     f"2. **Modificar o Editar elementos** (acciones como 'editar', 'modificar', 'actualizar', 'mover'):\n"
                     f"   - Ejemplo: Editar una tarea, archivo. (Esto se envía a Notion, Asana, ClickUp)\n"
+                    
                     f"3. **Eliminar elementos** (acciones como 'eliminar', 'borrar', 'suprimir'):\n"
                     f"   - Ejemplo: Eliminar un contacto, tarea, archivo. (Esto se envía a Notion, Asana, ClickUp)\n"
                     f"   - Si se menciona **'eliminar correos'**, debe enviarse a **Gmail** y **Outlook**\n"
                     f"   - Si se menciona **'elimina la cita'** o 'elimina la reunion' debe enviarse a **Gmail**\n"
+                    
                     f"4. **Mover elementos** (acciones como 'mover', 'trasladar', 'archivar', 'poner en spam', 'pasar a carpeta'):\n"
                     f"   - Ejemplo: 'Mueve el archivo Reporte.pdf a la carpeta Finanzas' o 'Traslada las imágenes recientes a la carpeta Proyectos'.\n"
                     f"   - Permite mover archivos o carpetas dentro de plataformas como **Google Drive, OneDrive y Dropbox**.\n"
                     f"   - Ejemplo: Mover un archivo o correo a una carpeta, o poner correos en spam. (Esto se envía a **Gmail** y **Outlook**)\n"
                     f"   - **Formato de query:** 'archivo: [nombre_archivo] a carpeta: [nombre_carpeta]' este formarto es OBLIGATORIO para cualquier consulta que diga mueve, pasa, mueveme un archivo o expresiones similares.\n"
+                    
                     f"5. **Enviar** (acciones como 'enviar', 'mandar', 'mándame', 'enviar por correo'):\n"
                     f"   - Ejemplo: Enviar un correo (Esto se envía a Gmail, Outlook, Teams, Slack)\n"
                     f"   - Si el usuario menciona solo un nombre de usuario sin dominio (por ejemplo, 'gallodelacruz'), asume que es un correo de Gmail y completa con '@gmail.com'.\n"
@@ -326,10 +333,16 @@ def setup_routes_chats(app, mongo):
                     f"     🔹 Esto debe interpretarse como 'gallodelacruz@gmail.com'.\n"
                     f"   - Ejemplo 2: 'enviar correo a gallodelacruz@outlook.com con asunto: Trabajo y cuerpo: Aquí está la info'.\n"
                     f"     🔹 Aquí se respeta el dominio 'outlook.com'.\n"
+                    f"   - Si el usuario no indica un destinatario, el destinatario obligatoriamente tiene que decir 'destinatario'\n"
+                    f"   - Si el usuario no indica un asunto, el asunto obligatoriamente tiene que decir 'n/a'\n"
+                    f"   - Si el usuario no indica un cuerpo, el cuerpo obligatoriamente tiene que decir 'n/a'\n"
                     f"   - Si el usuario dice 'mandame un correo', 'manda el correo' u otras expresiones similares tienes que tomarlo en cuenta\n"
                     f"   - Para que tomes en cuenta la solicitud tiene que decir OBLIGATORIAMENTE algo que tenga que ver con enviar, mandar, compartir, etc. un correo\n"
+                    f"   - OBLIGATORIO: Respetar el nombre del destinatario tal como lo ingresa el usuario, sin modificar letras ni números.\n"
+
                     f"6. **Agendar o Programar** (acciones como 'agendar', 'programar'):\n"
                     f"   - Ejemplo: Agendar cita en Gmail \n"
+                    
                     f"7. **Crear un borrador** (acciones como 'crear borrador', 'guardar borrador', 'crea un borrador'):\n"
                     f"   - Permite generar un borrador en plataformas como Gmail, Outlook, Teams o Slack.\n"
                     f"   - Puede incluir asunto, cuerpo del mensaje y otros detalles opcionales.\n"
@@ -337,6 +350,9 @@ def setup_routes_chats(app, mongo):
                     f"   - Ejemplo: 'Crea un borrador en Gmail con asunto: Reunión importante y cuerpo: Hola equipo, les comparto los puntos clave para la reunión'.\n"
                     f"   - También se puede solicitar de forma más general, como 'Guarda un borrador en Outlook con la idea para el informe'.\n"
                     f"   - La IA debe interpretar diferentes formas de pedir la creación de un borrador y adaptarse según el contexto y la plataforma seleccionada.\n"
+                    f"   - Si el usuario no indica un asunto, el asunto obligatoriamente tiene que decir 'n/a'\n"
+                    f"   - Si el usuario no indica un cuerpo, el cuerpo obligatoriamente tiene que decir 'n/a'\n"
+
                     f"8. **Compartir archivos o carpetas** (acciones como 'compartir archivo', 'compartir carpeta', 'enviar archivo', 'compartir con', 'enviar a'):\n"
                     f"   - Si no se especifica el dominio en los correos de destino, se asume '@gmail.com'.\n"
                     f"   - OBLIGATORIO: No agregar espacios innecesarios en los correos (Ejemplo: 'gallodelacruz@gmail.com', NO 'gallodelacruz@ gmail.com').\n"
@@ -346,6 +362,7 @@ def setup_routes_chats(app, mongo):
                     f"     - 'Compartir carpeta \"Proyectos\" con \"ejemplo1, ejemplo2\"' → Se comparte con 'ejemplo1@gmail.com, ejemplo2@gmail.com'.\n"
                     f"   - **Formato de query:** 'compartir archivo: [nombre_archivo] con: [correo]' o 'compartir carpeta: [nombre_carpeta] con: [correo]'.\n"
                     f"   - OBLIGATORIO: Respetar el nombre del destinatario tal como lo ingresa el usuario, sin modificar letras ni números.\n"
+                    
                     f"9. **Vaciar o Eliminar la Papelera** (acciones como 'vaciar papelera', 'eliminar papelera', 'borrar papelera', 'vaciar todo', 'limpiar papelera'):\n"
                     f"   - Se interpreta cualquier solicitud relacionada con la eliminación de archivos o carpetas en la papelera de Google Drive.\n"
                     f"   - Ejemplos:\n"
@@ -353,6 +370,14 @@ def setup_routes_chats(app, mongo):
                     f"     - Eliminar archivos de la papelera → Se eliminarán permanentemente los archivos en la papelera.\n"
                     f"     - Limpiar la papelera de Google Drive → Se vaciarán todos los elementos de la papelera.\n"
                     f"     - Borrar todo de la papelera → Se eliminarán de forma permanente los elementos en la papelera de Google Drive.\n"
+                    
+                    f"10. **Restaurar Archivos desde la Papelera** (acciones como 'restaurar archivo', 'recuperar archivo', 'devolver archivo', 'recuperar de la papelera'):\n"
+                    f"   - Se interpreta cualquier solicitud relacionada con la recuperación de archivos eliminados en Google Drive, Dropbox u otros servicios.\n"
+                    f"   - La solicitud debe contener obligatoriamente el formato: 'recuperar archivo: nombredearchivo'.\n"
+                    f"   - Ejemplos:\n"
+                    f"     - Recuperar archivo: documento.pdf → Se intentará recuperar 'documento.pdf' a su ubicación original.\n"
+                    f"     - Recuperar archivo: presentación.pptx → Se restaurará 'presentación.pptx' desde la papelera.\n"
+                    f"     - Recuperar archivo: informe.docx → Se buscará y restaurará 'informe.docx' desde la papelera.\n"
                     f"Cuando detectes una solicitud de POST, identifica a qué servicios corresponde basándote en las acciones. Usa 'N/A' para las APIs que no apliquen.\n"
                     f"**Generación de Consulta**: Asegúrate de que las consultas sean claras y sin palabras adicionales como '¿Podrías...?'. Utiliza los datos específicos proporcionados (nombre, fecha, tarea, etc.) para generar las queries."
                     f"**Estructura del JSON para la respuesta (con acciones del usuario):**\n"

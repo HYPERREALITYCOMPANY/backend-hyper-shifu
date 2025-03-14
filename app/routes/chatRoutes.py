@@ -283,6 +283,7 @@ def setup_routes_chats(app, mongo):
                     f"- Si no se puede interpretar una búsqueda específica para Teams, devuelve \"N/A\".\n"
                     f"- SI EL USUARIO MENCIONA EXPLICITAMENTE 'TEAMS' O 'MICROSOFT TEAMS' HAZ LA QUERY\n"
                     f"- SI EL USUARIO MENCIONA EXPLICITAMENTE 'TEAMS' O 'MICROSOFT TEAMS' HAZ LA QUERY"
+                    f"- SI SE PONE ALGUNA ACCIÓN POST, NO SE TOMA EN CUENTA NADA DE GET, COMPLETAMENTE OBLIGATORIO"
                     f"Estructura del JSON:\n"
                     f"{{\n"
                     f"    \"gmail\": \"<query para Gmail> Se conciso y evita palabras de solicitud y solo pon la query y evita los is:unread\",\n"
@@ -308,7 +309,8 @@ def setup_routes_chats(app, mongo):
                     f"   - Ejemplo: Crear un contacto, tarea, archivo. (Esto se envía a Notion, Asana, ClickUp)\n"
                     f"   - Si se menciona **'crear carpeta, hacer carpeta, quiero una carpeta o expresiones similares que involucren crear una nueva carpeta'**, la query OBLIGATORIAMENTE tiene que decir 'crear carpeta: nombreejemplo en: dropbox|googledrive|onedrive'. Si no se especifica, se asume Google Drive.\n"
                     f"     - Ejemplo: 'crear carpeta: nombreejemplo en: Dropbox' → Se interpretará como 'crear carpeta: nombreejemplo en: Dropbox'.\n"
-                    f"     - Si no se menciona un servicio, se usará Google Drive por defecto: 'crear carpeta: nombreejemplo en: googledrive'.\n"
+                    f"     - OBLIGATORIO: Si no se menciona un servicio, se usará Google Drive por defecto: 'crear carpeta: nombreejemplo en: googledrive'.\n"
+                    f"     - OBLIGATORIO: si no se menciona el nombre que se le quiere poner a la carpeta, se usará 'n/a' por defecto\n"
                     
                     f"2. **Modificar o Editar elementos** (acciones como 'editar', 'modificar', 'actualizar', 'mover'):\n"
                     f"   - Ejemplo: Editar una tarea, archivo. (Esto se envía a Notion, Asana, ClickUp)\n"
@@ -317,6 +319,8 @@ def setup_routes_chats(app, mongo):
                     f"   - Ejemplo: Eliminar un contacto, tarea, archivo. (Esto se envía a Notion, Asana, ClickUp)\n"
                     f"   - Si se menciona **'eliminar correos'**, debe enviarse a **Gmail** y **Outlook**\n"
                     f"   - Si se menciona **'elimina la cita'** o 'elimina la reunion' debe enviarse a **Gmail**\n"
+                    f"   - **Eliminar archivos de Google Drive, Dropbox o OneDrive**: Para eliminar un archivo, se debe especificar el nombre del archivo a eliminar. Si no se menciona el nombre, el nombre del archivo debe ser 'n/a'.\n"
+                    f"   - **Formato de query para Google Drive, Dropbox o OneDrive**: 'eliminar archivo: [nombre_archivo]'.\n"
                     
                     f"4. **Mover elementos** (acciones como 'mover', 'trasladar', 'archivar', 'poner en spam', 'pasar a carpeta'):\n"
                     f"   - Ejemplo: 'Mueve el archivo Reporte.pdf a la carpeta Finanzas' o 'Traslada las imágenes recientes a la carpeta Proyectos'.\n"
@@ -353,15 +357,18 @@ def setup_routes_chats(app, mongo):
                     f"   - Si el usuario no indica un asunto, el asunto obligatoriamente tiene que decir 'n/a'\n"
                     f"   - Si el usuario no indica un cuerpo, el cuerpo obligatoriamente tiene que decir 'n/a'\n"
 
-                    f"8. **Compartir archivos o carpetas** (acciones como 'compartir archivo', 'compartir carpeta', 'enviar archivo', 'compartir con', 'enviar a'):\n"
+                    f"8. **Compartir archivos o carpetas** (acciones como 'compartir archivo', 'comparte el archivo', 'compartir carpeta', 'enviar archivo', 'compartir con', 'enviar a'):\n"
                     f"   - Si no se especifica el dominio en los correos de destino, se asume '@gmail.com'.\n"
                     f"   - OBLIGATORIO: No agregar espacios innecesarios en los correos (Ejemplo: 'gallodelacruz@gmail.com', NO 'gallodelacruz@ gmail.com').\n"
                     f"   - Ejemplos:\n"
                     f"     - 'Comparte el archivo prueba con gallodelacruz' → Se interpreta como 'gallodelacruz@gmail.com'.\n"
+                    f"     - 'Comparte el archivo prueba\n"
                     f"     - 'Compartir archivo \"documento.pdf\" con \"ejemplo\"' → Se interpreta como 'ejemplo@gmail.com'.\n"
                     f"     - 'Compartir carpeta \"Proyectos\" con \"ejemplo1, ejemplo2\"' → Se comparte con 'ejemplo1@gmail.com, ejemplo2@gmail.com'.\n"
-                    f"   - **Formato de query:** 'compartir archivo: [nombre_archivo] con: [correo]' o 'compartir carpeta: [nombre_carpeta] con: [correo]'.\n"
+                    f"   - **Formato de query:** 'compartir archivo|carpeta: [nombre_archivo] con: [correo]' o 'compartir carpeta: [nombre_carpeta] con: [correo]'.\n"
                     f"   - OBLIGATORIO: Respetar el nombre del destinatario tal como lo ingresa el usuario, sin modificar letras ni números.\n"
+                    f"   - Si el usuario no indica un destinatario, el destinatario obligatoriamente tiene que decir 'n/a'\n"
+                    f"   - Si el usuario no indica el archivo_o_carpeta, obligatoriamente tiene que decir 'n/a' sin ningun otro caracter especial\n"
                     
                     f"9. **Vaciar o Eliminar la Papelera** (acciones como 'vaciar papelera', 'eliminar papelera', 'borrar papelera', 'vaciar todo', 'limpiar papelera'):\n"
                     f"   - Se interpreta cualquier solicitud relacionada con la eliminación de archivos o carpetas en la papelera de Google Drive.\n"
@@ -370,7 +377,7 @@ def setup_routes_chats(app, mongo):
                     f"     - Eliminar archivos de la papelera → Se eliminarán permanentemente los archivos en la papelera.\n"
                     f"     - Limpiar la papelera de Google Drive → Se vaciarán todos los elementos de la papelera.\n"
                     f"     - Borrar todo de la papelera → Se eliminarán de forma permanente los elementos en la papelera de Google Drive.\n"
-                    
+
                     f"10. **Restaurar Archivos desde la Papelera** (acciones como 'restaurar archivo', 'recuperar archivo', 'devolver archivo', 'recuperar de la papelera'):\n"
                     f"   - Se interpreta cualquier solicitud relacionada con la recuperación de archivos eliminados en Google Drive, Dropbox u otros servicios.\n"
                     f"   - La solicitud debe contener obligatoriamente el formato: 'recuperar archivo: nombredearchivo'.\n"

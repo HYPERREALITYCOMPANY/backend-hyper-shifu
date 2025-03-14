@@ -764,7 +764,7 @@ def setup_post_routes(app,mongo):
 
             return {"message": f"🎉 La carpeta '{folder_name}' ha sido eliminada de Dropbox con éxito! 🗑️"}
 
-        return jsonify({"error": "Formato de consulta inválido"}), 400
+        return ({"message": "Disculpa, no pude entender la acción que deseas realizar, intentalo de nuevo, porfavor."})
 
 #####################################################################################################################
     def post_to_googledrive(query):
@@ -782,6 +782,74 @@ def setup_post_routes(app,mongo):
         print("google drive token:", google_drive_token)
         if not google_drive_token:
             return jsonify({"error": "Token de Google Drive no disponible."}), 400
+        
+        # ============================================= 
+        #   📂 Compartir archivo o carpeta en Google Drive 📂
+        # =============================================
+        print("query compartir archivo:", query)
+        matchCompartirArchivo = re.search(r'compartir\s*(archivo|carpeta)\s*[:\s]*(\S.*)\s*con\s*(.+)', query, re.IGNORECASE)
+        print("matchCompartirArchivo", matchCompartirArchivo)
+        if matchCompartirArchivo:
+            tipo_archivo = matchCompartirArchivo.group(1).strip()  # 'archivo' o 'carpeta'
+            archivo_o_carpeta = matchCompartirArchivo.group(2).strip()  # Nombre del archivo o carpeta
+            destinatarios = matchCompartirArchivo.group(3).strip()  # Los destinatarios a quienes compartir
+
+            # Imprimir para debug
+            print(f"Tipo de archivo: {tipo_archivo}")
+            print(f"Archivo/Carpeta: {archivo_o_carpeta}")
+            print(f"Destinatarios: {destinatarios}")
+
+            # Verificar si se encontró el archivo o carpeta
+            if archivo_o_carpeta == 'n/a':
+                return {"message": "⚠️ ¡Oh no! No se ha especificado el nombre del archivo o carpeta. 📂 Por favor, intenta de nuevo con el nombre de lo que quieres compartir. ✍️"}
+
+            # Validar si se especificaron destinatarios
+            if destinatarios == ': n/a':
+                return {"message": "⚠️ ¡Ups! No se especificaron destinatarios. 🤔 Indica a quién deseas compartirlo. 👥"}
+            
+            # Buscar el archivo o carpeta en Google Drive
+            url = "https://www.googleapis.com/drive/v3/files"
+            headers = {"Authorization": f"Bearer {google_drive_token}"}
+            params = {
+                "q": f"name contains '{archivo_o_carpeta}'",
+                "spaces": "drive",
+                "fields": "files(id,name)",
+            }
+            response = requests.get(url, headers=headers, params=params)
+            response.raise_for_status()
+            results = response.json().get('files', [])
+            
+            # Verificar si hay varios resultados
+            if len(results) > 1:
+                options = "\n".join([f"{i+1}. {result['name']}" for i, result in enumerate(results)])
+                return {"message": f"⚠️ ¡Varios archivos o carpetas encontrados! Por favor, elige el que deseas compartir:\n{options}\n\nIndica el nombre exacto."}
+
+            if results:
+                file_id = results[0]['id']
+                print(f"Se encontró el archivo/carpeta con ID: {file_id}")
+
+                # Ahora, compartimos el archivo o carpeta con los destinatarios
+                for destinatario in destinatarios.split(','):
+                    email = destinatario.strip()  # Asegurarse de que no tenga espacios extra
+
+                    # Crear el permiso para compartir con el destinatario
+                    permission_url = f"https://www.googleapis.com/drive/v3/files/{file_id}/permissions"
+                    permission_data = {
+                        "type": "anyone",  # Esto lo haría accesible para cualquier persona
+                        "role": "reader",  # Puede ser 'reader' o 'writer'
+                    }
+
+                    permission_response = requests.post(permission_url, headers=headers, json=permission_data)
+                    
+                    if permission_response.status_code == 200:
+                        print(f"Archivo compartido con éxito con: {email}")
+                    else:
+                        print(f"Error al compartir el archivo con {email}: {permission_response.json()}")
+
+                return {"message": f"🚀✨ ¡El archivo o carpeta '{archivo_o_carpeta}' ha sido compartido exitosamente! 📤 ¡A tus destinatarios les llegará en un abrir y cerrar de ojos! 🌟"}
+
+            else:
+                return {"message": "❌ ¡Ups! No encontramos el archivo o la carpeta con ese nombre. Revisa y prueba de nuevo. 📂🔍"}
         
         # =============================================
         #   📂 Movemos archivos en Google Drive 📂
@@ -825,9 +893,15 @@ def setup_post_routes(app,mongo):
 
             response = requests.get(search_url, headers=headers, params=params)
             if response.status_code != 200 or not response.json().get('files'):
-                return jsonify({"error": "No se encontró la carpeta"}), 404
+                return ({"message": "⚠️ No se encontró una carpeta con ese nombre. ¿Podrías verificar y especificar el nombre correcto?"})
             
-            folder_id = response.json()['files'][0]['id']
+            # Si hay varias carpetas con el mismo nombre, solicitamos que elija una
+            folders = response.json().get('files', [])
+            if len(folders) > 1:
+                options = "\n".join([f"{i + 1}. {folder['name']}" for i, folder in enumerate(folders)])
+                return ({"message": f"⚠️ Se encontraron varias carpetas con el nombre '{folder_name}'. Por favor, elige una, copia el nombre completo e intentalo de nuevo:\n{options}"})
+
+            folder_id = folders[0]['id']
 
             # Mover el archivo a la carpeta
             file_url = f"https://www.googleapis.com/drive/v3/files/{file_id}"
@@ -839,11 +913,16 @@ def setup_post_routes(app,mongo):
             return {"message": f"🎉 El archivo '{file_name}' ha sido movido a la carpeta '{folder_name}' en Google Drive con éxito!"}
 
         # =============================================
-        #   🗑️ Eliminamos archivos de Google Drive 🗑️
+        #   🗑️ Eliminar archivos de Google Drive 
         # =============================================
         matchEliminarDrive = re.search(r'(Eliminar\s*archivo|archivo):\s*(.+)', query, re.IGNORECASE)
         if matchEliminarDrive:
             file_name = matchEliminarDrive.group(2).strip()  # Nombre del archivo
+            print("file_name:", file_name)
+
+            # Verificamos si se proporcionó el nombre del archivo
+            if file_name == 'n/a':
+                return ({"message": "⚠️ ¡Debes especificar el nombre del archivo que deseas eliminar! 📂"})
 
             # Buscar el archivo en Google Drive
             url = "https://www.googleapis.com/drive/v3/files"
@@ -861,6 +940,10 @@ def setup_post_routes(app,mongo):
             results = response.json().get('files', [])
 
             file_id = None
+            if len(results) > 1:
+                options = "\n".join([f"{i + 1}. {result['name']}" for i, result in enumerate(results)])
+                return ({"message": f"⚠️ Se encontraron varios archivos con el nombre '{file_name}'. Por favor, elige uno de los siguientes:\n{options}"})
+
             for result in results:
                 google_drive_file_name = result['name']
                 google_drive_file_id = result['id']
@@ -871,7 +954,7 @@ def setup_post_routes(app,mongo):
                     break
 
             if not file_id:
-                return jsonify({"error": f"Archivo '{file_name}' no encontrado o ya en la papelera"}), 404
+                return ({"message": f"⚠️ No se encontró el archivo '{file_name}' o ya está en la papelera. Verifica el nombre e intenta de nuevo."})
 
             # Mover el archivo a la papelera
             trash_url = f"https://www.googleapis.com/drive/v3/files/{file_id}"
@@ -879,7 +962,7 @@ def setup_post_routes(app,mongo):
             trash_response = requests.patch(trash_url, headers=headers, json=trash_data)
             trash_response.raise_for_status()
 
-            return {"message": f"🗑️ El archivo '{file_name}' ha sido movido a la papelera de Google Drive con éxito!"}
+            return ({"message": f"🗑️ El archivo '{file_name}' ha sido movido a la papelera de Google Drive con éxito! 🚀"})
         
         # ============================================= 
         #   📂 Crear carpeta nueva en Google Drive 📂
@@ -888,6 +971,11 @@ def setup_post_routes(app,mongo):
         matchCrearCarpeta = re.search(r'crear\s*carpeta:\s*(.+?)\s+en\s*:\s*googledrive', query, re.IGNORECASE)
         if matchCrearCarpeta:
             folder_name = matchCrearCarpeta.group(1).strip()
+            print("folder_name:", folder_name)
+
+            # Si no se especifica un nombre de carpeta, usar "Nueva Carpeta" por defecto
+            if folder_name == 'n/a':
+                return ({"message": "⚠️ ¡Ups! Parece que olvidaste especificar el nombre de la carpeta. 🗂️ Por favor, inténtalo de nuevo y asegúrate de incluirlo. ✨"})
 
             # Crear la carpeta en Google Drive
             url = "https://www.googleapis.com/drive/v3/files"
@@ -896,12 +984,12 @@ def setup_post_routes(app,mongo):
                 "name": folder_name,
                 "mimeType": "application/vnd.google-apps.folder"
             }
-            
+
             response = requests.post(url, headers=headers, json=metadata)
-            
+
             if response.status_code != 200:
-                return jsonify({"error": "No se pudo crear la carpeta"}), 500
-            
+                return ({"message": "⚠️ No se pudo crear la carpeta. Intenta de nuevo."})
+
             folder_id = response.json().get('id')
 
             return {"message": f"🚀✨ ¡Éxito! La carpeta '{folder_name}' ha sido creada en Google Drive 🗂️📂. ¡Todo listo para organizar tus archivos! 🎉"}
@@ -917,66 +1005,9 @@ def setup_post_routes(app,mongo):
             headers = {"Authorization": f"Bearer {google_drive_token}"}
 
             response = requests.delete(empty_trash_url, headers=headers)
-            return {"message": "🗑️ ¡La papelera de Google Drive ha sido vaciada con éxito! Todo lo que estaba ahí, ¡ya no está! 🚮"}
-        
-        # ============================================= 
-        #   📂 Compartir archivo o carpeta en Google Drive 📂
-        # =============================================
-        print("query compartir archivo:", query)
-        matchCompartirArchivo = re.search(r'compartir\s*(archivo|carpeta)\s*[:\s]*(\S.*)\s*con\s*(.+)', query, re.IGNORECASE)
-        print("matchCompartirArchivo", matchCompartirArchivo)
-        if matchCompartirArchivo:
-            tipo_archivo = matchCompartirArchivo.group(1).strip()  # 'archivo' o 'carpeta'
-            archivo_o_carpeta = matchCompartirArchivo.group(2).strip()  # Nombre del archivo o carpeta
-            destinatarios = matchCompartirArchivo.group(3).strip()  # Los destinatarios a quienes compartir
+            return {"message": "🗑️ ¡La papelera de Google Drive ha sido vaciada con éxito! Todo lo que estaba ahí, ¡ya no está! 🚮"}       
 
-            # Imprimir para debug
-            print(f"Tipo de archivo: {tipo_archivo}")
-            print(f"Archivo/Carpeta: {archivo_o_carpeta}")
-            print(f"Destinatarios: {destinatarios}")
-
-            # Buscar el archivo o carpeta en Google Drive
-            url = "https://www.googleapis.com/drive/v3/files"
-            headers = {"Authorization": f"Bearer {google_drive_token}"}
-            params = {
-                "q": f"name contains '{archivo_o_carpeta}'",
-                "spaces": "drive",
-                "fields": "files(id,name)",
-            }
-            response = requests.get(url, headers=headers, params=params)
-            response.raise_for_status()
-            results = response.json().get('files', [])
-            
-            print("resultado de la busqueda", results)
-
-            if results:
-                file_id = results[0]['id']
-                print(f"Se encontró el archivo/carpeta con ID: {file_id}")
-
-                # Ahora, compartimos el archivo o carpeta con los destinatarios
-                for destinatario in destinatarios.split(','):
-                    email = destinatario.strip()  # Asegurarse de que no tenga espacios extra
-
-                    # Crear el permiso para compartir con el destinatario
-                    permission_url = f"https://www.googleapis.com/drive/v3/files/{file_id}/permissions"
-                    permission_data = {
-                        "type": "anyone",  # Esto lo haría accesible para cualquier persona
-                        "role": "reader",  # Puede ser 'reader' o 'writer'
-                    }
-
-                    permission_response = requests.post(permission_url, headers=headers, json=permission_data)
-                    
-                    if permission_response.status_code == 200:
-                        print(f"Archivo compartido con éxito con: {email}")
-                    else:
-                        print(f"Error al compartir el archivo con {email}: {permission_response.json()}")
-
-                return {"message": f"📤 ¡El archivo o carpeta '{archivo_o_carpeta}' ha sido compartido con éxito!"}
-
-            else:
-                return {"error": "⚠️ No se encontró el archivo o carpeta con ese nombre."}        
-
-        return jsonify({"error": "Formato de consulta inválido"}), 400
+        return ({"message": "Disculpa, no pude entender la acción que deseas realizar, intentalo de nuevo, porfavor."})
 
 #################################################################################################################    
     def post_to_onedrive(query):

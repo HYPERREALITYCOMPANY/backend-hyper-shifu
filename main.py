@@ -41,7 +41,7 @@ def create_app():
         print("Error al conectar con MongoDB:", e)
 
     setup_routes(app, mongo, cache)
-    setup_auth_routes(app, mongo)
+    setup_auth_routes(app, mongo, cache)
     setup_user_routes(app, mongo, cache)
     setup_integrations_routes(app, mongo, cache)
     setup_routes_secretary_posts(app, mongo, cache)

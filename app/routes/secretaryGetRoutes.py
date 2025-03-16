@@ -119,17 +119,28 @@ def setup_routes_secretary_gets(app, mongo, cache):
                 return jsonify({"error": "Token no disponible"}), 400
 
             headers = get_gmail_headers(token)
-            response = requests.get("https://www.googleapis.com/gmail/v1/users/me/messages?maxResults=1", headers=headers)
+            # Filtrar solo correos en bandeja de entrada, excluyendo enviados por el usuario
+            response = requests.get(
+                "https://www.googleapis.com/gmail/v1/users/me/messages",
+                headers=headers,
+                params={
+                    "maxResults": 1,
+                    "q": "in:inbox -from:me"  # Solo recibidos en la bandeja de entrada
+                }
+            )
 
             if response.status_code != 200:
                 return jsonify({"error": "Error al obtener correos"}), response.status_code
 
             messages = response.json().get("messages", [])
             if not messages:
-                return jsonify({"error": "No hay correos nuevos por ahora, ¿reviso otra vez en un rato?"}), 404
+                return jsonify({"error": "No hay correos nuevos en tu bandeja de entrada, ¿reviso luego?"}), 404
 
             message_id = messages[0]["id"]
-            response = requests.get(f"https://www.googleapis.com/gmail/v1/users/me/messages/{message_id}?format=full", headers=headers)
+            response = requests.get(
+                f"https://www.googleapis.com/gmail/v1/users/me/messages/{message_id}?format=full",
+                headers=headers
+            )
             message = response.json()
             headers_list = message.get("payload", {}).get("headers", [])
 
@@ -144,7 +155,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
             })
         except Exception as e:
             return jsonify({"error": "Uy, algo salió mal al revisar tu Gmail, ¿lo intento de nuevo?", "details": str(e)}), 500
-        
+                
     @app.route("/ultima-notificacion/outlook", methods=["GET"])
     def obtener_ultimo_correo_outlook():
         email = request.args.get("email")
@@ -158,9 +169,14 @@ def setup_routes_secretary_gets(app, mongo, cache):
                 return jsonify({"error": "Token no disponible"}), 400
 
             headers = get_outlook_headers(token)
+            # Usar 'inbox' directamente en lugar de buscar el ID
             response = requests.get(
-                "https://graph.microsoft.com/v1.0/me/messages?$top=1&$filter=parentFolderId ne 'JunkEmail'",
-                headers=headers
+                "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages",
+                headers=headers,
+                params={
+                    "$top": 1,
+                    "$orderby": "receivedDateTime desc"  # Último recibido
+                }
             )
 
             if response.status_code != 200:
@@ -168,7 +184,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
 
             messages = response.json().get("value", [])
             if not messages:
-                return jsonify({"error": "No hay correos nuevos en Outlook, ¿te aviso si llega algo?"}), 404
+                return jsonify({"error": "No hay correos nuevos en tu bandeja de entrada, ¿te aviso si llega algo?"}), 404
 
             message = messages[0]
             return jsonify({
@@ -534,7 +550,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
             return jsonify({
                 "from": "HubSpot",
                 "subject": f"Oye, hay algo nuevo en HubSpot",
-                "snippet": f"Es un {entity_type} llamado '{subject}'. Escribe abajo: 'cierra', 'sigue' o 'actualiza'.",
+                "snippet": f"Es un {entity_type} llamado '{subject}'. Escribe abajo tu acción que quieres hacer: 'cierra', 'elimina' o 'actualiza'.",
                 "id": latest_update["data"]["id"]
             })
         except Exception as e:

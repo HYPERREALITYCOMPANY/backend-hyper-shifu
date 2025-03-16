@@ -478,7 +478,7 @@ def setup_routes_chats(app, mongo, cache):
                         - En todos los casos, solo incluye en el JSON los servicios que son relevantes para la solicitud específica """},
                         {"role": "user", "content": prompt}
                     ],
-                    max_tokens=4000
+                    max_tokens=3500
                 )
                 ia_interpretation = response.choices[0].message.content.strip().lower()
                 print(ia_interpretation)

@@ -1,10 +1,8 @@
 from flask import request, jsonify
 import requests
-from datetime import datetime
 from zoneinfo import ZoneInfo
-from app import services
 from config import Config
-from datetime import datetime
+from datetime import datetime, timedelta
 import re
 import json
 import openai
@@ -42,25 +40,63 @@ def setup_post_routes(app,mongo,cache):
         # =============================================
         if "create_event" in query:
             try:
+                user_timezone="America/Mexico_City"
                 parts = query.split("|")
-                summary = parts[1].split(":")[1]
-                start = parts[2].split(":")[1]
-                end = parts[3].split(":")[1]
+                summary = parts[1].split(":")[1]  # Extrae el asunto
+                start = parts[2].split(":")[1]    # Extrae la fecha/hora de inicio
+                end = parts[3].split(":")[1] if len(parts) > 3 else None  # Extrae la fecha/hora de fin, si existe
+
+                # Normalizar fechas al formato ISO 8601 completo y respetar la hora del usuario
+                def normalize_datetime(dt_str):
+                    dt_str = dt_str.replace("t", "T")  # Asegurar T mayúscula
+                    try:
+                        dt = datetime.fromisoformat(dt_str.replace("Z", ""))
+                        # Si no tiene minutos/segundos, añadirlos
+                        if "T" in dt_str and ":" not in dt_str.split("T")[1]:
+                            dt = datetime.fromisoformat(dt_str + ":00:00")
+                    except ValueError:
+                        # Si solo viene la hora (ej., "2025-03-17T17"), completar
+                        if "T" in dt_str and ":" not in dt_str.split("T")[1]:
+                            dt_str += ":00:00"
+                        dt = datetime.fromisoformat(dt_str)
+                    return dt
+
+                # Convertir las fechas a objetos datetime
+                start_dt = normalize_datetime(start)
+                if not end:  # Si no hay end, asumir 1 hora de duración
+                    end_dt = start_dt + timedelta(hours=1)
+                else:
+                    end_dt = normalize_datetime(end)
+                    # Validar que end sea posterior a start
+                    if end_dt <= start_dt:
+                        end_dt = start_dt + timedelta(hours=1)
+
+                # Formatear las fechas en ISO con la zona horaria del usuario
+                start_iso = start_dt.isoformat()
+                end_iso = end_dt.isoformat()
+
                 event = {
                     "summary": summary,
-                    "start": {"dateTime": start, "timeZone": "UTC"},
-                    "end": {"dateTime": end, "timeZone": "UTC"}
+                    "start": {"dateTime": start_iso, "timeZone": user_timezone},  # Usar zona horaria local
+                    "end": {"dateTime": end_iso, "timeZone": user_timezone}
                 }
                 url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
                 headers = {"Authorization": f"Bearer {gmail_token}", "Content-Type": "application/json"}
                 response = requests.post(url, json=event, headers=headers)
-                if response.status_code == 200:
-                    return {"message": f"Evento creado con éxito: {summary} desde {start} hasta {end} 📅"}
-                else:
-                    return {"error": "No se pudo crear el evento"}
-            except Exception as e:
-                return {"error": f"Error al procesar la query para crear evento: {e}"}
 
+                if response.status_code == 200:
+                    # Formatear las fechas para el mensaje de forma amigable
+                    start_str = start_dt.strftime("%I:%M %p").lstrip("0")  # Ej: "5:00 PM"
+                    end_str = end_dt.strftime("%I:%M %p").lstrip("0")      # Ej: "6:00 PM"
+                    date_str = start_dt.strftime("%d/%m/%Y")               # Ej: "17/03/2025"
+                    return {
+                        "message": f"¡Listo! Tu evento '{summary}' está agendado para el {date_str} de {start_str} a {end_str} 🎉📅 ¡Nos vemos ahí!"
+                    }
+                else:
+                    return {"error": f"Uops, algo salió mal al crear tu evento 😞: {response.text}"}
+            except Exception as e:
+                return {"error": f"¡Ay no! Falló algo al agendar tu evento 😱: {str(e)}"}
+            
         # =============================================
         #   Búsqueda y eliminación/movimiento a spam de correos en Gmail 📧
         # =============================================

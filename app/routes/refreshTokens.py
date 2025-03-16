@@ -65,7 +65,7 @@ def setup_routes_refresh(app, mongo, cache):
         return response.json()["access_token"]
 
     def refresh_asana_token(refresh_token):
-        url = "https://app.asana.com/-/oauth_token"  # URL corregida
+        url = "https://app.asana.com/-/oauth_token"
         data = {
             "grant_type": "refresh_token",
             "client_id": os.getenv("ASANA_CLIENT_ID"),
@@ -76,7 +76,7 @@ def setup_routes_refresh(app, mongo, cache):
         
         try:
             response = requests.post(url, data=data, headers=headers)
-            print(f"Respuesta de Asana (status: {response.status_code}): {response.text}")  # Depuración
+            print(f"Respuesta de Asana (status: {response.status_code}): {response.text}")
             response.raise_for_status()
             
             response_json = response.json()
@@ -121,7 +121,15 @@ def setup_routes_refresh(app, mongo, cache):
         errors = {}
         target_integrations = {integration_name: integrations[integration_name]} if integration_name else integrations
 
+        # Lista de integraciones soportadas
+        supported_integrations = ["Gmail", "Dropbox", "Asana", "HubSpot", "Drive"]
+
         for name, refresh_token in target_integrations.items():
+            # Solo intentar refrescar si la integración está soportada
+            if name not in supported_integrations:
+                print(f"Ignorando {name}: no es una integración soportada para refresco")
+                continue
+
             try:
                 new_access_token = None
                 if name == "Gmail":

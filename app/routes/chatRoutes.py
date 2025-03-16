@@ -312,11 +312,12 @@ def setup_routes_chats(app, mongo, cache):
                 f"6. **Agendar o Programar** (acciones como 'agendar', 'programar').\n"
                 f"7. **Crear un borrador** (acciones como 'crear borrador', 'guardar borrador').\n"
                 f"8. **Compartir archivos o carpetas** (acciones como 'compartir archivo', 'compartir carpeta').\n\n"
-                f"""- Si la solicitud implica crear un evento en Google Calendar (por ejemplo, con palabras como 'haz una reunión', 'agenda', 'agendar', 'programar' y menciona 'Google Calendar' o 'calendario'), genera una query para la clave "gmail" en el formato: "create_event|summary:<asunto>|start:<fecha_inicio>|end:<fecha_fin>", donde:
-                    - <asunto> es el título del evento extraído de la consulta (con la primera letra en mayúscula).
+                """- Si la solicitud implica crear un evento en Google Calendar (por ejemplo, con palabras como 'haz una reunión', 'agenda', 'agendar', 'programar' y menciona 'Google Calendar' o 'calendario'), genera una query para la clave "gmail" en el formato: "create_event|summary:<asunto>|start:<fecha_inicio>|end:<fecha_fin>[|attendees:<lista_de_correos>][|meet:True]", donde:
+                    - <asunto> es el título del evento extraído de la consulta (con la primera letra en mayúscula). Si no se especifica un título claro, usa "Reunión" por defecto.
                     - <fecha_inicio> y <fecha_fin> están en formato ISO (ej., "2023-10-18T14:00:00"), calculadas a partir de la fecha y hora proporcionadas por el usuario y la fecha actual ({hoy}). Si no se especifica duración, asume 1 hora por defecto.
-                    - Usa la fecha actual ({hoy}) para inferir el mes y año si el usuario solo menciona el día (ej., "el 18" → "2023-10-18" si hoy es octubre de 2023). """
-                
+                    - Usa la fecha actual ({hoy}) para inferir el mes y año si el usuario solo menciona el día (ej., "el 18" → "2023-10-18" si hoy es octubre de 2023).
+                    - Si se mencionan asistentes (palabras como 'con', 'junto a', 'invita a', seguidas de nombres propios o correos electrónicos), agrega '|attendees:<correo1>,<correo2>,...' al final de la query. Detecta correos electrónicos con el formato '<texto>@<dominio>.<extensión>' y nombres propios como palabras con mayúscula inicial que no sean verbos ni preposiciones. Si no se detecta un correo válido, usa '<nombre>@example.com' como placeholder.
+                    - Si se menciona explícitamente 'Meet', 'Google Meet' o 'videollamada', agrega '|meet:True' al final de la query para indicar que se debe crear un enlace de Google Meet."""
                 f"Estructura del JSON para POST simple:\n"
                 f"{{\n"
                 f"    \"gmail\": \"<query para Gmail o 'N/A' si no aplica>\",\n"

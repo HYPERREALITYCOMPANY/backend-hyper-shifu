@@ -40,64 +40,119 @@ def setup_post_routes(app,mongo,cache):
         # =============================================
         if "create_event" in query:
             try:
-                user_timezone="America/Mexico_City"
+                user_timezone = "America/Mexico_City"
                 parts = query.split("|")
-                summary = parts[1].split(":")[1]  # Extrae el asunto
-                start = parts[2].split(":")[1]    # Extrae la fecha/hora de inicio
-                end = parts[3].split(":")[1] if len(parts) > 3 else None  # Extrae la fecha/hora de fin, si existe
+                
+                # Extraer parámetros específicos
+                summary = next((p.split(":", 1)[1] for p in parts if p.startswith("summary:")), "Reunión por defecto")
+                start_str = next((p.split(":", 1)[1] for p in parts if p.startswith("start:")), None)
+                end_str = next((p.split(":", 1)[1] for p in parts if p.startswith("end:")), None)
+                attendees_str = next((p.split(":", 1)[1] for p in parts if p.startswith("attendees:")), None)
+                meet = any(p.strip() == "meet:True" for p in parts)  # Opcional, pero no será necesario
 
-                # Normalizar fechas al formato ISO 8601 completo y respetar la hora del usuario
-                def normalize_datetime(dt_str):
-                    dt_str = dt_str.replace("t", "T")  # Asegurar T mayúscula
+                # Validar parámetro obligatorio de inicio
+                if not start_str:
+                    return {"error": "Falta la fecha de inicio en la query"}
+
+                # Función para normalizar la fecha/hora
+                def parse_datetime(dt_str):
+                    # Reemplazar "t" minúscula por "T" y "Z" por zona horaria UTC
+                    dt_str = dt_str.replace("t", "T")
+                    dt_str = dt_str.replace("Z", "+00:00")
+                    
                     try:
-                        dt = datetime.fromisoformat(dt_str.replace("Z", ""))
-                        # Si no tiene minutos/segundos, añadirlos
-                        if "T" in dt_str and ":" not in dt_str.split("T")[1]:
-                            dt = datetime.fromisoformat(dt_str + ":00:00")
+                        dt = datetime.fromisoformat(dt_str)
                     except ValueError:
-                        # Si solo viene la hora (ej., "2025-03-17T17"), completar
-                        if "T" in dt_str and ":" not in dt_str.split("T")[1]:
-                            dt_str += ":00:00"
+                        # Si el formato es incompleto, completamos hasta segundos
+                        if "T" in dt_str:
+                            time_part = dt_str.split("T")[1]
+                            if len(time_part) == 2:  # Solo hora (ej. 10)
+                                dt_str += ":00:00"
+                            elif len(time_part) == 5:  # Hora y minutos (ej. 10:30)
+                                dt_str += ":00"
                         dt = datetime.fromisoformat(dt_str)
                     return dt
 
-                # Convertir las fechas a objetos datetime
-                start_dt = normalize_datetime(start)
-                if not end:  # Si no hay end, asumir 1 hora de duración
+                # Normalizar fechas
+                start_dt = parse_datetime(start_str)
+                if not end_str:
                     end_dt = start_dt + timedelta(hours=1)
                 else:
-                    end_dt = normalize_datetime(end)
-                    # Validar que end sea posterior a start
+                    end_dt = parse_datetime(end_str)
                     if end_dt <= start_dt:
                         end_dt = start_dt + timedelta(hours=1)
-
-                # Formatear las fechas en ISO con la zona horaria del usuario
-                start_iso = start_dt.isoformat()
-                end_iso = end_dt.isoformat()
-
+                
+                # Construir el objeto del evento
                 event = {
                     "summary": summary,
-                    "start": {"dateTime": start_iso, "timeZone": user_timezone},  # Usar zona horaria local
-                    "end": {"dateTime": end_iso, "timeZone": user_timezone}
+                    "start": {
+                        "dateTime": start_dt.isoformat(),
+                        "timeZone": user_timezone
+                    },
+                    "end": {
+                        "dateTime": end_dt.isoformat(),
+                        "timeZone": user_timezone
+                    },
+                    # Agregar Google Meet por defecto
+                    "conferenceData": {
+                        "createRequest": {
+                            "requestId": f"meet-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+                            "conferenceSolutionKey": {"type": "hangoutsMeet"}
+                        }
+                    }
                 }
+
+                # Agregar asistentes si se especifican
+                if attendees_str:
+                    attendees = [{"email": email.strip()} for email in attendees_str.split(",")]
+                    event["attendees"] = attendees
+
+                # Configurar la solicitud a la API de Google Calendar
                 url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
-                headers = {"Authorization": f"Bearer {gmail_token}", "Content-Type": "application/json"}
-                response = requests.post(url, json=event, headers=headers)
+                headers = {
+                    "Authorization": f"Bearer {gmail_token}",
+                    "Content-Type": "application/json"
+                }
+                # Configurar parámetros para notificaciones y Google Meet
+                params = {
+                    "sendNotifications": "true",
+                    "conferenceDataVersion": "1"  # Versión 2 para Google Meet
+                }
+
+                response = requests.post(url, json=event, headers=headers, params=params)
 
                 if response.status_code == 200:
-                    # Formatear las fechas para el mensaje de forma amigable
-                    start_str = start_dt.strftime("%I:%M %p").lstrip("0")  # Ej: "5:00 PM"
-                    end_str = end_dt.strftime("%I:%M %p").lstrip("0")      # Ej: "6:00 PM"
-                    date_str = start_dt.strftime("%d/%m/%Y")               # Ej: "17/03/2025"
+                    json_response = response.json()
+
+                    # Obtener enlace de Google Meet
+                    hangout_link = None
+                    if "hangoutLink" in json_response:
+                        hangout_link = json_response["hangoutLink"]
+                    elif "conferenceData" in json_response and "entryPoints" in json_response["conferenceData"]:
+                        for entry in json_response["conferenceData"]["entryPoints"]:
+                            if entry.get("entryPointType") == "video":
+                                hangout_link = entry.get("uri")
+                                break
+
+                    # Formatear fechas para el mensaje
+                    start_formatted = start_dt.strftime("%d/%m/%Y %H:%M")
+                    end_formatted = end_dt.strftime("%d/%m/%Y %H:%M")
+
+                    meet_msg = f"\nEnlace de Google Meet: {hangout_link}" if hangout_link else "\n(No se encontró enlace de Meet en la respuesta)"
+
                     return {
-                        "message": f"¡Listo! Tu evento '{summary}' está agendado para el {date_str} de {start_str} a {end_str} 🎉📅 ¡Nos vemos ahí!"
+                        "message": (
+                            f"Evento creado con éxito: {summary}\n"
+                            f"Fecha: {start_formatted} - {end_formatted}"
+                        )
                     }
                 else:
-                    return {"error": f"Uops, algo salió mal al crear tu evento 😞: {response.text}"}
+                    return {
+                        "error": f"No se pudo crear el evento. Respuesta de Google: {response.text}"
+                    }
             except Exception as e:
-                return {"error": f"¡Ay no! Falló algo al agendar tu evento 😱: {str(e)}"}
-            
-        # =============================================
+                return {"error": f"Error al procesar la query para crear evento: {e}"}
+    # =============================================
         #   Búsqueda y eliminación/movimiento a spam de correos en Gmail 📧
         # =============================================
         match = re.search(r'todos los correos de (.+)', query, re.IGNORECASE)

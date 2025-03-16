@@ -38,13 +38,35 @@ def setup_post_routes(app,mongo,cache):
             return jsonify({"error": "Token de Gmail no disponible"}), 400
 
         # =============================================
-        #   Busqueda de correos de gmail 📧
+        #   Crear evento en Google Calendar 📅
         # =============================================
+        if "create_event" in query:
+            try:
+                parts = query.split("|")
+                summary = parts[1].split(":")[1]
+                start = parts[2].split(":")[1]
+                end = parts[3].split(":")[1]
+                event = {
+                    "summary": summary,
+                    "start": {"dateTime": start, "timeZone": "UTC"},
+                    "end": {"dateTime": end, "timeZone": "UTC"}
+                }
+                url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+                headers = {"Authorization": f"Bearer {gmail_token}", "Content-Type": "application/json"}
+                response = requests.post(url, json=event, headers=headers)
+                if response.status_code == 200:
+                    return {"message": f"Evento creado con éxito: {summary} desde {start} hasta {end} 📅"}
+                else:
+                    return {"error": "No se pudo crear el evento"}
+            except Exception as e:
+                return {"error": f"Error al procesar la query para crear evento: {e}"}
 
+        # =============================================
+        #   Búsqueda y eliminación/movimiento a spam de correos en Gmail 📧
+        # =============================================
         match = re.search(r'todos los correos de (.+)', query, re.IGNORECASE)
         if match:
             sender = match.group(1)
-            # Determinar la acción: "delete" para eliminar, "spam" para mover a spam.
             action = "delete" if "eliminar" in query.lower() else "spam" if "mover a spam" in query.lower() else None
 
             if not action:
@@ -53,7 +75,6 @@ def setup_post_routes(app,mongo,cache):
             headers = {"Authorization": f"Bearer {gmail_token}", "Content-Type": "application/json"}
             
             if action == "delete":
-                # Primero, buscamos los mensajes del remitente especificado
                 list_url = "https://www.googleapis.com/gmail/v1/users/me/messages"
                 params = {"q": f"from:{sender}"}
                 list_response = requests.get(list_url, headers=headers, params=params)
@@ -63,7 +84,6 @@ def setup_post_routes(app,mongo,cache):
                     return {"error": f"No se encontraron correos del remitente {sender}"}
                 
                 delete_results = []
-                # Para cada mensaje, movemos a la papelera
                 for msg in messages:
                     message_id = msg["id"]
                     delete_url = f"https://www.googleapis.com/gmail/v1/users/me/messages/{message_id}/trash"
@@ -74,7 +94,6 @@ def setup_post_routes(app,mongo,cache):
                     return {"message": f"Se han eliminado {len(delete_results)} correos del remitente {sender} 🧹✉️🚮"}
             
             elif action == "spam":
-                # Primero, buscamos los mensajes del remitente especificado
                 list_url = "https://www.googleapis.com/gmail/v1/users/me/messages"
                 params = {"q": f"from:{sender}"}
                 list_response = requests.get(list_url, headers=headers, params=params)
@@ -84,7 +103,6 @@ def setup_post_routes(app,mongo,cache):
                     return {"error": f"No se encontraron correos del remitente {sender}"}
                 
                 spam_results = []
-                # Para cada mensaje, modificamos las etiquetas para agregar "SPAM"
                 for msg in messages:
                     message_id = msg["id"]
                     modify_url = f"https://www.googleapis.com/gmail/v1/users/me/messages/{message_id}/modify"
@@ -94,9 +112,13 @@ def setup_post_routes(app,mongo,cache):
                 
                 if spam_results:
                     return {"message": f"Se han movido {len(spam_results)} correos del remitente {sender} a spam 🚫📩🛑"}
-        if "agendar" or "agendame" in query:
-            prompt = f"El usuario dijo: '{query}'. Devuelve un JSON con los campos 'date', 'time' y 'subject' que representen la fecha, hora y asunto de la cita agendada (el asunto ponlo con inicial mayuscula en la primer palabra) .Si no se puede extraer la información, devuelve 'unknown'."
-        
+
+        # =============================================
+        #   Agendar citas en Google Calendar (lógica existente, opcional si usas create_event)
+        # =============================================
+        if "agendar" in query or "agendame" in query:
+            prompt = f"El usuario dijo: '{query}'. Devuelve un JSON con los campos 'date', 'time' y 'subject' que representen la fecha, hora y asunto de la cita agendada (el asunto ponlo con inicial mayúscula en la primera palabra). Si no se puede extraer la información, devuelve 'unknown'."
+            
             response = openai.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
@@ -140,32 +162,28 @@ def setup_post_routes(app,mongo,cache):
                     "end": {"dateTime": (event_datetime.replace(hour=event_datetime.hour + 1)).isoformat(), "timeZone": "UTC"}
                 }
 
-
                 url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
                 headers = {"Authorization": f"Bearer {gmail_token}", "Content-Type": "application/json"}
                 response = requests.post(url, json=event, headers=headers)
                 return {"message": f"¡Tu cita ha sido agendada con éxito! 📅🕒\n\nDetalles:\n- Asunto: {subject}\n- Fecha y hora de inicio: {event['start']['dateTime']}\n- Fecha y hora de fin: {event['end']['dateTime']}\n\n¡Nos vemos pronto! 😊"}
             except Exception as e:
                 print(f"Error al procesar la respuesta: {e}")
+                return {"error": f"Error al agendar la cita: {e}"}
 
         # =============================================
-        #   Crear borrador en gmail para enviar correo 📧
+        #   Crear borrador en Gmail 📧
         # =============================================
         match = re.search(r'crear\s*borrador\s*con\s*asunto:\s*(.*?)\s*y\s*cuerpo:\s*(.*)', query, re.IGNORECASE)
-
         if match:
             asunto = match.group(1).strip()
             cuerpo = match.group(2).strip()
 
-            # ✅ Crear mensaje en formato MIME
             mensaje = MIMEText(cuerpo)
             mensaje["Subject"] = asunto
 
-            # ✅ Convertir a Base64
             mensaje_bytes = mensaje.as_bytes()
             mensaje_base64 = base64.urlsafe_b64encode(mensaje_bytes).decode()
 
-            # ✅ Estructura final del borrador
             borrador = {
                 "message": {
                     "raw": mensaje_base64
@@ -176,54 +194,39 @@ def setup_post_routes(app,mongo,cache):
             headers = {"Authorization": f"Bearer {gmail_token}", "Content-Type": "application/json"}
             response = requests.post(url, json=borrador, headers=headers)
             
-            # 📌 Imprimir la respuesta para debug
-            
             try:
                 response_json = response.json()
-
                 if response.status_code == 200:
                     return {"message": f"📩 ¡Borrador creado con éxito! El correo con asunto '{asunto}' ha sido guardado en Gmail. 🚀"}
                 else:
                     return {"error": f"⚠️ No se pudo crear el borrador. Error: {response_json}"}
-
             except Exception as e:
                 return {"error": "⚠️ Error inesperado al procesar la respuesta de Gmail."}
-        
-        # =============================================
-        #   📤 Enviar correo en Gmail (Mejorado) ✉️
-        # =============================================
 
+        # =============================================
+        #   Enviar correo en Gmail 📤
+        # =============================================
         match = re.search(
             r'enviar\s*correo\s*a\s*([\w\.-@,\s]+)\s*con\s*asunto:\s*(.*?)\s*y\s*cuerpo:\s*(.*)',
             query,
             re.IGNORECASE
         )
-
         if match:
+            destinatario = match.group(1).strip()
+            asunto = match.group(2).strip()
+            cuerpo = match.group(3).strip()
 
-            destinatario = match.group(1).strip()  # 📌 Captura el correo
-            asunto = match.group(2).strip()  # 📌 Captura el asunto
-            cuerpo = match.group(3).strip()  # 📌 Captura el cuerpo
-
-            print(f"Destinatario: {destinatario}, Asunto: {asunto}, Cuerpo: {cuerpo}")
-
-            # ✅ Validar si se especificó el destinatario
             if destinatario == 'destinatario':
                 return {"message": "⚠️ ¡Oops! 😅 Parece que olvidaste poner el correo de destino. 📧 Por favor, incluye una dirección válida para que podamos enviarlo. ✉️"}
 
-            # ✅ Crear mensaje en formato MIME
             mensaje = MIMEText(cuerpo)
             mensaje["To"] = destinatario
             mensaje["Subject"] = asunto
+            mensaje["From"] = "me"
 
-            # ✅ Agregar el campo 'From' al mensaje
-            mensaje["From"] = "me"  # Usamos 'me' que indica la cuenta autenticada
-
-            # ✅ Convertir a Base64
             mensaje_bytes = mensaje.as_bytes()
             mensaje_base64 = base64.urlsafe_b64encode(mensaje_bytes).decode()
 
-            # ✅ Estructura final del correo
             correo = {
                 "raw": mensaje_base64
             }
@@ -234,12 +237,10 @@ def setup_post_routes(app,mongo,cache):
 
             try:
                 response_json = response.json()
-
                 if response.status_code == 200:
                     return {"message": f"📤 ¡Correo enviado con éxito! ✉️ El mensaje con asunto '{asunto}' fue enviado a {destinatario}. 🚀"}
                 else:
                     return {"error": f"⚠️ No se pudo enviar el correo. Error: {response_json}"}
-
             except Exception as e:
                 return {"error": "⚠️ Error inesperado al procesar la respuesta de Gmail."}
 

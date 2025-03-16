@@ -151,7 +151,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
                 "id": message_id,
                 "from": "Gmail",
                 "subject": f"Hola, te llegó un correo de {sender}",
-                "snippet": f"Es sobre: {subject}. Dime qué hago con él en el recuadro de abajo (puedes decirme 'elimina', 'responde' o 'spam')."
+                "snippet": f"Es sobre: {subject}."
             })
         except Exception as e:
             return jsonify({"error": "Uy, algo salió mal al revisar tu Gmail, ¿lo intento de nuevo?", "details": str(e)}), 500
@@ -191,7 +191,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
                 "id": message["id"],
                 "from": "Outlook",
                 "subject": f"Hola, tienes un correo nuevo de {message['from']['emailAddress']['address']}",
-                "snippet": f"Es sobre: {message['subject']}. Escribe abajo qué hago: 'elimina', 'responde' o 'spam'."
+                "snippet": f"Es sobre: {message['subject']}."
             })
         except Exception as e:
             return jsonify({"error": "Ups, algo falló con Outlook, ¿lo reviso otra vez?", "details": str(e)}), 500
@@ -291,7 +291,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
                 "id": latest_item["id"],
                 "from": "Notion",
                 "subject": f"Hola, hay algo nuevo en Notion",
-                "snippet": f"Es una {latest_item['type']} llamada '{latest_item['title']}'. Dime qué hago en el recuadro: 'marca como hecha', 'elimina' o 'edita'."
+                "snippet": f"Es una {latest_item['type']} llamada '{latest_item['title']}'."
             })
 
         except Exception as e:
@@ -333,7 +333,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
                         "id": message["ts"],
                         "from": "Slack",
                         "subject": f"Oye, te escribió alguien en Slack",
-                        "snippet": f"Es este mensaje: '{message['text']}'. ¿Qué quieres que haga? Escribe abajo 'responde', 'reacciona' o 'menciona'."
+                        "snippet": f"Es este mensaje: '{message['text']}'."
                     })
 
             return jsonify({"error": "No hay mensajes nuevos en Slack por ahora, ¿reviso después?"}), 404
@@ -370,7 +370,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
             return jsonify({
                 "from": "OneDrive",
                 "subject": f"Hola, vi un archivo actualizado en OneDrive",
-                "snippet": f"Es '{last_file['name']}'. Escribe abajo qué hago: 'elimina', 'mueve' o 'renombra'.",
+                "snippet": f"Es '{last_file['name']}'.",
                 "id": last_file["id"]
             })
         except Exception as e:
@@ -412,7 +412,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
             return jsonify({
                 "from": "Asana",
                 "subject": f"Hola, tienes una tarea nueva en Asana",
-                "snippet": f"Es '{task.get('name', '(Sin título)')}'. Dime qué hago abajo: 'marca como hecha', 'elimina' o 'asigna'.",
+                "snippet": f"Es '{task.get('name', '(Sin título)')}'.",
                 "id": task["gid"]
             })
         except Exception as e:
@@ -447,7 +447,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
             return jsonify({
                 "from": "Dropbox",
                 "subject": f"Hola, hay un archivo actualizado en Dropbox",
-                "snippet": f"Es '{last_file['name']}'. Escribe abajo qué hago: 'elimina', 'mueve' o 'restaura'.",
+                "snippet": f"Es '{last_file['name']}'",
                 "id": last_file["id"]
             })
         except Exception as e:
@@ -550,7 +550,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
             return jsonify({
                 "from": "HubSpot",
                 "subject": f"Oye, hay algo nuevo en HubSpot",
-                "snippet": f"Es un {entity_type} llamado '{subject}'. Escribe abajo tu acción que quieres hacer: 'cierra', 'elimina' o 'actualiza'.",
+                "snippet": f"Es un {entity_type} llamado '{subject}'.",
                 "id": latest_update["data"]["id"]
             })
         except Exception as e:
@@ -583,7 +583,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
             return jsonify({
                 "from": "ClickUp",
                 "subject": f"Hola, te llegó una tarea en ClickUp",
-                "snippet": f"Es '{task['name']}'. Dime qué hago abajo: 'marca como lista', 'elimina' o 'cambia estado'.",
+                "snippet": f"Es '{task['name']}'.",
                 "id": task["id"]
             })
         except Exception as e:
@@ -619,7 +619,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
             return jsonify({
                 "from": "Google Drive",
                 "subject": f"Hola, vi que hay un {entry_type} actualizado en Drive",
-                "snippet": f"Se llama '{last_entry['name']}'. Escribe abajo qué hago: 'elimina', 'mueve' o 'renombra'.",
+                "snippet": f"Se llama '{last_entry['name']}'.",
                 "id": last_entry["id"]
             })
         except Exception as e:

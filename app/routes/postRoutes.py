@@ -14,7 +14,7 @@ openai.api_key=Config.CHAT_API_KEY
 from flask_caching import Cache
 from app.utils.utils import get_user_from_db
 
-def setup_post_routes(app, mongo, cache):
+def setup_post_routes(app,mongo,cache):
     cache = Cache(app)
     def get_clickup_headers(token):
         return {
@@ -151,10 +151,7 @@ def setup_post_routes(app, mongo, cache):
         # =============================================
         #   Crear borrador en gmail para enviar correo 📧
         # =============================================
-
-        print("crear borrador query:", query)
         match = re.search(r'crear\s*borrador\s*con\s*asunto:\s*(.*?)\s*y\s*cuerpo:\s*(.*)', query, re.IGNORECASE)
-        print("match crear borrador:", match)
 
         if match:
             asunto = match.group(1).strip()
@@ -208,14 +205,19 @@ def setup_post_routes(app, mongo, cache):
             asunto = match.group(2).strip()  # 📌 Captura el asunto
             cuerpo = match.group(3).strip()  # 📌 Captura el cuerpo
 
-            # ✅ Si el usuario no puso dominio, asumimos @gmail.com
-            if "@" not in destinatario:
-                destinatario += "@gmail.com"
+            print(f"Destinatario: {destinatario}, Asunto: {asunto}, Cuerpo: {cuerpo}")
+
+            # ✅ Validar si se especificó el destinatario
+            if destinatario == 'destinatario':
+                return {"message": "⚠️ ¡Oops! 😅 Parece que olvidaste poner el correo de destino. 📧 Por favor, incluye una dirección válida para que podamos enviarlo. ✉️"}
 
             # ✅ Crear mensaje en formato MIME
             mensaje = MIMEText(cuerpo)
             mensaje["To"] = destinatario
             mensaje["Subject"] = asunto
+
+            # ✅ Agregar el campo 'From' al mensaje
+            mensaje["From"] = "me"  # Usamos 'me' que indica la cuenta autenticada
 
             # ✅ Convertir a Base64
             mensaje_bytes = mensaje.as_bytes()
@@ -519,6 +521,7 @@ def setup_post_routes(app, mongo, cache):
 
 ###################################################################################################        
     def post_to_dropbox(query):
+        print("query restaurar archivo:", query)
         """Procesa la consulta y ejecuta la acción en la API de Dropbox."""
         email = request.args.get('email')
         if not email:
@@ -531,14 +534,107 @@ def setup_post_routes(app, mongo, cache):
             return jsonify({"error": "Token de Dropbox no disponible"}), 400
         
         # =============================================
+        #   Restaurar archivos en Dropbox 🗑️
+        # =============================================
+        
+        matchRestaurarArchivoDrop = re.search(r'restaurar\s*archivo:\s*(.+)', query, re.IGNORECASE)
+        print("matchRestaurArchivoDrop:", matchRestaurarArchivoDrop)
+        if matchRestaurarArchivoDrop:
+            file_name = matchRestaurarArchivoDrop.group(1).strip()  # Nombre del archivo a restaurar
+            print("file_name:", file_name)
+
+            # Realizamos la búsqueda en Dropbox
+            url = "https://api.dropboxapi.com/2/files/restore"
+            headers = {
+                'Authorization': f"Bearer {dropbox_token}",
+                'Content-Type': 'application/json'
+            }
+
+            params = {
+                "path": file_path,  # Ruta del archivo
+                "limit": 1  # Solo necesitamos la última revisión
+            }
+
+            print("params:", params)
+
+            # Hacemos la solicitud para obtener la revisión
+            response = requests.post(url, headers=headers, json=params)
+            print("response:", response.json())
+            revisions = response.json()
+            print("revisions:", revisions)
+
+            # Verificamos si obtenemos alguna revisión
+            if 'entries' in revisions and len(revisions['entries']) > 0:
+                # Obtener la última revisión (rev)
+                rev = revisions['entries'][0]['rev']
+                
+                # Ahora, podemos restaurar el archivo desde la papelera usando la revisión
+                url_restore = "https://api.dropboxapi.com/2/files/restore"
+                
+                restore_params = {
+                    "path": file_path,  # Ruta completa del archivo
+                    "rev": rev  # Usamos la revisión obtenida
+                }
+
+                # Realizamos la solicitud para restaurar el archivo
+                restore_response = requests.post(url_restore, headers=headers, json=restore_params)
+                
+                if restore_response.status_code == 200:
+                    return {"message": f"🎉 ¡El archivo '{file_name}' ha sido restaurado exitosamente! 🙌 ¡Todo listo para seguir trabajando! 📂"}
+                else:
+                    return {"message": "⚠️ ¡No se pudo restaurar el archivo! Intenta de nuevo o revisa si el archivo está disponible."}
+
+            else:
+                return {"message": "⚠️ ¡No se encontraron revisiones disponibles para este archivo! 😔 Asegúrate de que el archivo tenga una versión previa para restaurar."}
+        
+        # =============================================
+        #   Creamos carpetas en Dropbox 📂
+        # =============================================
+
+        matchCrearCarpetaDrop = re.search(r'crear\s*carpeta:\s*(.+?)\s*en\s*:\s*dropbox', query, re.IGNORECASE)
+        print("ENTRAMOS A CREAR CARPETA EN DROPBOX")
+
+        if matchCrearCarpetaDrop:
+            folder_name = matchCrearCarpetaDrop.group(1).strip()  # Nombre de la carpeta a crear
+
+            if folder_name == 'n/a':
+                return {"message": "⚠️ ¡Ups! No se especificó el nombre de la carpeta. 📂 Por favor, intenta de nuevo con el nombre de la carpeta que quieres crear en Dropbox. ✍️"}
+
+            url ="https://api.dropboxapi.com/2/files/create_folder_v2"
+            headers = {
+                "Authorization": f"Bearer {dropbox_token}",
+                "Content-Type": "application/json"
+            }
+
+            data = {
+                "path": f"/{folder_name}",
+                "autorename": False
+            }
+
+            response = requests.post(url, headers=headers, json=data)
+            response.raise_for_status()
+            return {"message": f"🎉✨ ¡Éxito total! La carpeta '{folder_name}' ha sido creada con éxito en Dropbox. 🚀🌟"}
+    
+        # =============================================
         #   📂 Movemos archivos en Dropbox 📂
         # =============================================
         
-        match = re.search(r'archivo:(.+?) en carpeta:(.+)', query, re.IGNORECASE)
+        match = re.search(r'archivo:(.+?) a carpeta:(.+)', query, re.IGNORECASE)
+        print("ENTRAMOS A MOVER ARCHIVO EN DROPBOX") 
         if match:
             file_name = match.group(1).strip()
             folder_name = match.group(2).strip()
-            
+
+            print("file_name:", file_name)
+            print("folder_name:", folder_name)
+
+            if file_name == 'n/a':
+                return {"message": "⚠️ ¡Ups! No se especificó el nombre del archivo. 📂 Por favor, indica el nombre del archivo que deseas mover. ✍️"}
+            # Si no se especifica la carpeta de destino
+            if folder_name == 'n/a':
+                return {"message": "⚠️ ¡Ups! No se especificó la carpeta de destino. 🗂️ Por favor, indica la carpeta a la que deseas mover el archivo. ✍️"}
+
+            # Realizamos la búsqueda del archivo en Dropbox
             url = "https://api.dropboxapi.com/2/files/search_v2"
             headers = {
                 'Authorization': f"Bearer {dropbox_token}",
@@ -556,24 +652,29 @@ def setup_post_routes(app, mongo, cache):
             results = response.json().get('matches', [])
 
             file_path = None
+            if len(results) == 0:
+                return {"message": f"⚠️ No se encontró el archivo '{file_name}' en Dropbox. Revisa el nombre e intenta de nuevo. 📂"}
+
+            # Si hay varios archivos con nombres similares
+            if len(results) > 1:
+                file_list = [result['metadata']['metadata']['name'] for result in results]
+                return {"message": f"⚠️ Encontramos varios archivos con nombres similares. 📂 Por favor, elige el archivo correcto:\n\n" + "\n".join(file_list)}
+
+            # Si solo se encuentra un archivo
             for result in results:
                 dropbox_file_name = result['metadata']['metadata']['name']
                 dropbox_file_path = result['metadata']['metadata']['path_lower']
-                
+
                 if dropbox_file_name.lower().startswith(file_name.lower()):
                     file_path = dropbox_file_path
                     break
-            
+
             if not file_path:
-                return jsonify({"error": f"Archivo '{file_name}' no encontrado en Dropbox"}), 404
-            
+                return {"message": f"⚠️ No se encontró el archivo '{file_name}' en Dropbox. Revisa el nombre e intenta de nuevo. 📂"}
+
             folder_path = f"/{folder_name}/{dropbox_file_name}"
 
-            headers = {
-                "Authorization": f"Bearer {dropbox_token}",
-                "Content-Type": "application/json"
-            }
-
+            # Realizamos el movimiento del archivo
             data = {
                 "from_path": file_path,
                 "to_path": folder_path,
@@ -582,8 +683,10 @@ def setup_post_routes(app, mongo, cache):
                 "autorename": False,
             }
 
-            url = "https://api.dropboxapi.com/2/files/move_v2"
-            response = requests.post(url, headers=headers, json=data)
+            url_move = "https://api.dropboxapi.com/2/files/move_v2"
+            move_response = requests.post(url_move, headers=headers, json=data)
+            move_response.raise_for_status()
+
             return {"message": f"🎉 El archivo '{dropbox_file_name}' ha sido movido a la carpeta '{folder_name}' con éxito! 🚀"}    
         
         # =============================================
@@ -610,18 +713,22 @@ def setup_post_routes(app, mongo, cache):
             response.raise_for_status()
             results = response.json().get('matches', [])
 
-            file_path = None
-            for result in results:
-                dropbox_file_name = result['metadata']['metadata']['name']
-                dropbox_file_path = result['metadata']['metadata']['path_lower']
+            if file_name == 'n/a':
+                return {"message": "⚠️ ¡Ups! No se especificó el nombre del archivo que deseas eliminar. 📂 Por favor, indícalo e intentalo de nuevo. ✍️"}
 
-                if dropbox_file_name.lower().startswith(file_name.lower()):
-                    file_path = dropbox_file_path
-                    break
-            
-            if not file_path:
-                return jsonify({"error": f"Archivo '{file_name}' no encontrado en Dropbox"}), 404
-            
+            if not results:
+                return {"message": f"❌ ¡Oh no! No encontramos un archivo que coincida con '{file_name}' en Dropbox. Revisa y prueba de nuevo. 🔍"}
+
+            if len(results) > 1:
+                # Si hay varios resultados con nombres similares, mostramos una lista de opciones
+                similar_files = "\n".join([f"{index + 1}. {result['metadata']['metadata']['name']}" for index, result in enumerate(results)])
+                return {
+                    "message": f"⚠️ ¡Encontramos varios archivos con nombres similares! Por favor, decide el archivo correcto e intentalo de nuevo:\n{similar_files} 📝"
+                }
+
+            # Si encontramos el archivo, eliminamos
+            file_path = results[0]['metadata']['metadata']['path_lower']
+
             # Eliminamos el archivo
             delete_url = "https://api.dropboxapi.com/2/files/delete_v2"
             delete_data = {
@@ -634,73 +741,57 @@ def setup_post_routes(app, mongo, cache):
             return {"message": f"🎉 El archivo '{file_name}' ha sido eliminado de Dropbox con éxito! 🗑️"}
         
         # =============================================
-        #   Creamos carpetas en Dropbox 📂
+        #   🗑️ Eliminamos carpetas de Dropbox 🗑️
         # =============================================
-
-        matchCrearCarpetaDrop = re.search(r'crear\s*carpeta\s*[:\-]?\s*(.+)', query, re.IGNORECASE)
-
-        if matchCrearCarpetaDrop:
-            folder_name = matchCrearCarpetaDrop.group(1).strip()  # Nombre de la carpeta a crear
-
-            url ="https://api.dropboxapi.com/2/files/create_folder_v2"
-            headers = {
-                "Authorization": f"Bearer {dropbox_token}",
-                "Content-Type": "application/json"
-            }
-
-            data = {
-                "path": f"/{folder_name}",
-                "autorename": False
-            }
-
-            response = requests.post(url, headers=headers, json=data)
-            response.raise_for_status()
-            return {"message": f"🎉✨ ¡Éxito total! La carpeta '{folder_name}' ha sido creada con éxito en Dropbox. 🚀🌟"}
-        
-        # =============================================
-        #   Restaurar archivos en Dropbox 🗑️
-        # =============================================
-        matchRestaurarArchivoDrop = re.search(r'restaura\s*archivo\s*[:\-]?\s*(.+)', query, re.IGNORECASE)
-        if matchRestaurarArchivoDrop:
-            file_name = matchRestaurarArchivoDrop.group(1).strip()  # Nombre del archivo a restaurar
+        matchEliminarCarpeta = re.search(r'(Eliminar\s*carpeta|carpeta):\s*(.+)', query, re.IGNORECASE)
+        if matchEliminarCarpeta:
+            folder_name = matchEliminarCarpeta.group(2).strip()  # Nombre de la carpeta
 
             # Realizamos la búsqueda en Dropbox
-            url = "https://api.dropboxapi.com/2/files/restore"
+            url = "https://api.dropboxapi.com/2/files/search_v2"
             headers = {
                 'Authorization': f"Bearer {dropbox_token}",
                 'Content-Type': 'application/json'
             }
-
             params = {
-                "path": file_path,  # Ruta del archivo
-                "limit": 1  # Solo necesitamos la última revisión
+                "query": folder_name,
+                "options": {
+                    "max_results": 10,
+                    "file_status": "active"
+                }
+            }
+            response = requests.post(url, headers=headers, json=params)
+            response.raise_for_status()
+            results = response.json().get('matches', [])
+
+            if folder_name == 'n/a':
+                return {"message": "⚠️ ¡Ups! No se especificó el nombre de la carpeta que deseas eliminar. 📂 Por favor, indícalo para poder proceder. ✍️"}
+
+            if not results:
+                return {"message": f"❌ ¡Oh no! No encontramos una carpeta que coincida con '{folder_name}' en Dropbox. Revisa y prueba de nuevo. 🔍"}
+
+            if len(results) > 1:
+                # Si hay varios resultados con nombres similares, mostramos una lista de opciones
+                similar_folders = "\n".join([f"{index + 1}. {result['metadata']['metadata']['name']}" for index, result in enumerate(results)])
+                return {
+                    "message": f"⚠️ ¡Encontramos varias carpetas con nombres similares! Por favor, selecciona la carpeta correcta:\n{similar_folders} 📝"
+                }
+
+            # Si encontramos la carpeta, eliminamos
+            folder_path = results[0]['metadata']['metadata']['path_lower']
+
+            # Eliminamos la carpeta
+            delete_url = "https://api.dropboxapi.com/2/files/delete_v2"
+            delete_data = {
+                "path": folder_path
             }
 
-            # Hacemos la solicitud para obtener la revisión
-            response = requests.post(url, headers=headers, json=params)
-            revisions = response.json()
-            
-            if 'entries' in revisions and len(revisions['entries']) > 0:
-                # Obtener la última revisión (rev)
-                rev = revisions['entries'][0]['rev']
-                
-                # Ahora, podemos restaurar el archivo desde la papelera usando la revisión
-                url_restore = "https://api.dropboxapi.com/2/files/restore"
-                
-                restore_params = {
-                    "path": file_path,  # Ruta completa del archivo
-                    "rev": rev  # Usamos la revisión obtenida
-                }
-                
-                # Realizamos la solicitud para restaurar el archivo
-                restore_response = requests.post(url_restore, headers=headers, json=restore_params)
-                
-                if restore_response.status_code == 200:
-                    return(f"¡El archivo {file_path} ha sido restaurado exitosamente!")
-            else:
-                print("No se encontraron revisiones para este archivo.")
+            delete_response = requests.post(delete_url, headers=headers, json=delete_data)
+            delete_response.raise_for_status()
 
-        return jsonify({"error": "Formato de consulta inválido"}), 400
+            return {"message": f"🎉 La carpeta '{folder_name}' ha sido eliminada de Dropbox con éxito! 🗑️"}
+
+        return ({"message": "Disculpa, no pude entender la acción que deseas realizar, intentalo de nuevo, porfavor."})
 
 #####################################################################################################################
     def post_to_googledrive(query):
@@ -715,17 +806,90 @@ def setup_post_routes(app, mongo, cache):
             return jsonify({"error": "Usuario no encontrado"}), 404
         
         google_drive_token = user.get('integrations', {}).get('Drive', {}).get('token')
+        print("google drive token:", google_drive_token)
         if not google_drive_token:
             return jsonify({"error": "Token de Google Drive no disponible."}), 400
+        
+        # ============================================= 
+        #   📂 Compartir archivo o carpeta en Google Drive 📂
+        # =============================================
+        print("query compartir archivo:", query)
+        matchCompartirArchivo = re.search(r'compartir\s*(archivo|carpeta)\s*[:\s]*(\S.*)\s*con\s*(.+)', query, re.IGNORECASE)
+        print("matchCompartirArchivo", matchCompartirArchivo)
+        if matchCompartirArchivo:
+            tipo_archivo = matchCompartirArchivo.group(1).strip()  # 'archivo' o 'carpeta'
+            archivo_o_carpeta = matchCompartirArchivo.group(2).strip()  # Nombre del archivo o carpeta
+            destinatarios = matchCompartirArchivo.group(3).strip()  # Los destinatarios a quienes compartir
+
+            # Imprimir para debug
+            print(f"Tipo de archivo: {tipo_archivo}")
+            print(f"Archivo/Carpeta: {archivo_o_carpeta}")
+            print(f"Destinatarios: {destinatarios}")
+
+            # Verificar si se encontró el archivo o carpeta
+            if archivo_o_carpeta == 'n/a':
+                return {"message": "⚠️ ¡Oh no! No se ha especificado el nombre del archivo o carpeta. 📂 Por favor, intenta de nuevo con el nombre de lo que quieres compartir. ✍️"}
+
+            # Validar si se especificaron destinatarios
+            if destinatarios == ': n/a':
+                return {"message": "⚠️ ¡Ups! No se especificaron destinatarios. 🤔 Indica a quién deseas compartirlo. 👥"}
+            
+            # Buscar el archivo o carpeta en Google Drive
+            url = "https://www.googleapis.com/drive/v3/files"
+            headers = {"Authorization": f"Bearer {google_drive_token}"}
+            params = {
+                "q": f"name contains '{archivo_o_carpeta}'",
+                "spaces": "drive",
+                "fields": "files(id,name)",
+            }
+            response = requests.get(url, headers=headers, params=params)
+            response.raise_for_status()
+            results = response.json().get('files', [])
+            
+            # Verificar si hay varios resultados
+            if len(results) > 1:
+                options = "\n".join([f"{i+1}. {result['name']}" for i, result in enumerate(results)])
+                return {"message": f"⚠️ ¡Varios archivos o carpetas encontrados! Por favor, elige el que deseas compartir:\n{options}\n\nIndica el nombre exacto."}
+
+            if results:
+                file_id = results[0]['id']
+                print(f"Se encontró el archivo/carpeta con ID: {file_id}")
+
+                # Ahora, compartimos el archivo o carpeta con los destinatarios
+                for destinatario in destinatarios.split(','):
+                    email = destinatario.strip()  # Asegurarse de que no tenga espacios extra
+
+                    # Crear el permiso para compartir con el destinatario
+                    permission_url = f"https://www.googleapis.com/drive/v3/files/{file_id}/permissions"
+                    permission_data = {
+                        "type": "anyone",  # Esto lo haría accesible para cualquier persona
+                        "role": "reader",  # Puede ser 'reader' o 'writer'
+                    }
+
+                    permission_response = requests.post(permission_url, headers=headers, json=permission_data)
+                    
+                    if permission_response.status_code == 200:
+                        print(f"Archivo compartido con éxito con: {email}")
+                    else:
+                        print(f"Error al compartir el archivo con {email}: {permission_response.json()}")
+
+                return {"message": f"🚀✨ ¡El archivo o carpeta '{archivo_o_carpeta}' ha sido compartido exitosamente! 📤 ¡A tus destinatarios les llegará en un abrir y cerrar de ojos! 🌟"}
+
+            else:
+                return {"message": "❌ ¡Ups! No encontramos el archivo o la carpeta con ese nombre. Revisa y prueba de nuevo. 📂🔍"}
         
         # =============================================
         #   📂 Movemos archivos en Google Drive 📂
         # =============================================
-
-        matchMoverArchivo = re.search(r'archivo:(.+?) (en|a) carpeta:(.+)', query, re.IGNORECASE)
+        
+        matchMoverArchivo = re.search(r'archivo:(.+?) a carpeta:(.+)', query, re.IGNORECASE)
+        print("ENTRAMOS A MOVER ARCHIVO EN GOOGLE DRIVE") 
+        print("matchMoverArchivo:", matchMoverArchivo)
         if matchMoverArchivo:
             file_name = matchMoverArchivo.group(1).strip()
-            folder_name = matchMoverArchivo.group(3).strip()
+            print("file_name:", file_name)
+            folder_name = matchMoverArchivo.group(2).strip()
+            print("folder_name:", folder_name)
 
             # Buscar el archivo en Google Drive
             search_url = "https://www.googleapis.com/drive/v3/files"
@@ -734,24 +898,37 @@ def setup_post_routes(app, mongo, cache):
                 "q": f"name contains \"{file_name}\" and trashed=false",
                 "fields": "files(id, name)"
             }
+            print("params:", params)
             
             response = requests.get(search_url, headers=headers, params=params)
             if response.status_code != 200 or not response.json().get('files'):
-                return jsonify({"error": "No se encontró el archivo"}), 404
+                return ({"message": "⚠️ No se encontró un archivo con ese nombre. ¿Podrías verificar y especificar el nombre correcto?"})
             
-            file_id = response.json()['files'][0]['id']
+            # Si hay varios archivos con el mismo nombre, solicitamos que elija uno
+            files = response.json().get('files', [])
+            if len(files) > 1:
+                options = "\n".join([f"{i + 1}. {file['name']}" for i, file in enumerate(files)])
+                return ({"message": f"⚠️ Se encontraron varios archivos con el nombre '{file_name}'. Por favor, elige uno, copia el nombre completo e intentalo de nuevo:\n{options}"})
+
+            file_id = files[0]['id']
 
             # Buscar la carpeta en Google Drive
             params = {
-                "q": f"name = \"{folder_name}\" and mimeType = \"application/vnd.google-apps.folder\" and trashed=false",
+                "q": f"name contains \"{folder_name}\" and mimeType = \"application/vnd.google-apps.folder\" and trashed=false",
                 "fields": "files(id, name)"
             }
 
             response = requests.get(search_url, headers=headers, params=params)
             if response.status_code != 200 or not response.json().get('files'):
-                return jsonify({"error": "No se encontró la carpeta"}), 404
+                return ({"message": "⚠️ No se encontró una carpeta con ese nombre. ¿Podrías verificar y especificar el nombre correcto?"})
             
-            folder_id = response.json()['files'][0]['id']
+            # Si hay varias carpetas con el mismo nombre, solicitamos que elija una
+            folders = response.json().get('files', [])
+            if len(folders) > 1:
+                options = "\n".join([f"{i + 1}. {folder['name']}" for i, folder in enumerate(folders)])
+                return ({"message": f"⚠️ Se encontraron varias carpetas con el nombre '{folder_name}'. Por favor, elige una, copia el nombre completo e intentalo de nuevo:\n{options}"})
+
+            folder_id = folders[0]['id']
 
             # Mover el archivo a la carpeta
             file_url = f"https://www.googleapis.com/drive/v3/files/{file_id}"
@@ -763,53 +940,69 @@ def setup_post_routes(app, mongo, cache):
             return {"message": f"🎉 El archivo '{file_name}' ha sido movido a la carpeta '{folder_name}' en Google Drive con éxito!"}
 
         # =============================================
-        #   🗑️ Eliminamos archivos de Google Drive 🗑️
+        #   🗑️ Eliminar archivos de Google Drive 
         # =============================================
         matchEliminarDrive = re.search(r'(Eliminar\s*archivo|archivo):\s*(.+)', query, re.IGNORECASE)
         if matchEliminarDrive:
-            file_name = matchEliminarDrive.group(2).strip()  # Usamos el grupo 2 para el nombre del archivo
+            file_name = matchEliminarDrive.group(2).strip()  # Nombre del archivo
+            print("file_name:", file_name)
 
-            # Realizamos la búsqueda en Google Drive
+            # Verificamos si se proporcionó el nombre del archivo
+            if file_name == 'n/a':
+                return ({"message": "⚠️ ¡Debes especificar el nombre del archivo que deseas eliminar! 📂"})
+
+            # Buscar el archivo en Google Drive
             url = "https://www.googleapis.com/drive/v3/files"
             headers = {
                 'Authorization': f"Bearer {google_drive_token}",
+                'Content-Type': 'application/json'
             }
-            # Cambiamos a "name contains" para buscar archivos cuyo nombre contenga la cadena proporcionada
             params = {
-                "q": f"name contains '{file_name}'",  # Permite buscar nombres que contengan 'file_name'
+                "q": f"name contains '{file_name}' and trashed=false",
                 "spaces": "drive",
-                "fields": "files(id,name)",
+                "fields": "files(id,name,trashed)",
             }
             response = requests.get(url, headers=headers, params=params)
             response.raise_for_status()
             results = response.json().get('files', [])
 
             file_id = None
+            if len(results) > 1:
+                options = "\n".join([f"{i + 1}. {result['name']}" for i, result in enumerate(results)])
+                return ({"message": f"⚠️ Se encontraron varios archivos con el nombre '{file_name}'. Por favor, elige uno de los siguientes:\n{options}"})
+
             for result in results:
                 google_drive_file_name = result['name']
                 google_drive_file_id = result['id']
+                is_trashed = result.get('trashed', False)  # Verificamos si ya está en la papelera
                 
-                if google_drive_file_name.lower().startswith(file_name.lower()):
+                if google_drive_file_name.lower().startswith(file_name.lower()) and not is_trashed:
                     file_id = google_drive_file_id
                     break
-            
-            if not file_id:
-                return jsonify({"error": f"Archivo '{file_name}' no encontrado en Google Drive"}), 404
-            
-            # Eliminamos el archivo de Google Drive
-            delete_url = f"https://www.googleapis.com/drive/v3/files/{file_id}"
-            delete_response = requests.delete(delete_url, headers=headers)
-            delete_response.raise_for_status()
 
-            return {"message": f"🎉 El archivo '{file_name}' ha sido eliminado de Google Drive con éxito! 🗑️"}
+            if not file_id:
+                return ({"message": f"⚠️ No se encontró el archivo '{file_name}' o ya está en la papelera. Verifica el nombre e intenta de nuevo."})
+
+            # Mover el archivo a la papelera
+            trash_url = f"https://www.googleapis.com/drive/v3/files/{file_id}"
+            trash_data = {"trashed": True}
+            trash_response = requests.patch(trash_url, headers=headers, json=trash_data)
+            trash_response.raise_for_status()
+
+            return ({"message": f"🗑️ El archivo '{file_name}' ha sido movido a la papelera de Google Drive con éxito! 🚀"})
         
         # ============================================= 
         #   📂 Crear carpeta nueva en Google Drive 📂
         # =============================================
 
-        matchCrearCarpeta = re.search(r'crear\s*carpeta:\s*(.+)', query, re.IGNORECASE)
+        matchCrearCarpeta = re.search(r'crear\s*carpeta:\s*(.+?)\s+en\s*:\s*googledrive', query, re.IGNORECASE)
         if matchCrearCarpeta:
             folder_name = matchCrearCarpeta.group(1).strip()
+            print("folder_name:", folder_name)
+
+            # Si no se especifica un nombre de carpeta, usar "Nueva Carpeta" por defecto
+            if folder_name == 'n/a':
+                return ({"message": "⚠️ ¡Ups! Parece que olvidaste especificar el nombre de la carpeta. 🗂️ Por favor, inténtalo de nuevo y asegúrate de incluirlo. ✨"})
 
             # Crear la carpeta en Google Drive
             url = "https://www.googleapis.com/drive/v3/files"
@@ -818,12 +1011,12 @@ def setup_post_routes(app, mongo, cache):
                 "name": folder_name,
                 "mimeType": "application/vnd.google-apps.folder"
             }
-            
+
             response = requests.post(url, headers=headers, json=metadata)
-            
+
             if response.status_code != 200:
-                return jsonify({"error": "No se pudo crear la carpeta"}), 500
-            
+                return ({"message": "⚠️ No se pudo crear la carpeta. Intenta de nuevo."})
+
             folder_id = response.json().get('id')
 
             return {"message": f"🚀✨ ¡Éxito! La carpeta '{folder_name}' ha sido creada en Google Drive 🗂️📂. ¡Todo listo para organizar tus archivos! 🎉"}
@@ -839,69 +1032,9 @@ def setup_post_routes(app, mongo, cache):
             headers = {"Authorization": f"Bearer {google_drive_token}"}
 
             response = requests.delete(empty_trash_url, headers=headers)
-            return {"message": "🗑️ ¡La papelera de Google Drive ha sido vaciada con éxito! Todo lo que estaba ahí, ¡ya no está! 🚮"}
-        
-        # ============================================= 
-        #   📂 Compartir archivo o carpeta en Google Drive 📂
-        # =============================================
+            return {"message": "🗑️ ¡La papelera de Google Drive ha sido vaciada con éxito! Todo lo que estaba ahí, ¡ya no está! 🚮"}       
 
-        print("Query para compartir archivo o carpeta en Google Drive", query)
-        matchCompartirArchivo = re.search(r'compartir\s*(archivo|carpeta)\s*[:\s]*(\S.*)\s*con\s*(.+)', query, re.IGNORECASE)
-        print("Match compartir archivo", matchCompartirArchivo)
-
-        if matchCompartirArchivo:
-            tipo_archivo = matchCompartirArchivo.group(1).strip()  # 'archivo' o 'carpeta'
-            archivo_o_carpeta = matchCompartirArchivo.group(2).strip()  # Nombre del archivo o carpeta
-            destinatarios = matchCompartirArchivo.group(3).strip()  # Los destinatarios a quienes compartir
-
-            # Imprimir para debug
-            print(f"Tipo de archivo: {tipo_archivo}")
-            print(f"Archivo/Carpeta: {archivo_o_carpeta}")
-            print(f"Destinatarios: {destinatarios}")
-
-            # Buscar el archivo o carpeta en Google Drive
-            url = "https://www.googleapis.com/drive/v3/files"
-            headers = {"Authorization": f"Bearer {google_drive_token}"}
-            params = {
-                "q": f"name contains '{archivo_o_carpeta}'",
-                "spaces": "drive",
-                "fields": "files(id,name)",
-            }
-            response = requests.get(url, headers=headers, params=params)
-            response.raise_for_status()
-            results = response.json().get('files', [])
-            
-            print("resultado de la busqueda", results)
-
-            if results:
-                file_id = results[0]['id']
-                print(f"Se encontró el archivo/carpetta con ID: {file_id}")
-
-                # Ahora, compartimos el archivo o carpeta con los destinatarios
-                for destinatario in destinatarios.split(','):
-                    email = destinatario.strip()  # Asegurarse de que no tenga espacios extra
-
-                    # Crear el permiso para compartir con el destinatario
-                    permission_url = f"https://www.googleapis.com/drive/v3/files/{file_id}/permissions"
-                    permission_data = {
-                        "type": "user",
-                        "role": "reader",  # Puede ser 'reader' (solo lectura) o 'writer' (lectura y escritura)
-                        "emailAddress": email
-                    }
-
-                    permission_response = requests.post(permission_url, headers=headers, json=permission_data)
-                    
-                    if permission_response.status_code == 200:
-                        print(f"Archivo compartido con éxito con: {email}")
-                    else:
-                        print(f"Error al compartir el archivo con {email}: {permission_response.json()}")
-
-                return {"message": f"📤 ¡El archivo o carpeta '{archivo_o_carpeta}' ha sido compartido con éxito!"}
-
-            else:
-                return {"error": "⚠️ No se encontró el archivo o carpeta con ese nombre."}        
-
-        return jsonify({"error": "Formato de consulta inválido"}), 400
+        return ({"message": "Disculpa, no pude entender la acción que deseas realizar, intentalo de nuevo, porfavor."})
 
 #################################################################################################################    
     def post_to_onedrive(query):
@@ -957,8 +1090,6 @@ def setup_post_routes(app, mongo, cache):
                 return jsonify({"error": f"Archivo '{file_name}' no encontrado en OneDrive"}), 404
 
     def post_to_onedrive(query):
-        print("Entrando a OneDrive")
-        print("query onedrive:", query)
 
         # Obtener email del usuario
         email = request.args.get('email')
@@ -980,11 +1111,9 @@ def setup_post_routes(app, mongo, cache):
         # ==================================================
 
         matchEliminar = re.search(r'eliminar\s*(archivo)?[:\s]*([\w\.\-_]+)', query, re.IGNORECASE)
-        print("matchEliminar OneDrive:", matchEliminar)
 
         if matchEliminar:
             file_name = matchEliminar.group(2).strip()
-            print("file_name:", file_name)
 
             # Buscar archivo en OneDrive
             search_url = f"https://graph.microsoft.com/v1.0/me/drive/root/search(q='{file_name}')"
@@ -994,7 +1123,6 @@ def setup_post_routes(app, mongo, cache):
             }
 
             response = requests.get(search_url, headers=headers)
-            print(response)
             if response.status_code == 401:
                 return jsonify({"error": "No autorizado. Verifica el token de acceso."}), 401
 

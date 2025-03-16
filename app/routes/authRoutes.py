@@ -59,12 +59,12 @@ def setup_auth_routes(app, mongo, cache):
     
     @app.route("/get_user", methods=["GET"])
     def get_user():
-        user_id = request.args.get('id')
-        if not user_id:
-            return jsonify({"error": "ID de usuario no proporcionado"}), 400
+        email = request.args.get('email')
+        if not email:
+            return jsonify({"error": "email de usuario no proporcionado"}), 400
         
         try:
-            usuario = mongo.database.usuarios.find_one({"_id": ObjectId(user_id)})
+            usuario = get_user_from_db(email, cache, mongo)
         except Exception as e:
             return jsonify({"error": str(e)}), 500
         

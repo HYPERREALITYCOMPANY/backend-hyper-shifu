@@ -21,7 +21,6 @@ def setup_execute_routes(app,mongo, cache):
 
         # Buscar el usuario en la base de datos
         user = get_user_from_db(email, cache, mongo)
-        print(user)
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 

@@ -12,9 +12,9 @@ openai.api_key=Config.CHAT_API_KEY
 from app.routes.secretaryGetRoutes import setup_routes_secretary_gets
 from flask_caching import Cache
 from app.utils.utils import get_user_from_db
-def setup_routes_secretary_posts(app, mongo, cache):
+def setup_routes_secretary_posts(app, mongo, cache, refresh_functions):
     cache = Cache(app)
-    functions = setup_routes_secretary_gets(app, mongo, cache)
+    functions = setup_routes_secretary_gets(app, mongo, cache, refresh_functions)
     get_gmail_headers = functions["get_gmail_headers"]
     get_outlook_headers = functions["get_outlook_headers"]
     get_slack_headers = functions["get_slack_headers"]

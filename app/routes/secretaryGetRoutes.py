@@ -9,38 +9,28 @@ from flask_caching import Cache
 from app.utils.utils import get_user_from_db
 openai.api_key=Config.CHAT_API_KEY
 
-def setup_routes_secretary_gets(app, mongo, cache):
+def setup_routes_secretary_gets(app, mongo, cache, refresh_functions):
+    # Extraer las funciones de refresco
+    get_refresh_tokens_from_db = refresh_functions["get_refresh_tokens_from_db"]
+    refresh_tokens_func = refresh_functions["refresh_tokens"]
 
     def get_user_with_refreshed_tokens(email):
         """Obtiene el usuario y asegura que todos sus tokens estén actualizados"""
         try:
-            # Corregido: usar get_user_from_db en lugar de get_user_with_refreshed_tokens
             user = get_user_from_db(email, cache, mongo)
             if not user:
                 return None
             
-            # Importamos las funciones de refreshTokens aquí para evitar circular imports
-            from app.routes.refreshTokens import setup_routes_refresh
-            
-            # Obtenemos las funciones necesarias para refrescar tokens
-            refresh_functions = setup_routes_refresh(app, mongo, cache)
-            get_refresh_tokens_from_db = refresh_functions["get_refresh_tokens_from_db"]
-            refresh_tokens_func = refresh_functions["refresh_tokens"]
-            
-            # Obtenemos los refresh tokens del usuario
             try:
                 refresh_tokens_dict = get_refresh_tokens_from_db(email)
                 
                 if refresh_tokens_dict:
                     print(f"[INFO] Refrescando TODOS los tokens para {email} antes de acceder a las APIs")
-                    # Refrescamos todos los tokens
                     refreshed_tokens, errors = refresh_tokens_func(refresh_tokens_dict, email)
                     
                     if refreshed_tokens:
                         print(f"[SUCCESS] Tokens refrescados exitosamente: {list(refreshed_tokens.keys())}")
-                        # Obtenemos el usuario actualizado
                         updated_user = mongo.database.usuarios.find_one({"correo": email})
-                        # Actualizamos la caché
                         if updated_user:
                             cache.set(email, updated_user, timeout=1800)
                             print(f"[INFO] Caché actualizada para {email}")
@@ -50,7 +40,6 @@ def setup_routes_secretary_gets(app, mongo, cache):
             except Exception as e:
                 print(f"[ERROR] Error al intentar refrescar tokens: {e}")
             
-            # Si hay errores o no podemos refrescar, retornamos el usuario original
             return user
             
         except Exception as e:

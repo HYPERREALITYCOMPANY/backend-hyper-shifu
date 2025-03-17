@@ -528,8 +528,10 @@ def setup_routes_secretary_posts(app, mongo, cache):
         user_text = data.get("action_text")
         task_id = data.get("message_id")
 
-        if not email or not user_text or not task_id:
-            return jsonify({"error": "Me faltan datos: tu email, qué hacer y el ID, ¿me los das?"}), 400
+        if not email or not user_text:
+            return jsonify({"error": "Me faltan datos: tu email y qué hacer, ¿me los das?"}), 400
+        if not task_id:
+            print("No se proporcionó task_id, intentando buscar por nombre...")
 
         user = get_user_from_db(email, cache, mongo)
         if not user:
@@ -539,76 +541,182 @@ def setup_routes_secretary_posts(app, mongo, cache):
         if not token:
             return jsonify({"error": "No tengo acceso a tu ClickUp, ¿revisamos?"}), 400
 
-        headers = {"Authorization": token, "Content-Type": "application/json"}
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        print(f"Procesando acción para email: {email}, user_text: '{user_text}', task_id: {task_id}")
         action = interpretar_accion_productividad(user_text)
+        # Obtener el task_id (directamente o por nombre)
+        if not task_id:
+            match = re.search(r'(marca como completada|cambia el estado a|elimina) la tarea (.+)', user_text, re.IGNORECASE)
+            if match:
+                action = match.group(1).lower()
+                task_name = match.group(2)
+                print(f"Acción detectada: {action}, nombre de tarea: {task_name}")
+                task_id = get_task_id_clickup(task_name, token)
+                if not task_id:
+                    return jsonify({"error": f"No se encontró la tarea '{task_name}' en ClickUp"}), 404
+                print(f"Tarea '{task_name}' encontrada, task_id: {task_id}")
+            else:
+                return jsonify({"error": "No se encontró una tarea válida en la consulta"}), 400
+        else:
+            # Validar la existencia de la tarea
+            try:
+                task_response = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=headers, timeout=10)
+                print("Task GET response:", task_response.status_code, task_response.text)
+                if task_response.status_code != 200:
+                    return jsonify({"error": "No encontré la tarea, ¿revisamos el ID?", "details": task_response.text}), task_response.status_code
+            except requests.exceptions.RequestException as e:
+                print(f"Error en Task GET: {str(e)}")
+                return jsonify({"error": "Error al obtener la tarea", "details": str(e)}), 500
 
-        # Obtener detalles de la tarea para el nombre
-        task_response = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=headers)
-        print("Task GET response:", task_response.status_code, task_response.text)
-        if task_response.status_code != 200:
-            return jsonify({"error": "No encontré la tarea, ¿revisamos el ID?", "details": task_response.text}), task_response.status_code
-
-        task_name = task_response.json().get("name", "la tarea")
+            task_data = task_response.json()
+            task_name = task_data.get("name", "la tarea")
+            print(f"Nombre de la tarea: {task_name}")
 
         # Acción según la consulta
-        if "completada" in action:
-            # Obtener los estados disponibles de la lista
-            list_id = task_response.json()["list"]["id"]
-            list_response = requests.get(f"https://api.clickup.com/api/v2/list/{list_id}", headers=headers)
-            print("List GET response:", list_response.status_code, list_response.text)
-            if list_response.status_code != 200:
-                return jsonify({"error": "No pude obtener los estados de la lista", "details": list_response.text}), list_response.status_code
+        if "completa" or "completada" in action or "mark_done" in user_text.lower():  # Compatible con la lógica de post_to_clickup
+            try:
+                # Obtener los estados disponibles de la lista
+                list_id = task_data.get("list", {}).get("id")
+                if not list_id:
+                    return jsonify({"error": "No se encontró el ID de la lista de la tarea"}), 400
+                print(f"ID de la lista: {list_id}")
 
-            statuses = [status["status"] for status in list_response.json().get("statuses", [])]
-            # Buscar un estado que indique "completado"
-            completed_status = next((s for s in statuses if any(keyword in s.lower() for keyword in ["complete", "done", "listo", "completado"])), None)
-            if not completed_status:
-                return jsonify({"error": f"No encontré un estado de completado. Opciones: {', '.join(statuses)}"}), 400
+                list_response = requests.get(f"https://api.clickup.com/api/v2/list/{list_id}", headers=headers, timeout=10)
+                print("List GET response:", list_response.status_code, list_response.text)
+                if list_response.status_code != 200:
+                    return jsonify({"error": "No pude obtener los estados de la lista", "details": list_response.text}), list_response.status_code
 
-            data = {"status": completed_status}
-            response = requests.put(f"https://api.clickup.com/api/v2/task/{task_id}", headers=headers, json=data)
-            if response.status_code == 200:
-                return jsonify({"success": f"Tarea {task_name} completada correctamente"})
-            else:
-                return jsonify({"error": "No se pudo completar la tarea", "details": response.text}), response.status_code
+                list_data = list_response.json()
+                print(list_data)
+                statuses = [status["status"] for status in list_data.get("statuses", [])]
+                print(f"Estados disponibles: {statuses}")
+
+                # Buscar un estado que indique "completado"
+                completed_status = next(
+                    (s for s in statuses if any(keyword in s.lower() for keyword in ["complete", "done", "listo", "completado", "closed"])),
+                    None
+                )
+                if not completed_status:
+                    return jsonify({"error": f"No encontré un estado de completado. Opciones: {', '.join(statuses)}"}), 400
+                print(f"Estado de completado encontrado: {completed_status}")
+
+                # Actualizar el estado de la tarea
+                data = {"status": completed_status}
+                response = requests.put(f"https://api.clickup.com/api/v2/task/{task_id}", headers=headers, json=data, timeout=10)
+                print("Mark done PUT response:", response.status_code, response.text)
+                if response.status_code == 200:
+                    # Actualizar la caché después de modificar la tarea
+                    updated_user = mongo.database.usuarios.find_one({"correo": email})
+                    if updated_user:
+                        cache.set(email, updated_user, timeout=1800)
+                        print(f"Cache updated for user {email} after marking task as done")
+                    return jsonify({"success": f"¡Listo! La tarea '{task_name}' está marcada como completada ({completed_status})."})
+                else:
+                    return jsonify({"error": "No se pudo completar la tarea", "details": response.text}), response.status_code
+
+            except requests.exceptions.RequestException as e:
+                print(f"Error en mark_done: {str(e)}")
+                return jsonify({"error": "Error al intentar marcar la tarea como completada", "details": str(e)}), 500
+            except Exception as e:
+                print(f"Error inesperado en mark_done: {str(e)}")
+                return jsonify({"error": "Error inesperado al marcar la tarea", "details": str(e)}), 500
 
         elif "cambia el estado" in action:
-            # Extraer el nuevo estado del query
-            new_status_match = re.search(r'cambia el estado a (.+)', user_text, re.IGNORECASE)
-            if not new_status_match:
-                return jsonify({"error": "No se proporcionó un nuevo estado"}), 400
-            new_status = new_status_match.group(1).strip()
+            try:
+                # Extraer el nuevo estado del query
+                new_status_match = re.search(r'cambia el estado a (.+)', user_text, re.IGNORECASE)
+                if not new_status_match:
+                    return jsonify({"error": "No se proporcionó un nuevo estado"}), 400
+                new_status = new_status_match.group(1).strip()
+                print(f"Nuevo estado solicitado: {new_status}")
 
-            # Obtener los estados disponibles de la lista
-            list_id = task_response.json()["list"]["id"]
-            list_response = requests.get(f"https://api.clickup.com/api/v2/list/{list_id}", headers=headers)
-            if list_response.status_code != 200:
-                return jsonify({"error": "No pude obtener los estados de la lista", "details": list_response.text}), list_response.status_code
+                # Obtener los estados disponibles de la lista
+                list_id = task_data.get("list", {}).get("id")
+                if not list_id:
+                    return jsonify({"error": "No se encontró el ID de la lista de la tarea"}), 400
 
-            statuses = [status["status"] for status in list_response.json().get("statuses", [])]
-            valid_status = next((s for s in statuses if s.lower() == new_status.lower()), None)
-            if not valid_status:
-                return jsonify({"error": f"Ese estado no existe. Opciones: {', '.join(statuses)}"}), 400
+                list_response = requests.get(f"https://api.clickup.com/api/v2/list/{list_id}", headers=headers, timeout=10)
+                print("List GET response:", list_response.status_code, list_response.text)
+                if list_response.status_code != 200:
+                    return jsonify({"error": "No pude obtener los estados de la lista", "details": list_response.text}), list_response.status_code
 
-            data = {"status": valid_status}
-            response = requests.put(f"https://api.clickup.com/api/v2/task/{task_id}", headers=headers, json=data)
-            print("Change status PUT response:", response.status_code, response.text)
-            if response.status_code == 200:
-                return jsonify({"success": f"Estado de la tarea {task_name} cambiado a {valid_status}"})
-            else:
-                return jsonify({"error": "No se pudo cambiar el estado de la tarea", "details": response.text}), response.status_code
+                list_data = list_response.json()
+                statuses = [status["status"] for status in list_data.get("statuses", [])]
+                valid_status = next((s for s in statuses if s.lower() == new_status.lower()), None)
+                if not valid_status:
+                    return jsonify({"error": f"Ese estado no existe. Opciones: {', '.join(statuses)}"}), 400
+
+                # Actualizar el estado de la tarea
+                data = {"status": valid_status}
+                response = requests.put(f"https://api.clickup.com/api/v2/task/{task_id}", headers=headers, json=data, timeout=10)
+                print("Change status PUT response:", response.status_code, response.text)
+                if response.status_code == 200:
+                    updated_user = mongo.database.usuarios.find_one({"correo": email})
+                    if updated_user:
+                        cache.set(email, updated_user, timeout=1800)
+                        print(f"Cache updated for user {email} after changing task status")
+                    return jsonify({"success": f"Estado de la tarea '{task_name}' cambiado a '{valid_status}'."})
+                else:
+                    return jsonify({"error": "No se pudo cambiar el estado de la tarea", "details": response.text}), response.status_code
+
+            except requests.exceptions.RequestException as e:
+                print(f"Error en change_status: {str(e)}")
+                return jsonify({"error": "Error al intentar cambiar el estado de la tarea", "details": str(e)}), 500
 
         elif "elimina" in action:
-            # Archivar la tarea (usar PUT en lugar de DELETE)
-            data = {"archived": True}
-            response = requests.put(f"https://api.clickup.com/api/v2/task/{task_id}", headers=headers, json=data)
-            print("Delete PUT response:", response.status_code, response.text)
-            if response.status_code == 200:
-                return jsonify({"success": f"Tarea {task_name} archivada correctamente"})
-            else:
-                return jsonify({"error": "No se pudo archivar la tarea", "details": response.text}), response.status_code
+            try:
+                # Archivar la tarea (usar PUT en lugar de DELETE, como en tu versión anterior)
+                data = {"archived": True}
+                response = requests.put(f"https://api.clickup.com/api/v2/task/{task_id}", headers=headers, json=data, timeout=10)
+                print("Delete PUT response:", response.status_code, response.text)
+                if response.status_code == 200:
+                    updated_user = mongo.database.usuarios.find_one({"correo": email})
+                    if updated_user:
+                        cache.set(email, updated_user, timeout=1800)
+                        print(f"Cache updated for user {email} after deleting task")
+                    return jsonify({"success": f"¡Hecho! La tarea '{task_name}' está archivada."})
+                else:
+                    return jsonify({"error": "No se pudo archivar la tarea", "details": response.text}), response.status_code
+            except requests.exceptions.RequestException as e:
+                print(f"Error en delete: {str(e)}")
+                return jsonify({"error": "Error al intentar archivar la tarea", "details": str(e)}), 500
 
-        return jsonify({"error": "No entendí, ¿quieres 'completada', 'cambia el estado' o 'elimina'?"}), 400
+        return jsonify({"error": "No entendí, ¿quieres 'marca como completada', 'cambia el estado a' o 'elimina' la tarea?"}), 400
+
+    def get_task_id_clickup(task_name, clickup_token):
+        """Obtiene el task_id de una tarea por su nombre en ClickUp."""
+        try:
+            headers = {"Authorization": f"Bearer {clickup_token}"}
+            # Obtener el team_id del usuario (necesario para buscar tareas)
+            teams_response = requests.get("https://api.clickup.com/api/v2/team", headers=headers, timeout=10)
+            print(f"Teams GET response: {teams_response.status_code} {teams_response.text}")
+            if teams_response.status_code != 200:
+                return None
+
+            team_id = teams_response.json().get("teams", [])[0].get("id")
+            if not team_id:
+                print("No se encontró team_id")
+                return None
+
+            # Buscar tareas por nombre en el equipo
+            tasks_response = requests.get(
+                f"https://api.clickup.com/api/v2/team/{team_id}/task",
+                headers=headers,
+                params={"include_closed": False, "search": task_name},
+                timeout=10
+            )
+            print(f"Tasks GET response: {tasks_response.status_code} {tasks_response.text}")
+            if tasks_response.status_code != 200:
+                return None
+
+            tasks = tasks_response.json().get("tasks", [])
+            for task in tasks:
+                if task.get("name", "").lower() == task_name.lower():
+                    return task["id"]
+            return None
+        except requests.exceptions.RequestException as e:
+            print(f"Error al buscar task_id: {str(e)}")
+            return None
 
     @app.route("/accion-hubspot", methods=["POST"])
     def ejecutar_accion_hubspot():
@@ -672,8 +780,8 @@ def setup_routes_secretary_posts(app, mongo, cache):
         user_text = data.get("action_text")
         file_path = data.get("file_path")
 
-        if not email or not user_text or not file_path:
-            return jsonify({"error": "Me faltan datos: tu email, qué hacer y la ruta, ¿me los das?"}), 400
+        if not email or not user_text:
+            return jsonify({"error": "Me faltan datos: tu email y qué hacer, ¿me los das?"}), 400
 
         user = get_user_from_db(email, cache, mongo)
         if not user:
@@ -685,48 +793,108 @@ def setup_routes_secretary_posts(app, mongo, cache):
 
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         action = interpretar_accion_archivos(user_text)
+        print(f"Acción interpretada para '{user_text}': {action}")
 
+        # Si no se proporciona file_path, intentamos buscarlo por nombre
+        if not file_path:
+            print("No se proporcionó file_path, intentando buscar por nombre...")
+            match_file = re.search(r'(eliminar\s*archivo|archivo|mover\s*archivo):\s*(.+?)(?:\s*a\s*carpeta:\s*(.+))?', user_text, re.IGNORECASE)
+            if not match_file:
+                return jsonify({"error": "No entendí el nombre del archivo. Usa algo como 'eliminar archivo: nombre' o 'mover archivo: nombre a carpeta: destino'"}), 400
+
+            file_name = match_file.group(2).strip()
+            if file_name == "n/a":
+                return jsonify({"error": "¡Ups! No se especificó el nombre del archivo. Por favor, indícalo e inténtalo de nuevo."}), 400
+
+            # Buscar el archivo en Dropbox
+            url_search = "https://api.dropboxapi.com/2/files/search_v2"
+            params = {
+                "query": file_name,
+                "options": {
+                    "max_results": 10,
+                    "file_status": "active"
+                }
+            }
+            try:
+                response = requests.post(url_search, headers=headers, json=params, timeout=10)
+                print(f"Search response: {response.status_code} {response.text}")
+                response.raise_for_status()
+            except requests.exceptions.RequestException as e:
+                print(f"Error al buscar archivo: {str(e)}")
+                return jsonify({"error": "Error al buscar el archivo en Dropbox", "details": str(e)}), 500
+
+            results = response.json().get('matches', [])
+            if not results:
+                return jsonify({"error": f"No encontré el archivo '{file_name}' en Dropbox. Revisa el nombre e intenta de nuevo."}), 404
+
+            if len(results) > 1:
+                file_list = [result['metadata']['metadata']['name'] for result in results]
+                return jsonify({"error": f"Encontré varios archivos con nombres similares. Por favor, elige uno:\n{', '.join(file_list)}"}), 400
+
+            file_path = results[0]['metadata']['metadata']['path_lower']
+            print(f"Archivo encontrado: {file_path}")
+
+        # Acción: Eliminar archivo
         if action == "delete":
-            response = requests.post(
-                "https://api.dropboxapi.com/2/files/delete_v2",
-                headers=headers,
-                json={"path": file_path}
-            )
-            return jsonify({"success": "¡Listo! El archivo está eliminado."}) if response.status_code == 200 else jsonify({"error": "No pude eliminarlo, ¿lo intentamos otra vez?"}), response.status_code
+            try:
+                response = requests.post(
+                    "https://api.dropboxapi.com/2/files/delete_v2",
+                    headers=headers,
+                    json={"path": file_path},
+                    timeout=10
+                )
+                print(f"Delete response: {response.status_code} {response.text}")
+                if response.status_code == 200:
+                    # Actualizar la caché después de eliminar
+                    updated_user = mongo.database.usuarios.find_one({"correo": email})
+                    if updated_user:
+                        cache.set(email, updated_user, timeout=1800)
+                        print(f"Cache updated for user {email} after deleting file")
+                    return jsonify({"success": f"¡Listo! El archivo '{file_path.split('/')[-1]}' ha sido eliminado de Dropbox con éxito."})
+                else:
+                    return jsonify({"error": "No pude eliminar el archivo, ¿lo intentamos otra vez?", "details": response.text}), response.status_code
+            except requests.exceptions.RequestException as e:
+                print(f"Error al eliminar archivo: {str(e)}")
+                return jsonify({"error": "Error al intentar eliminar el archivo", "details": str(e)}), 500
 
+        # Acción: Mover archivo
         elif action == "move":
-            match = re.search(r'mueve(?: a)?:\s*(.+)', user_text, re.IGNORECASE)
-            if not match:
-                return jsonify({"error": "Dime a qué carpeta moverlo (ej: 'mueve: /nueva')"}), 400
-            dest_folder = match.group(1).strip()
+            match_dest = re.search(r'(?:mover\s*archivo|mueve(?:\s*a)?):\s*.+?\s*(?:a\s*carpeta:|a):\s*(.+)', user_text, re.IGNORECASE)
+            if not match_dest:
+                return jsonify({"error": "Dime a qué carpeta moverlo (ej: 'mover archivo: nombre a carpeta: destino')"}), 400
+            dest_folder = match_dest.group(1).strip()
             if not dest_folder.startswith('/'):
                 dest_folder = f"/{dest_folder}"
+            print(f"Carpeta de destino: {dest_folder}")
 
-            response = requests.post(
-                "https://api.dropboxapi.com/2/files/move_v2",
-                headers=headers,
-                json={"from_path": file_path, "to_path": f"{dest_folder}/{file_path.split('/')[-1]}", "autorename": True}
-            )
-            return jsonify({"success": f"¡Hecho! Moví el archivo a '{dest_folder}'."}) if response.status_code == 200 else jsonify({"error": "No pude moverlo, ¿probamos de nuevo?"}), response.status_code
+            try:
+                response = requests.post(
+                    "https://api.dropboxapi.com/2/files/move_v2",
+                    headers=headers,
+                    json={
+                        "from_path": file_path,
+                        "to_path": f"{dest_folder}/{file_path.split('/')[-1]}",
+                        "autorename": True,
+                        "allow_shared_folder": True,
+                        "allow_ownership_transfer": False
+                    },
+                    timeout=10
+                )
+                print(f"Move response: {response.status_code} {response.text}")
+                if response.status_code == 200:
+                    # Actualizar la caché después de mover
+                    updated_user = mongo.database.usuarios.find_one({"correo": email})
+                    if updated_user:
+                        cache.set(email, updated_user, timeout=1800)
+                        print(f"Cache updated for user {email} after moving file")
+                    return jsonify({"success": f"¡Hecho! El archivo '{file_path.split('/')[-1]}' ha sido movido a '{dest_folder}' con éxito."})
+                else:
+                    return jsonify({"error": "No pude mover el archivo, ¿probamos de nuevo?", "details": response.text}), response.status_code
+            except requests.exceptions.RequestException as e:
+                print(f"Error al mover archivo: {str(e)}")
+                return jsonify({"error": "Error al intentar mover el archivo", "details": str(e)}), 500
 
-        elif action == "restore":
-            response = requests.post(
-                "https://api.dropboxapi.com/2/files/list_revisions",
-                headers=headers,
-                json={"path": file_path, "limit": 1}
-            )
-            if response.status_code != 200 or not response.json().get("entries"):
-                return jsonify({"error": "No encontré versiones para restaurar."}), response.status_code
-            revision = response.json()["entries"][0]["rev"]
-
-            response = requests.post(
-                "https://api.dropboxapi.com/2/files/restore",
-                headers=headers,
-                json={"path": file_path, "rev": revision}
-            )
-            return jsonify({"success": "¡Listo! El archivo está restaurado."}) if response.status_code == 200 else jsonify({"error": "No pude restaurarlo, ¿lo intentamos otra vez?"}), response.status_code
-
-        return jsonify({"error": "No entendí, ¿quieres 'elimina', 'mueve' o 'restaura'?"}), 400
+        return jsonify({"error": "No entendí, ¿quieres 'eliminar' o 'mover' el archivo?"}), 400
 
     @app.route("/accion-onedrive", methods=["POST"])
     def ejecutar_accion_onedrive():
@@ -735,8 +903,8 @@ def setup_routes_secretary_posts(app, mongo, cache):
         user_text = data.get("action_text")
         file_id = data.get("file_id")
 
-        if not email or not user_text or not file_id:
-            return jsonify({"error": "Me faltan datos: tu email, qué hacer y el ID, ¿me los das?"}), 400
+        if not email or not user_text:
+            return jsonify({"error": "Me faltan datos: tu email y qué hacer, ¿me los das?"}), 400
 
         user = get_user_from_db(email, cache, mongo)
         if not user:
@@ -748,54 +916,116 @@ def setup_routes_secretary_posts(app, mongo, cache):
 
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         action = interpretar_accion_archivos(user_text)
+        print(f"Acción interpretada para '{user_text}': {action}")
 
+        # Si no se proporciona file_id, intentamos buscarlo por nombre
+        if not file_id:
+            print("No se proporcionó file_id, intentando buscar por nombre...")
+            match_file = re.search(r'(eliminar\s*(archivo)?|mover\s*(archivo)?)[:\s]*([\w\.\-_]+)(?:\s*a\s*(carpeta)?:?\s*(.+))?', user_text, re.IGNORECASE)
+            if not match_file:
+                return jsonify({"error": "No entendí el nombre del archivo. Usa algo como 'eliminar archivo: nombre' o 'mover archivo: nombre a carpeta: destino'"}), 400
+
+            file_name = match_file.group(4).strip()
+            print(f"Nombre del archivo a buscar: {file_name}")
+
+            # Buscar archivo en OneDrive
+            search_url = f"https://graph.microsoft.com/v1.0/me/drive/root/search(q='{file_name}')"
+            try:
+                response = requests.get(search_url, headers=headers, timeout=10)
+                print(f"Search response: {response.status_code} {response.text}")
+                if response.status_code == 401:
+                    return jsonify({"error": "No autorizado. Verifica el token de acceso."}), 401
+                response.raise_for_status()
+            except requests.exceptions.RequestException as e:
+                print(f"Error al buscar archivo: {str(e)}")
+                return jsonify({"error": "Error al buscar el archivo en OneDrive", "details": str(e)}), 500
+
+            results = response.json().get('value', [])
+            if not results:
+                return jsonify({"error": f"No encontré el archivo '{file_name}' en OneDrive. Revisa el nombre e intenta de nuevo."}), 404
+
+            for result in results:
+                onedrive_file_name = result['name']
+                if onedrive_file_name.lower().startswith(file_name.lower()) and "folder" not in result:  # Asegurarnos de que no sea una carpeta
+                    file_id = result['id']
+                    break
+
+            if not file_id:
+                return jsonify({"error": f"No encontré el archivo '{file_name}' en OneDrive. Revisa el nombre e intenta de nuevo."}), 404
+            print(f"Archivo encontrado, file_id: {file_id}")
+
+        # Acción: Eliminar archivo
         if action == "delete":
-            response = requests.delete(
-                f"https://graph.microsoft.com/v1.0/me/drive/items/{file_id}",
-                headers=headers
-            )
-            return jsonify({"success": "¡Listo! El archivo está eliminado."}) if response.status_code == 204 else jsonify({"error": "No pude eliminarlo, ¿lo intentamos otra vez?"}), response.status_code
+            try:
+                response = requests.delete(
+                    f"https://graph.microsoft.com/v1.0/me/drive/items/{file_id}",
+                    headers=headers,
+                    timeout=10
+                )
+                print(f"Delete response: {response.status_code} {response.text}")
+                if response.status_code == 204:
+                    # Actualizar la caché después de eliminar
+                    updated_user = mongo.database.usuarios.find_one({"correo": email})
+                    if updated_user:
+                        cache.set(email, updated_user, timeout=1800)
+                        print(f"Cache updated for user {email} after deleting file")
+                    return jsonify({"success": f"¡Listo! El archivo ha sido eliminado de OneDrive con éxito."})
+                else:
+                    return jsonify({"error": "No pude eliminar el archivo, ¿lo intentamos otra vez?", "details": response.text}), response.status_code
+            except requests.exceptions.RequestException as e:
+                print(f"Error al eliminar archivo: {str(e)}")
+                return jsonify({"error": "Error al intentar eliminar el archivo", "details": str(e)}), 500
 
+        # Acción: Mover archivo
         elif action == "move":
-            match = re.search(r'mueve(?: a)?:\s*(.+)', user_text, re.IGNORECASE)
-            if not match:
-                return jsonify({"error": "Dime a qué carpeta moverlo (ej: 'mueve: Trabajo')"}), 400
-            dest_folder_name = match.group(1).strip()
+            match_dest = re.search(r'(?:mover\s*(archivo)?|mueve(?:\s*a)?)[:\s]*[\w\.\-_]+\s*(?:a\s*(carpeta)?:?\s*(.+))', user_text, re.IGNORECASE)
+            if not match_dest:
+                return jsonify({"error": "Dime a qué carpeta moverlo (ej: 'mover archivo: nombre a carpeta: destino')"}), 400
+            dest_folder_name = match_dest.group(3).strip()
+            print(f"Carpeta de destino: {dest_folder_name}")
+
+            # Buscar el ID de la carpeta de destino
             dest_folder_id = get_file_id_by_name(dest_folder_name, is_folder=True, headers=headers)
             if not dest_folder_id:
-                return jsonify({"error": f"No encontré la carpeta '{dest_folder_name}'"}), 404
+                return jsonify({"error": f"No encontré la carpeta '{dest_folder_name}' en OneDrive"}), 404
+            print(f"ID de la carpeta de destino: {dest_folder_id}")
 
-            response = requests.patch(
-                f"https://graph.microsoft.com/v1.0/me/drive/items/{file_id}",
-                headers=headers,
-                json={"parentReference": {"id": dest_folder_id}}
-            )
-            return jsonify({"success": f"¡Hecho! Moví el archivo a '{dest_folder_name}'."}) if response.status_code == 200 else jsonify({"error": "No pude moverlo, ¿probamos de nuevo?"}), response.status_code
+            try:
+                response = requests.patch(
+                    f"https://graph.microsoft.com/v1.0/me/drive/items/{file_id}",
+                    headers=headers,
+                    json={"parentReference": {"id": dest_folder_id}},
+                    timeout=10
+                )
+                print(f"Move response: {response.status_code} {response.text}")
+                if response.status_code == 200:
+                    # Actualizar la caché después de mover
+                    updated_user = mongo.database.usuarios.find_one({"correo": email})
+                    if updated_user:
+                        cache.set(email, updated_user, timeout=1800)
+                        print(f"Cache updated for user {email} after moving file")
+                    return jsonify({"success": f"¡Hecho! El archivo ha sido movido a '{dest_folder_name}' con éxito."})
+                else:
+                    return jsonify({"error": "No pude mover el archivo, ¿probamos de nuevo?", "details": response.text}), response.status_code
+            except requests.exceptions.RequestException as e:
+                print(f"Error al mover archivo: {str(e)}")
+                return jsonify({"error": "Error al intentar mover el archivo", "details": str(e)}), 500
 
-        elif action == "rename":
-            new_name = data.get("new_name", "")
-            if not new_name:
-                match = re.search(r'renombra(?: a)?:\s*(.+)', user_text, re.IGNORECASE)
-                if not match:
-                    return jsonify({"error": "Dime el nuevo nombre (ej: 'renombra: Nuevo archivo')"}), 400
-                new_name = match.group(1).strip()
-
-            response = requests.patch(
-                f"https://graph.microsoft.com/v1.0/me/drive/items/{file_id}",
-                headers=headers,
-                json={"name": new_name}
-            )
-            return jsonify({"success": f"¡Listo! Ahora se llama '{new_name}'."}) if response.status_code == 200 else jsonify({"error": "No pude renombrarlo, ¿lo intentamos otra vez?"}), response.status_code
-
-        return jsonify({"error": "No entendí, ¿quieres 'elimina', 'mueve' o 'renombra'?"}), 400
+        return jsonify({"error": "No entendí, ¿quieres 'eliminar' o 'mover' el archivo?"}), 400
 
     def get_file_id_by_name(file_name, is_folder=False, headers=None):
-        url = f"https://graph.microsoft.com/v1.0/me/drive/root/search(q='{file_name}')"
-        response = requests.get(url, headers=headers)
-        if response.status_code == 200:
-            items = response.json().get("value", [])
-            for item in items:
-                if item["name"].lower() == file_name.lower() and ("folder" in item) == is_folder:
-                    return item["id"]
-        return None
+        """Busca el ID de un archivo o carpeta por nombre en OneDrive."""
+        try:
+            url = f"https://graph.microsoft.com/v1.0/me/drive/root/search(q='{file_name}')"
+            response = requests.get(url, headers=headers, timeout=10)
+            print(f"Search folder response: {response.status_code} {response.text}")
+            if response.status_code == 200:
+                items = response.json().get("value", [])
+                for item in items:
+                    if item["name"].lower() == file_name.lower() and ("folder" in item) == is_folder:
+                        return item["id"]
+            return None
+        except requests.exceptions.RequestException as e:
+            print(f"Error al buscar en OneDrive: {str(e)}")
+            return None
 

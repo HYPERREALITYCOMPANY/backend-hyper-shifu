@@ -42,7 +42,7 @@ def setup_auth_routes(app, mongo, cache):
         
         # Usa Redis para obtener el usuario
         usuario = mongo.database.usuarios.find_one({'correo': data["correo"]})
-        cache.set(usuario.email, usuario, timeout=1800)  # Guarda en caché por 30 minutos
+        cache.set(data["correo"], usuario, timeout=1800)  # Guarda en caché por 30 minutos
 
         if not usuario or not check_password_hash(usuario["password"], data["password"]):
             return jsonify({"error": "Credenciales incorrectas"}), 401

@@ -8,13 +8,6 @@ def setup_integrations_routes(app, mongo, cache):
         if not user_email:
             return jsonify({"error": "Falta el campo 'email'"}), 400
 
-        # Intentar obtener el usuario desde la caché
-        cached_user = cache.get(user_email)
-        if cached_user:
-            print("User found in cache!")
-        else:
-            print("User not found in cache, querying MongoDB...")
-
         # Siempre consultamos MongoDB para obtener los datos más recientes
         user = mongo.database.usuarios.find_one({"correo": user_email})
         if not user:
@@ -22,7 +15,6 @@ def setup_integrations_routes(app, mongo, cache):
 
         # Actualizamos la caché con los datos más recientes de MongoDB
         cache.set(user_email, user, timeout=1800)  # Guarda en caché por 30 minutos
-        print(f"Cache updated for user {user_email} after GET request")
 
         # Devolvemos las integraciones que tiene el usuario
         return jsonify({"integrations": user.get("integrations", {})}), 200

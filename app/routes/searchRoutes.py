@@ -16,11 +16,7 @@ import quopri
 import openai
 openai.api_key=Config.CHAT_API_KEY
 
-<<<<<<< HEAD
 def setup_routes_searchs(app, mongo, cache):
-=======
-def setup_routes_searchs(app,mongo):
->>>>>>> 2ee3a3c5e48cf23453f0aefb56306d34c907b646
     def to_ascii(text):
         normalized_text = unicodedata.normalize('NFD', text)
         ascii_text = ''.join(

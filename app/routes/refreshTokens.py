@@ -3,6 +3,7 @@ import requests
 import os
 import datetime
 from dotenv import load_dotenv
+from app.utils.utils import get_user_from_db
 
 load_dotenv()
 
@@ -27,6 +28,7 @@ def setup_routes_refresh(app, mongo, cache):
                 f"integrations.{integration_name}.timestamp": datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
             }
             # Eliminar la caché anterior
+            
             cache.delete(user_email)
             # Actualizar MongoDB
             result = mongo.database.usuarios.update_one(
@@ -158,6 +160,7 @@ def setup_routes_refresh(app, mongo, cache):
 
                 if new_access_token:
                     updated_user = save_access_token_to_db(user_email, name, new_access_token)
+                    print(f"Token guardado para {name}: {updated_user['integrations'][name]['token']}")
                     refreshed_tokens[name] = new_access_token
                 else:
                     errors[name] = "No se obtuvo nuevo token"
@@ -182,6 +185,9 @@ def setup_routes_refresh(app, mongo, cache):
                 return jsonify({"success": False, "message": "No se encontraron refresh tokens para este usuario"}), 404
 
             refreshed_tokens, errors = refresh_tokens(integrations, user_email, integration_name)
+            
+            updated_user = get_user_from_db(user_email, cache, mongo)
+            print(updated_user)
 
             if errors and not refreshed_tokens:
                 return jsonify({"success": False, "message": "Fallaron todas las actualizaciones", "errors": errors}), 500
@@ -193,8 +199,6 @@ def setup_routes_refresh(app, mongo, cache):
         except Exception as e:
             print(f"Error al refrescar los tokens: {e}")
             return jsonify({"success": False, "message": "Error al refrescar los tokens"}), 500
-            print(f"Error en refresh_tokens_endpoint: {e}")
-            return jsonify({"success": False, "message": "Error al refrescar tokens"}), 500
 
     return {
         "refresh_tokens": refresh_tokens,

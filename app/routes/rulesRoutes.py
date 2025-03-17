@@ -10,11 +10,7 @@ import openai
 
 openai.api_key=Config.CHAT_API_KEY
 
-<<<<<<< HEAD
 def setup_rules_routes(app, mongo, cache):
-=======
-def setup_rules_routes(app, mongo):
->>>>>>> 2ee3a3c5e48cf23453f0aefb56306d34c907b646
     def post_auto_gmail(condition, action):
         email = request.args.get('email')
         if not email:

@@ -10,15 +10,10 @@ import openai
 from email.mime.text import MIMEText
 openai.api_key=Config.CHAT_API_KEY
 from app.routes.secretaryGetRoutes import setup_routes_secretary_gets
-<<<<<<< HEAD
 from flask_caching import Cache
 from app.utils.utils import get_user_from_db
 def setup_routes_secretary_posts(app, mongo, cache):
     functions = setup_routes_secretary_gets(app, mongo, cache)
-=======
-def setup_routes_secretary_posts(app, mongo):
-    functions = setup_routes_secretary_gets(app, mongo)
->>>>>>> 2ee3a3c5e48cf23453f0aefb56306d34c907b646
     get_gmail_headers = functions["get_gmail_headers"]
     get_outlook_headers = functions["get_outlook_headers"]
     get_slack_headers = functions["get_slack_headers"]
@@ -199,36 +194,6 @@ def setup_routes_secretary_posts(app, mongo):
                                     headers=headers, json={"archived": True})  # No puedes eliminar, solo archivar
             return jsonify({"success": "Página archivada"}) if response.status_code == 200 else jsonify({"error": "Error al archivar"}), response.status_code
 
-
-        return jsonify({"error": "Acción no reconocida"}), 400
-
-    @app.route("/accion-drive", methods=["POST"])
-    def ejecutar_accion_drive():
-        data = request.json
-        email = data.get("email")
-        user_text = data.get("action_text")
-        file_id = data.get("file_id")
-
-        user = mongo.database.usuarios.find_one({'correo': email})
-        if not user:
-            return jsonify({"error": "Usuario no encontrado"}), 404
-
-        token = user.get("integrations", {}).get("Drive", {}).get("token")
-        if not token:
-            return jsonify({"error": "Token no disponible"}), 400
-
-        action = interpretar_accion_archivos(user_text)
-        headers = get_google_drive_headers(token)
-
-        if "delete" in action:
-            response = requests.delete(f"https://www.googleapis.com/drive/v3/files/{file_id}", headers=headers)
-            return jsonify({"success": "Archivo eliminado"}) if response.status_code == 204 else jsonify({"error": "Error al eliminar archivo"}), response.status_code
-
-        elif "rename" in action:
-            new_name = data.get("new_name", "")
-            response = requests.patch(f"https://www.googleapis.com/drive/v3/files/{file_id}",
-                                    headers=headers, json={"name": new_name})
-            return jsonify({"success": "Archivo renombrado"}) if response.status_code == 200 else jsonify({"error": "Error al renombrar archivo"}), response.status_code
 
         return jsonify({"error": "Acción no reconocida"}), 400
 

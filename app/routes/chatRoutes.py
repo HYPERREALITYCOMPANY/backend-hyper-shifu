@@ -10,17 +10,11 @@ from app.routes.postRoutes import setup_post_routes
 from app.routes.rulesRoutes import setup_rules_routes
 
 openai.api_key=Config.CHAT_API_KEY
-<<<<<<< HEAD
 def setup_routes_chats(app, mongo, cache):
     functions = setup_routes_searchs(app, mongo, cache)
     functionsPost = setup_post_routes(app, mongo, cache)
     functions2 = setup_rules_routes(app, mongo, cache)
-=======
-def setup_routes_chats(app, mongo):
-    functions = setup_routes_searchs(app, mongo)
-    functionsPost = setup_post_routes(app, mongo)
-    functions2 = setup_rules_routes(app, mongo)
->>>>>>> 2ee3a3c5e48cf23453f0aefb56306d34c907b646
+
     search_gmail = functions["search_gmail"]
     search_outlook = functions["search_outlook"]
     search_notion = functions["search_notion"]

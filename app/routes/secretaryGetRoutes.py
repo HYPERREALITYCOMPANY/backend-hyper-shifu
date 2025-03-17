@@ -6,13 +6,8 @@ from config import Config
 from datetime import datetime
 import openai
 openai.api_key=Config.CHAT_API_KEY
-<<<<<<< HEAD
 
 def setup_routes_secretary_gets(app, mongo, cache):
-=======
-def setup_routes_secretary_gets(app, mongo):
->>>>>>> 2ee3a3c5e48cf23453f0aefb56306d34c907b646
-    
     def get_gmail_headers(token):
         return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 

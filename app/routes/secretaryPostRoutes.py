@@ -27,6 +27,38 @@ def setup_routes_secretary_posts(app, mongo, cache, refresh_functions):
     get_asana_headers = functions["get_asana_headers"]
     get_google_drive_headers = functions["get_google_drive_headers"]
 
+    get_refresh_tokens_from_db = refresh_functions["get_refresh_tokens_from_db"]
+    refresh_tokens_func = refresh_functions["refresh_tokens"]
+
+    def get_user_with_refreshed_tokens(email):
+        """Obtiene el usuario y asegura que todos sus tokens estén actualizados"""
+        try:
+            user = get_user_from_db(email, cache, mongo)
+            if not user:
+                return None
+            
+            try:
+                refresh_tokens_dict = get_refresh_tokens_from_db(email)
+                
+                if refresh_tokens_dict:
+                    refreshed_tokens, errors = refresh_tokens_func(refresh_tokens_dict, email)
+                    
+                    if refreshed_tokens:
+                        updated_user = mongo.database.usuarios.find_one({"correo": email})
+                        if updated_user:
+                            cache.set(email, updated_user, timeout=1800)
+                            return updated_user
+                    elif errors:
+                        print(f"[WARNING] Errores al refrescar tokens: {errors}")
+            except Exception as e:
+                print(f"[ERROR] Error al intentar refrescar tokens: {e}")
+            
+            return user
+            
+        except Exception as e:
+            print(f"[ERROR] Error general en get_user_with_refreshed_tokens: {e}")
+            return None
+
 
     def interpretar_accion_email(texto):
         prompt = f"El usuario dijo: '{texto}'. Determina si quiere 'eliminar' o 'delete' (eliminar), 'spam' (mover a spam), 'schedule' (agendar cita), 'draft' (crear borrador) o 'send' (enviar correo). Si no está claro, responde 'unknown'."
@@ -91,7 +123,7 @@ def setup_routes_secretary_posts(app, mongo, cache, refresh_functions):
         if not email or not user_text or not message_id:
             return jsonify({"error": "Oye, necesito tu email, qué hacer y el ID del correo, ¿me los das?"}), 400
 
-        user = mongo.database.usuarios.find_one({'correo': email})
+        user = get_user_with_refreshed_tokens(email)
         if not user:
             return jsonify({"error": "No te encontré en el sistema, ¿seguro que estás registrado?"}), 404
 
@@ -127,7 +159,7 @@ def setup_routes_secretary_posts(app, mongo, cache, refresh_functions):
         if not email or not user_text or not message_id:
             return jsonify({"error": "Oye, necesito tu email, qué hacer y el ID del correo, ¿me los das?"}), 400
 
-        user = mongo.database.usuarios.find_one({'correo': email})
+        user = get_user_with_refreshed_tokens(email)
         if not user:
             return jsonify({"error": "No te encontré, ¿estás registrado?"}), 404
 
@@ -159,7 +191,7 @@ def setup_routes_secretary_posts(app, mongo, cache, refresh_functions):
         user_text = data.get("action_text")
         page_id = data.get("message_id")
 
-        user = mongo.database.usuarios.find_one({'correo': email})
+        user = get_user_with_refreshed_tokens(email)
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -209,7 +241,7 @@ def setup_routes_secretary_posts(app, mongo, cache, refresh_functions):
         if not email or not user_text or not channel:
             return jsonify({"error": "Me faltan datos: email, qué hacer y el canal, ¿me los das?"}), 400
 
-        user = mongo.database.usuarios.find_one({'correo': email})
+        user = get_user_with_refreshed_tokens(email)
         if not user:
             return jsonify({"error": "No te encontré, ¿estás registrado?"}), 404
 
@@ -279,7 +311,7 @@ def setup_routes_secretary_posts(app, mongo, cache, refresh_functions):
         if not email or not user_text or not file_id:
             return jsonify({"error": "Me faltan datos: tu email, qué hacer y el ID del archivo, ¿me los das?"}), 400
 
-        user = mongo.database.usuarios.find_one({'correo': email})
+        user = get_user_with_refreshed_tokens(email)
         if not user:
             return jsonify({"error": "No te encontré, ¿estás registrado?"}), 404
 
@@ -353,7 +385,7 @@ def setup_routes_secretary_posts(app, mongo, cache, refresh_functions):
         if not task_id:
             print("No se proporcionó task_id, intentando buscar por nombre...")
 
-        user = mongo.database.usuarios.find_one({'correo': email})
+        user = get_user_with_refreshed_tokens(email)
         if not user:
             return jsonify({"error": "No te encontré, ¿estás registrado?"}), 404
 
@@ -533,7 +565,7 @@ def setup_routes_secretary_posts(app, mongo, cache, refresh_functions):
         if not task_id:
             print("No se proporcionó task_id, intentando buscar por nombre...")
 
-        user = mongo.database.usuarios.find_one({'correo': email})
+        user = get_user_with_refreshed_tokens(email)
         if not user:
             return jsonify({"error": "No te encontré, ¿estás registrado?"}), 404
 
@@ -728,7 +760,7 @@ def setup_routes_secretary_posts(app, mongo, cache, refresh_functions):
         if not email or not user_text or not deal_id:
             return jsonify({"error": "Me faltan datos: tu email, qué hacer y el ID del negocio, ¿me los das?"}), 400
 
-        user = mongo.database.usuarios.find_one({'correo': email})
+        user = get_user_with_refreshed_tokens(email)
         if not user:
             return jsonify({"error": "No te encontré, ¿estás registrado?"}), 404
 
@@ -783,7 +815,7 @@ def setup_routes_secretary_posts(app, mongo, cache, refresh_functions):
         if not email or not user_text:
             return jsonify({"error": "Me faltan datos: tu email y qué hacer, ¿me los das?"}), 400
 
-        user = mongo.database.usuarios.find_one({'correo': email})
+        user = get_user_with_refreshed_tokens(email)
         if not user:
             return jsonify({"error": "No te encontré, ¿estás registrado?"}), 404
 
@@ -906,7 +938,7 @@ def setup_routes_secretary_posts(app, mongo, cache, refresh_functions):
         if not email or not user_text:
             return jsonify({"error": "Me faltan datos: tu email y qué hacer, ¿me los das?"}), 400
 
-        user = mongo.database.usuarios.find_one({'correo': email})
+        user = get_user_with_refreshed_tokens(email)
         if not user:
             return jsonify({"error": "No te encontré, ¿estás registrado?"}), 404
 

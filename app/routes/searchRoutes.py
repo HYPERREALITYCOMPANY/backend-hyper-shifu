@@ -18,8 +18,39 @@ openai.api_key=Config.CHAT_API_KEY
 from flask_caching import Cache
 from app.utils.utils import get_user_from_db
 
-def setup_routes_searchs(app, mongo, cache):
+def setup_routes_searchs(app, mongo, cache, refresh_functions):
     cache = Cache(app)
+    get_refresh_tokens_from_db = refresh_functions["get_refresh_tokens_from_db"]
+    refresh_tokens_func = refresh_functions["refresh_tokens"]
+
+    def get_user_with_refreshed_tokens(email):
+        """Obtiene el usuario y asegura que todos sus tokens estén actualizados"""
+        try:
+            user = get_user_from_db(email, cache, mongo)
+            if not user:
+                return None
+            
+            try:
+                refresh_tokens_dict = get_refresh_tokens_from_db(email)
+                
+                if refresh_tokens_dict:
+                    refreshed_tokens, errors = refresh_tokens_func(refresh_tokens_dict, email)
+                    
+                    if refreshed_tokens:
+                        updated_user = mongo.database.usuarios.find_one({"correo": email})
+                        if updated_user:
+                            cache.set(email, updated_user, timeout=1800)
+                            return updated_user
+                    elif errors:
+                        print(f"[WARNING] Errores al refrescar tokens: {errors}")
+            except Exception as e:
+                print(f"[ERROR] Error al intentar refrescar tokens: {e}")
+            
+            return user
+            
+        except Exception as e:
+            print(f"[ERROR] Error general en get_user_with_refreshed_tokens: {e}")
+            return None
     def to_ascii(text):
         normalized_text = unicodedata.normalize('NFD', text)
         ascii_text = ''.join(
@@ -51,7 +82,7 @@ def setup_routes_searchs(app, mongo, cache):
     def search_gmail(query):
         email = request.args.get('email')
         try:
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_with_refreshed_tokens(email)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -190,7 +221,7 @@ def setup_routes_searchs(app, mongo, cache):
         
         try:
             # Verificar usuario en la base de datos
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_with_refreshed_tokens(email)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -328,7 +359,7 @@ def setup_routes_searchs(app, mongo, cache):
         email = request.args.get('email')
         try:
             # Verificar existencia de usuario
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_with_refreshed_tokens(email)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -392,7 +423,7 @@ def setup_routes_searchs(app, mongo, cache):
     def search_outlook(query):
         email = request.args.get('email')
         try:
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_with_refreshed_tokens(email)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -467,7 +498,7 @@ def setup_routes_searchs(app, mongo, cache):
 
         # Buscar usuario en la base de datos
         email = request.args.get("email")
-        user = mongo.database.usuarios.find_one({'correo': email})
+        user = get_user_with_refreshed_tokens(email)
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -625,7 +656,7 @@ def setup_routes_searchs(app, mongo, cache):
         
         try:
             # Verificar usuario en la base de datos
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_with_refreshed_tokens(email)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -801,7 +832,7 @@ def setup_routes_searchs(app, mongo, cache):
     def search_dropbox(query):
         email = request.args.get('email')
         try:
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_with_refreshed_tokens(email)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -940,7 +971,7 @@ def setup_routes_searchs(app, mongo, cache):
     def search_asana(query):
         email = request.args.get('email')
         try:
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_with_refreshed_tokens(email)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -1029,7 +1060,7 @@ def setup_routes_searchs(app, mongo, cache):
             return jsonify({"error": "Faltan parámetros (email y query)"}), 400
 
         try:
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_with_refreshed_tokens(email)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -1093,7 +1124,7 @@ def setup_routes_searchs(app, mongo, cache):
         email = request.args.get('email')
         try:
             # Obtener el usuario desde la base de datos
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_with_refreshed_tokens(email)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -1229,7 +1260,7 @@ def setup_routes_searchs(app, mongo, cache):
 
         try:
             # 📌 Recuperar token de Google Drive
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_with_refreshed_tokens(email)
             print(user)
             if not user:
                 return jsonify({"error": "Usuario no encontrado."}), 404

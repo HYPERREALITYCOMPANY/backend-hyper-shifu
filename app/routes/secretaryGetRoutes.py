@@ -25,15 +25,12 @@ def setup_routes_secretary_gets(app, mongo, cache, refresh_functions):
                 refresh_tokens_dict = get_refresh_tokens_from_db(email)
                 
                 if refresh_tokens_dict:
-                    print(f"[INFO] Refrescando TODOS los tokens para {email} antes de acceder a las APIs")
                     refreshed_tokens, errors = refresh_tokens_func(refresh_tokens_dict, email)
                     
                     if refreshed_tokens:
-                        print(f"[SUCCESS] Tokens refrescados exitosamente: {list(refreshed_tokens.keys())}")
                         updated_user = mongo.database.usuarios.find_one({"correo": email})
                         if updated_user:
                             cache.set(email, updated_user, timeout=1800)
-                            print(f"[INFO] Caché actualizada para {email}")
                             return updated_user
                     elif errors:
                         print(f"[WARNING] Errores al refrescar tokens: {errors}")

@@ -46,8 +46,8 @@ def create_app():
     setup_integrations_routes(app, mongo, cache)
     setup_routes_secretary_posts(app, mongo, cache, refresh_functions)
     setup_proxy_routes(app, mongo, cache)
-    setup_routes_chats(app, mongo, cache)
-    setup_execute_routes(app, mongo, cache)
+    setup_routes_chats(app, mongo, cache, refresh_functions)
+    setup_execute_routes(app, mongo, cache, refresh_functions)
     
     return app
 

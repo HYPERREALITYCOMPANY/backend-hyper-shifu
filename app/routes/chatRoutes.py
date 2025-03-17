@@ -12,9 +12,9 @@ from app.routes.rulesRoutes import setup_rules_routes
 from flask_caching import Cache
 from app.utils.utils import get_user_from_db
 openai.api_key=Config.CHAT_API_KEY
-def setup_routes_chats(app, mongo, cache):
+def setup_routes_chats(app, mongo, cache, refresh_functions):
     cache = Cache(app)
-    functions = setup_routes_searchs(app, mongo, cache)
+    functions = setup_routes_searchs(app, mongo, cache, refresh_functions)
     functionsPost = setup_post_routes(app, mongo, cache)
     functions2 = setup_rules_routes(app, mongo, cache)
     search_gmail = functions["search_gmail"]

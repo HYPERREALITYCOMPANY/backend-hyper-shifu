@@ -5,11 +5,13 @@ from zoneinfo import ZoneInfo
 from config import Config
 from datetime import datetime
 import openai
-from flask_caching import Cache
-from app.utils.utils import get_user_from_db
 openai.api_key=Config.CHAT_API_KEY
+<<<<<<< HEAD
 
 def setup_routes_secretary_gets(app, mongo, cache):
+=======
+def setup_routes_secretary_gets(app, mongo):
+>>>>>>> 2ee3a3c5e48cf23453f0aefb56306d34c907b646
     
     def get_gmail_headers(token):
         return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
@@ -109,7 +111,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
     def obtener_ultimo_correo_gmail():
         email = request.args.get("email")
         try:
-            user = get_user_from_db(email, cache, mongo)
+            user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -159,7 +161,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
     def obtener_ultimo_correo_outlook():
         email = request.args.get("email")
         try:
-            user = get_user_from_db(email, cache, mongo)
+            user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -199,7 +201,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
     def obtener_ultima_notificacion_notion():
         email = request.args.get("email")
         try:
-            user = get_user_from_db(email, cache, mongo)
+            user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -300,7 +302,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
     def obtener_ultimo_mensaje_slack():
         email = request.args.get("email")
         try:
-            user = get_user_from_db(email, cache, mongo)
+            user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -541,62 +543,108 @@ def setup_routes_secretary_gets(app, mongo, cache):
     @app.route('/ultima-notificacion/hubspot', methods=['GET'])
     def get_last_notification_hubspot():
         email = request.args.get("email")
-        try:
-            user = get_user_from_db(email, cache, mongo)
-            if not user:
-                return jsonify({"error": "Usuario no encontrado"}), 404
+        user = mongo.database.usuarios.find_one({'correo': email})
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
 
-            token = user.get('integrations', {}).get('HubSpot', {}).get('token')
-            if not token:
-                return jsonify({"error": "Token de HubSpot no disponible"}), 400
+        hubspot_integration = user.get('integrations', {}).get('HubSpot', None)
+        if not hubspot_integration:
+            return jsonify({"error": "Integración con HubSpot no configurada"}), 400
 
-            headers = get_hubspot_headers(token)
-            endpoints = {
-                "contacto": "https://api.hubapi.com/crm/v3/objects/contacts/search",
-                "negocio": "https://api.hubapi.com/crm/v3/objects/deals/search",
-                "empresa": "https://api.hubapi.com/crm/v3/objects/companies/search"
-            }
-            search_data = {
-                "filterGroups": [{"filters": [{"propertyName": "hs_lastmodifieddate", "operator": "GT", "value": "0"}]}],
-                "properties": ["hs_lastmodifieddate", "dealname", "firstname", "lastname", "email", "name"],
-                "limit": 1,
-                "sorts": ["-hs_lastmodifieddate"]
-            }
+        hubspot_token = hubspot_integration.get('token', None)
+        if not hubspot_token:
+            return jsonify({"error": "Token de HubSpot no disponible"}), 400
 
-            latest_update = None
-            for entity, url in endpoints.items():
+        headers = get_hubspot_headers(hubspot_token)
+
+        # URLs de búsqueda para contactos, negocios y empresas
+        endpoints = {
+            "contacto": "https://api.hubapi.com/crm/v3/objects/contacts/search",
+            "negocio": "https://api.hubapi.com/crm/v3/objects/deals/search",
+            "empresa": "https://api.hubapi.com/crm/v3/objects/companies/search"
+        }
+
+        search_data = {
+            "filterGroups": [
+                {
+                    "filters": [
+                        {
+                            "propertyName": "hs_lastmodifieddate",
+                            "operator": "GT",
+                            "value": "0"
+                        }
+                    ]
+                }
+            ],
+            "properties": ["hs_lastmodifieddate","dealname", "firstname", "lastname", "email", "hubspot_owner_id", "name"],
+            "limit": 1,
+            "sorts": ["-hs_lastmodifieddate"]
+        }
+
+        latest_update = None
+
+        for entity, url in endpoints.items():
+            try:
                 response = requests.post(url, headers=headers, json=search_data)
-                if response.status_code == 200 and response.json().get("results"):
-                    result = response.json()["results"][0]
-                    last_modified = parse_hubspot_date(result["properties"].get("hs_lastmodifieddate", "0"))
-                    if not latest_update or last_modified > latest_update["timestamp"]:
-                        latest_update = {"type": entity, "data": result, "timestamp": last_modified}
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get("results"):
+                        result = data["results"][0]
+                        last_modified_str = result["properties"].get("hs_lastmodifieddate", "0")
 
-            if not latest_update:
-                return jsonify({"error": "No hay cambios recientes en HubSpot, ¿te aviso luego?"}), 404
+                        # Convertir la fecha a timestamp en milisegundos
+                        last_modified = parse_hubspot_date(last_modified_str) if isinstance(last_modified_str, str) else int(last_modified_str)
 
-            entity_type = latest_update["type"]
-            properties = latest_update["data"]["properties"]
-            subject = (
-                f"{properties.get('firstname', '')} {properties.get('lastname', '')}".strip() if entity_type == "contacto" else
-                properties.get("dealname", "(Sin nombre)") if entity_type == "negocio" else
-                properties.get("name", "(Sin nombre)")
-            )
+                        if latest_update is None or last_modified > latest_update["timestamp"]:
+                            latest_update = {
+                                "type": entity,
+                                "data": result,
+                                "timestamp": last_modified
+                            }
+                else:
+                    print(f"Error al obtener {entity}: {response.status_code} - {response.text}")
+            except Exception as e:
+                print(f"Error en la consulta de {entity}: {str(e)}")
 
-            return jsonify({
-                "from": "HubSpot",
-                "subject": f"Oye, hay algo nuevo en HubSpot",
-                "snippet": f"Es un {entity_type} llamado '{subject}'.",
-                "id": latest_update["data"]["id"]
-            })
-        except Exception as e:
-            return jsonify({"error": "Ups, algo falló con HubSpot, ¿lo intento de nuevo?", "details": str(e)}), 500
+        if not latest_update:
+            return jsonify({"message": "No se encontraron cambios recientes."}), 404
+
+        # Formatear respuesta
+        update_data = latest_update["data"]
+        entity_type = latest_update["type"]
+        properties = update_data["properties"]
+
+        if entity_type == "contacto":
+            subject = f"{properties.get('firstname', '')} {properties.get('lastname', '')}".strip()
+            snippet = f"Nuevo contacto: {properties.get('email', '(sin email)')}"
+        elif entity_type == "negocio":
+            subject = properties.get("dealname", "(Sin nombre)")
+            snippet = f"Nuevo negocio detectado."
+        elif entity_type == "empresa":
+            subject = properties.get("name", "(Sin nombre)")
+            snippet = f"Nuevo cambio en la empresa."
+
+        notification_data = {
+            "from": "HubSpot",
+            "type": entity_type,
+            "subject": subject if subject else "(Sin título)",
+            "snippet": snippet,
+            "id": update_data.get("id", "N/A"),
+            "last_modified": datetime.fromtimestamp(latest_update["timestamp"] / 1000).isoformat()
+        }
+
+        return jsonify(notification_data)
+
+    def convertir_fecha(timestamp):
+        if timestamp:
+            return datetime.utcfromtimestamp(int(timestamp) / 1000).strftime('%Y-%m-%d %H:%M:%S')
+        return "No definida"
 
     @app.route("/ultima-notificacion/clickup", methods=["GET"])
     def obtener_ultima_notificacion_clickup():
         email = request.args.get("email")
         try:
-            user = get_user_from_db(email, cache, mongo)
+            user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -652,6 +700,58 @@ def setup_routes_secretary_gets(app, mongo, cache):
             last_entry = files[0]
             entry_type = "carpeta" if last_entry["mimeType"] == "application/vnd.google-apps.folder" else "archivo"
 
+            # Clasificar si es un archivo o una carpeta
+            if last_entry["mimeType"] == "application/vnd.google-apps.folder":
+                entry_type = "folder"
+            else:
+                entry_type = "file"
+
+            # Crear la respuesta según el tipo (archivo o carpeta)
+            if entry_type == "file":
+                return jsonify({
+                    "from": "Google Drive",
+                    "subject": f"Último cambio detectado fue en el archivo llamado: {last_entry['name']}",
+                    "snippet": f"Archivo: {last_entry['name']}",
+                    "id": last_entry["id"],
+                    "modified_time": last_entry.get("modifiedTime", "(Sin fecha de modificación)"),
+                    "file_path": last_entry.get("parents", ["Desconocido"])  # Carpeta donde se encuentra el archivo
+                })
+            else:
+                return jsonify({
+                    "from": "Google Drive",
+                    "subject": f"Último cambio detectado fue en la carpeta llamada: {last_entry['name']} en la ruta {last_entry.get('parents', 'Desconocida')}",
+                    "snippet": f"Carpeta: {last_entry['name']}",
+                    "id": last_entry["id"],
+                    "modified_time": last_entry.get("modifiedTime", "(Sin fecha de modificación)"),
+                    "file_path": last_entry.get("parents", ["Desconocido"])  # Carpeta donde se encuentra la carpeta
+                })
+
+        except Exception as e:
+            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+
+    @app.route("/ultima-notificacion/teams", methods=["GET"])
+    def obtener_ultimo_mensaje_teams():
+        email = request.args.get("email")
+        try:
+            user = mongo.database.usuarios.find_one({'correo': email})
+            if not user:
+                return jsonify({"error": "Usuario no encontrado"}), 404
+
+            token = user.get("integrations", {}).get("Teams", {}).get("token")
+            if not token:
+                return jsonify({"error": "Token no disponible"}), 400
+
+            headers = get_teams_headers(token)
+            response = requests.get("https://graph.microsoft.com/v1.0/me/chats?$top=1", headers=headers)
+
+            if response.status_code != 200:
+                return jsonify({"error": "Error al obtener mensajes"}), response.status_code
+
+            chats = response.json().get("value", [])
+            if not chats:
+                return jsonify({"error": "No hay mensajes recientes"})
+
+            chat = chats[0]
             return jsonify({
                 "from": "Google Drive",
                 "subject": f"Hola, vi que hay un {entry_type} actualizado en Drive",

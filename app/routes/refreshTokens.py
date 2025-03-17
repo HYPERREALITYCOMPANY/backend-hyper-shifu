@@ -3,14 +3,12 @@ import requests
 import os
 import datetime
 from dotenv import load_dotenv
-from flask_caching import Cache
-from app.utils.utils import get_user_from_db
 
 load_dotenv()
 
 def setup_routes_refresh(app, mongo, cache):
     def get_refresh_tokens_from_db(user_email):
-        user_data = get_user_from_db(user_email, cache, mongo)
+        user_data = mongo.database.usuarios.find_one({"correo": user_email})
         if not user_data or "integrations" not in user_data:
             raise ValueError("El usuario no tiene integraciones guardadas.")
         
@@ -193,6 +191,8 @@ def setup_routes_refresh(app, mongo, cache):
         except ValueError as ve:
             return jsonify({"success": False, "message": str(ve)}), 404
         except Exception as e:
+            print(f"Error al refrescar los tokens: {e}")
+            return jsonify({"success": False, "message": "Error al refrescar los tokens"}), 500
             print(f"Error en refresh_tokens_endpoint: {e}")
             return jsonify({"success": False, "message": "Error al refrescar tokens"}), 500
 

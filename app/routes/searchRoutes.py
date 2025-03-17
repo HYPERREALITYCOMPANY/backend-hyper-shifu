@@ -51,7 +51,7 @@ def setup_routes_searchs(app, mongo, cache):
     def search_gmail(query):
         email = request.args.get('email')
         try:
-            user = get_user_from_db(email, cache, mongo)
+            user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -190,7 +190,7 @@ def setup_routes_searchs(app, mongo, cache):
         
         try:
             # Verificar usuario en la base de datos
-            user = get_user_from_db(email, cache, mongo)
+            user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -328,7 +328,7 @@ def setup_routes_searchs(app, mongo, cache):
         email = request.args.get('email')
         try:
             # Verificar existencia de usuario
-            user = get_user_from_db(email, cache, mongo)
+            user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -392,7 +392,7 @@ def setup_routes_searchs(app, mongo, cache):
     def search_outlook(query):
         email = request.args.get('email')
         try:
-            user = get_user_from_db(email, cache, mongo)
+            user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -467,7 +467,7 @@ def setup_routes_searchs(app, mongo, cache):
 
         # Buscar usuario en la base de datos
         email = request.args.get("email")
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -625,7 +625,7 @@ def setup_routes_searchs(app, mongo, cache):
         
         try:
             # Verificar usuario en la base de datos
-            user = get_user_from_db(email, cache, mongo)
+            user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -801,7 +801,7 @@ def setup_routes_searchs(app, mongo, cache):
     def search_dropbox(query):
         email = request.args.get('email')
         try:
-            user = get_user_from_db(email, cache, mongo)
+            user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -940,7 +940,7 @@ def setup_routes_searchs(app, mongo, cache):
     def search_asana(query):
         email = request.args.get('email')
         try:
-            user = get_user_from_db(email, cache, mongo)
+            user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -1029,7 +1029,7 @@ def setup_routes_searchs(app, mongo, cache):
             return jsonify({"error": "Faltan parámetros (email y query)"}), 400
 
         try:
-            user = get_user_from_db(email, cache, mongo)
+            user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -1093,7 +1093,7 @@ def setup_routes_searchs(app, mongo, cache):
         email = request.args.get('email')
         try:
             # Obtener el usuario desde la base de datos
-            user = get_user_from_db(email, cache, mongo)
+            user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -1229,7 +1229,7 @@ def setup_routes_searchs(app, mongo, cache):
 
         try:
             # 📌 Recuperar token de Google Drive
-            user = get_user_from_db(email, cache, mongo)
+            user = mongo.database.usuarios.find_one({'correo': email})
             print(user)
             if not user:
                 return jsonify({"error": "Usuario no encontrado."}), 404

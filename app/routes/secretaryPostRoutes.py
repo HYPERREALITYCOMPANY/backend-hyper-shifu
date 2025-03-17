@@ -91,7 +91,7 @@ def setup_routes_secretary_posts(app, mongo, cache):
         if not email or not user_text or not message_id:
             return jsonify({"error": "Oye, necesito tu email, qué hacer y el ID del correo, ¿me los das?"}), 400
 
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "No te encontré en el sistema, ¿seguro que estás registrado?"}), 404
 
@@ -127,7 +127,7 @@ def setup_routes_secretary_posts(app, mongo, cache):
         if not email or not user_text or not message_id:
             return jsonify({"error": "Oye, necesito tu email, qué hacer y el ID del correo, ¿me los das?"}), 400
 
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "No te encontré, ¿estás registrado?"}), 404
 
@@ -159,7 +159,7 @@ def setup_routes_secretary_posts(app, mongo, cache):
         user_text = data.get("action_text")
         page_id = data.get("message_id")
 
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -209,7 +209,7 @@ def setup_routes_secretary_posts(app, mongo, cache):
         if not email or not user_text or not channel:
             return jsonify({"error": "Me faltan datos: email, qué hacer y el canal, ¿me los das?"}), 400
 
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "No te encontré, ¿estás registrado?"}), 404
 
@@ -279,7 +279,7 @@ def setup_routes_secretary_posts(app, mongo, cache):
         if not email or not user_text or not file_id:
             return jsonify({"error": "Me faltan datos: tu email, qué hacer y el ID del archivo, ¿me los das?"}), 400
 
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "No te encontré, ¿estás registrado?"}), 404
 
@@ -353,7 +353,7 @@ def setup_routes_secretary_posts(app, mongo, cache):
         if not task_id:
             print("No se proporcionó task_id, intentando buscar por nombre...")
 
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "No te encontré, ¿estás registrado?"}), 404
 
@@ -533,7 +533,7 @@ def setup_routes_secretary_posts(app, mongo, cache):
         if not task_id:
             print("No se proporcionó task_id, intentando buscar por nombre...")
 
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "No te encontré, ¿estás registrado?"}), 404
 
@@ -728,7 +728,7 @@ def setup_routes_secretary_posts(app, mongo, cache):
         if not email or not user_text or not deal_id:
             return jsonify({"error": "Me faltan datos: tu email, qué hacer y el ID del negocio, ¿me los das?"}), 400
 
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "No te encontré, ¿estás registrado?"}), 404
 
@@ -783,7 +783,7 @@ def setup_routes_secretary_posts(app, mongo, cache):
         if not email or not user_text:
             return jsonify({"error": "Me faltan datos: tu email y qué hacer, ¿me los das?"}), 400
 
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "No te encontré, ¿estás registrado?"}), 404
 
@@ -906,7 +906,7 @@ def setup_routes_secretary_posts(app, mongo, cache):
         if not email or not user_text:
             return jsonify({"error": "Me faltan datos: tu email y qué hacer, ¿me los das?"}), 400
 
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "No te encontré, ¿estás registrado?"}), 404
 

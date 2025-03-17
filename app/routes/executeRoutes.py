@@ -20,7 +20,7 @@ def setup_execute_routes(app,mongo, cache):
             return jsonify({"error": "Se debe proporcionar un email"}), 400
 
         # Buscar el usuario en la base de datos
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -127,7 +127,7 @@ def setup_execute_routes(app,mongo, cache):
             return jsonify({"error": "Se debe proporcionar un email"}), 400
 
         # Buscar el usuario en la base de datos
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -218,7 +218,7 @@ def setup_execute_routes(app,mongo, cache):
         if not email:
             return jsonify({"error": "Se debe proporcionar un email"}), 400
 
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -281,7 +281,7 @@ def setup_execute_routes(app,mongo, cache):
         if not email:
             return jsonify({"error": "Se debe proporcionar un email"}), 400
 
-        user = get_user_from_db(email, cache, mongo)
+        user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -352,7 +352,7 @@ def setup_execute_routes(app,mongo, cache):
                 return jsonify({"error": "Se debe proporcionar un email"}), 400
 
             # Buscar el usuario en la base de datos
-            user = get_user_from_db(email, cache, mongo)
+            user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 

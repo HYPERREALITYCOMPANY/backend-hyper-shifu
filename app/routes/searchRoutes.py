@@ -19,7 +19,6 @@ from flask_caching import Cache
 from app.utils.utils import get_user_from_db
 
 def setup_routes_searchs(app, mongo, cache):
-    cache = Cache(app)
     def to_ascii(text):
         normalized_text = unicodedata.normalize('NFD', text)
         ascii_text = ''.join(

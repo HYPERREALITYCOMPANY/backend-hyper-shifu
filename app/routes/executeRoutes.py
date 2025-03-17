@@ -12,7 +12,6 @@ from flask_caching import Cache
 
 
 def setup_execute_routes(app,mongo, cache):
-    cache = Cache(app)
     @app.route('/execute/gmail', methods=['GET'])
     def execute_gmail_rules():
         email = request.args.get('email')

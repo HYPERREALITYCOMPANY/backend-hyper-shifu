@@ -13,7 +13,6 @@ from flask_caching import Cache
 from app.utils.utils import get_user_from_db
 
 def setup_post_routes(app,mongo,cache):
-    cache = Cache(app)
     def get_clickup_headers(token):
         return {
             "Authorization": token,

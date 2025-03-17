@@ -13,7 +13,6 @@ from app.utils.utils import get_user_from_db
 openai.api_key=Config.CHAT_API_KEY
 
 def setup_rules_routes(app, mongo, cache):
-    cache = Cache(app)
     def post_auto_gmail(condition, action):
         email = request.args.get('email')
         if not email:

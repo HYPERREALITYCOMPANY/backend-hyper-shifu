@@ -2,7 +2,6 @@ from flask import request, jsonify
 from app.utils.utils import get_user_from_db
 from flask_caching import Cache
 def setup_user_routes(app, mongo, cache):
-    cache = Cache(app)
     
     @app.route('/check_integrations', methods=['GET'])
     def check_integrations():

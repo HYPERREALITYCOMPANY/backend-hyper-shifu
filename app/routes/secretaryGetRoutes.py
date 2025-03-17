@@ -10,7 +10,6 @@ from app.utils.utils import get_user_from_db
 openai.api_key=Config.CHAT_API_KEY
 
 def setup_routes_secretary_gets(app, mongo, cache):
-    cache = Cache(app)
     
     def get_gmail_headers(token):
         return {"Authorization": f"Bearer {token}", "Accept": "application/json"}

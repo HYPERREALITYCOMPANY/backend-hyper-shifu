@@ -379,6 +379,9 @@ def setup_routes_secretary_gets(app, mongo, cache):
     @app.route("/ultima-notificacion/asana", methods=["GET"])
     def obtener_ultima_notificacion_asana():
         email = request.args.get("email")
+        if not email:
+            return jsonify({"error": "Se debe proporcionar un email"}), 400
+
         try:
             # Obtener usuario de la base de datos
             user = get_user_from_db(email, cache, mongo)
@@ -390,10 +393,11 @@ def setup_routes_secretary_gets(app, mongo, cache):
             if not token:
                 return jsonify({"error": "Token no disponible"}), 400
 
-            headers = get_asana_headers(token)
+            headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+            print(f"Obteniendo notificaciones para email: {email}, token disponible: {bool(token)}")
 
             # Obtener el workspace
-            workspaces_response = requests.get("https://app.asana.com/api/1.0/workspaces", headers=headers)
+            workspaces_response = requests.get("https://app.asana.com/api/1.0/workspaces", headers=headers, timeout=10)
             print("Workspaces response:", workspaces_response.status_code, workspaces_response.text)
             if workspaces_response.status_code != 200:
                 return jsonify({"error": "No se pudo obtener el workspace", "details": workspaces_response.text}), workspaces_response.status_code
@@ -401,29 +405,41 @@ def setup_routes_secretary_gets(app, mongo, cache):
             workspace_id = workspaces_response.json().get("data", [])[0]["gid"]
 
             # Obtener el ID del usuario
-            user_response = requests.get("https://app.asana.com/api/1.0/users/me", headers=headers)
+            user_response = requests.get("https://app.asana.com/api/1.0/users/me", headers=headers, timeout=10)
             print("User response:", user_response.status_code, user_response.text)
             if user_response.status_code != 200:
                 return jsonify({"error": "No se pudo obtener el usuario", "details": user_response.text}), user_response.status_code
 
             user_id = user_response.json().get("data", {}).get("gid")
 
-            # Obtener las tareas asignadas al usuario, incluyendo created_at
+            # Obtener las tareas asignadas al usuario, incluyendo created_at y completed
             response = requests.get(
-                f"https://app.asana.com/api/1.0/tasks?assignee={user_id}&workspace={workspace_id}&limit=50&opt_fields=name,gid,created_at",
-                headers=headers
+                f"https://app.asana.com/api/1.0/tasks?assignee={user_id}&workspace={workspace_id}&limit=50&opt_fields=name,gid,created_at,completed",
+                headers=headers,
+                timeout=10
             )
             print("Tasks response:", response.status_code, response.text)
             if response.status_code != 200:
-                return jsonify({"error": "Error al obtener tareas", "details": response.json()}), response.status_code
+                return jsonify({"error": "Error al obtener tareas", "details": response.text}), response.status_code
 
             tasks = response.json().get("data", [])
             if not tasks:
                 return jsonify({"error": "No hay tareas asignadas en Asana, ¿reviso después?"}), 404
 
-            # Ordenar tareas por created_at (más reciente primero)
-            tasks.sort(key=lambda x: x["created_at"], reverse=True)
-            latest_task = tasks[0]  # La tarea más reciente
+            # Filtrar tareas no completadas
+            incomplete_tasks = [task for task in tasks if not task.get("completed", False)]
+            if not incomplete_tasks:
+                return jsonify({"error": "No hay tareas no completadas en Asana, ¿reviso después?"}), 404
+
+            # Ordenar tareas no completadas por created_at (más reciente primero)
+            incomplete_tasks.sort(key=lambda x: x["created_at"], reverse=True)
+            latest_task = incomplete_tasks[0]  # La tarea no completada más reciente
+
+            # Actualizar la caché después de obtener las tareas
+            updated_user = mongo.database.usuarios.find_one({"correo": email})
+            if updated_user:
+                cache.set(email, updated_user, timeout=1800)
+                print(f"Cache updated for user {email} after fetching tasks")
 
             return jsonify({
                 "from": "Asana",
@@ -431,8 +447,13 @@ def setup_routes_secretary_gets(app, mongo, cache):
                 "snippet": f"Es '{latest_task.get('name', '(Sin título)')}'.",
                 "id": latest_task["gid"]
             })
-        except Exception as e:
+
+        except requests.exceptions.RequestException as e:
+            print(f"Error en la solicitud a Asana: {str(e)}")
             return jsonify({"error": "Ups, algo falló con Asana, ¿lo intento de nuevo?", "details": str(e)}), 500
+        except Exception as e:
+            print(f"Error inesperado: {str(e)}")
+            return jsonify({"error": "Ups, algo falló, ¿lo intento de nuevo?", "details": str(e)}), 500
         
     @app.route("/ultima-notificacion/dropbox", methods=["GET"])
     def obtener_ultimo_archivo_dropbox():

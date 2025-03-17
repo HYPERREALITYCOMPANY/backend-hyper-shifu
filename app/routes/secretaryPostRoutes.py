@@ -348,8 +348,10 @@ def setup_routes_secretary_posts(app, mongo, cache):
         user_text = data.get("action_text")
         task_id = data.get("message_id")
 
-        if not email or not user_text or not task_id:
-            return jsonify({"error": "Me faltan datos: tu email, qué hacer y el ID, ¿me los das?"}), 400
+        if not email or not user_text:
+            return jsonify({"error": "Me faltan datos: tu email y qué hacer, ¿me los das?"}), 400
+        if not task_id:
+            print("No se proporcionó task_id, intentando buscar por nombre...")
 
         user = get_user_from_db(email, cache, mongo)
         if not user:
@@ -361,37 +363,164 @@ def setup_routes_secretary_posts(app, mongo, cache):
 
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         action = interpretar_accion_productividad(user_text)
+        print(f"Acción interpretada: {action} (tipo: {type(action)}, valor: '{action}')")
 
-        if action == "mark_done":
-            response = requests.put(
-                f"https://app.asana.com/api/1.0/tasks/{task_id}",
-                headers=headers,
-                json={"data": {"completed": True}}
-            )
-            return jsonify({"success": "¡Listo! La tarea está marcada como hecha."}) if response.status_code == 200 else jsonify({"error": "No pude marcarla, ¿lo intentamos otra vez?"}), response.status_code
+        # Obtener el task_id (directamente o por nombre)
+        if not task_id:
+            match = re.search(r'marca como completada la tarea (.+)|asigna(?: a)?:\s*(.+)|elimina la tarea (.+)', user_text, re.IGNORECASE)
+            if match:
+                task_name = next((g for g in match.groups() if g), None)
+                if task_name:
+                    task_id = get_task_id_asana(task_name, token)
+                    if not task_id:
+                        return jsonify({"error": f"No se encontró la tarea '{task_name}' en Asana"}), 404
+                    print(f"Tarea '{task_name}' encontrada, task_id: {task_id}")
+                else:
+                    return jsonify({"error": "No se encontró una tarea válida en la consulta"}), 400
+            else:
+                return jsonify({"error": "No entendí, ¿quieres 'marca como hecha', 'elimina' o 'asigna' con un nombre de tarea?"}), 400
+        else:
+            # Validar la existencia de la tarea y obtener su nombre
+            try:
+                task_response = requests.get(f"https://app.asana.com/api/1.0/tasks/{task_id}", headers=headers, timeout=10)
+                print("Task GET response:", task_response.status_code, task_response.text)
+                if task_response.status_code != 200:
+                    return jsonify({"error": "No encontré la tarea, ¿revisamos el ID?", "details": task_response.text}), task_response.status_code
+            except requests.exceptions.RequestException as e:
+                print(f"Error en Task GET: {str(e)}")
+                return jsonify({"error": "Error al validar la tarea", "details": str(e)}), 500
 
-        elif action == "delete":
-            response = requests.delete(
-                f"https://app.asana.com/api/1.0/tasks/{task_id}",
-                headers=headers
-            )
-            return jsonify({"success": "¡Hecho! La tarea está eliminada."}) if response.status_code == 204 else jsonify({"error": "No pude eliminarla, ¿probamos de nuevo?"}), response.status_code
+            task_data = task_response.json().get("data", {})
+            task_name = task_data.get("name", "la tarea")
+
+        # Ejecutar la acción correspondiente
+        if "mark_done" in action:
+            try:
+                payload = {"data": {"completed": True}}
+                print(f"Intentando marcar como completado con payload: {payload}")
+                response = requests.put(
+                    f"https://app.asana.com/api/1.0/tasks/{task_id}",
+                    headers=headers,
+                    json=payload,
+                    timeout=10
+                )
+                if response.status_code == 200:
+                    return jsonify({"success": f"¡Listo! La tarea '{task_name}' está marcada como hecha."})
+                else:
+                    return jsonify({"error": "No pude marcarla, ¿lo intentamos otra vez?", "details": response.text}), response.status_code
+            except requests.exceptions.RequestException as e:
+                print(f"Error en mark_done PUT: {str(e)}")
+                return jsonify({"error": "Error al marcar la tarea", "details": str(e)}), 500
+            except Exception as e:
+                print(f"Error inesperado en mark_done: {str(e)}")
+                return jsonify({"error": "Error inesperado al marcar la tarea", "details": str(e)}), 500
+
+        elif "delete" in action:
+            try:
+                response = requests.delete(
+                    f"https://app.asana.com/api/1.0/tasks/{task_id}",
+                    headers=headers,
+                    timeout=10
+                )
+                print("Delete response:", response.status_code, response.text)
+                if response.status_code == 204:
+                    return jsonify({"success": f"¡Hecho! La tarea '{task_name}' está eliminada."})
+                else:
+                    return jsonify({"error": "No pude eliminarla, ¿probamos de nuevo?", "details": response.text}), response.status_code
+            except requests.exceptions.RequestException as e:
+                print(f"Error en delete: {str(e)}")
+                return jsonify({"error": "Error al eliminar la tarea", "details": str(e)}), 500
 
         elif action == "assign":
             match = re.search(r'asigna(?: a)?:\s*(.+)', user_text, re.IGNORECASE)
             if not match:
                 return jsonify({"error": "Dime a quién asignarla (ej: 'asigna: juan@example.com')"}), 400
-            assignee = match.group(1).strip()
+            assignee_email = match.group(1).strip()
 
-            response = requests.put(
-                f"https://app.asana.com/api/1.0/tasks/{task_id}",
+            try:
+                workspaces_response = requests.get("https://app.asana.com/api/1.0/workspaces", headers=headers, timeout=10)
+                print("Workspaces response:", workspaces_response.status_code, workspaces_response.text)
+                if workspaces_response.status_code != 200:
+                    return jsonify({"error": "No se pudo obtener el workspace", "details": workspaces_response.text}), workspaces_response.status_code
+            except requests.exceptions.RequestException as e:
+                print(f"Error en Workspaces GET: {str(e)}")
+                return jsonify({"error": "Error al obtener el workspace", "details": str(e)}), 500
+
+            workspace_id = workspaces_response.json().get("data", [])[0]["gid"]
+
+            try:
+                users_response = requests.get(
+                    f"https://app.asana.com/api/1.0/users?workspace={workspace_id}&opt_fields=email,gid",
+                    headers=headers,
+                    timeout=10
+                )
+                print("Users response:", users_response.status_code, users_response.text)
+                if users_response.status_code != 200:
+                    return jsonify({"error": "No se pudo buscar el usuario", "details": users_response.text}), users_response.status_code
+            except requests.exceptions.RequestException as e:
+                print(f"Error en Users GET: {str(e)}")
+                return jsonify({"error": "Error al buscar el usuario", "details": str(e)}), 500
+
+            users = users_response.json().get("data", [])
+            assignee = next((user for user in users if user["email"] == assignee_email), None)
+            if not assignee:
+                return jsonify({"error": f"No encontré al usuario '{assignee_email}' en Asana"}), 404
+
+            assignee_gid = assignee["gid"]
+
+            try:
+                response = requests.put(
+                    f"https://app.asana.com/api/1.0/tasks/{task_id}",
+                    headers=headers,
+                    json={"data": {"assignee": assignee_gid}},
+                    timeout=10
+                )
+                print("Assign PUT response:", response.status_code, response.text)
+                if response.status_code == 200:
+                    updated_user = mongo.database.usuarios.find_one({"correo": email})
+                    if updated_user:
+                        cache.set(email, updated_user, timeout=1800)
+                        print(f"Cache updated for user {email} after assigning task")
+                    return jsonify({"success": f"¡Listo! Asigné la tarea '{task_name}' a '{assignee_email}'."})
+                else:
+                    return jsonify({"error": "No pude asignarla, ¿lo intentamos otra vez?", "details": response.text}), response.status_code
+            except requests.exceptions.RequestException as e:
+                print(f"Error en assign PUT: {str(e)}")
+                return jsonify({"error": "Error al asignar la tarea", "details": str(e)}), 500
+            except Exception as e:
+                print(f"Error inesperado en assign: {str(e)}")
+                return jsonify({"error": "Error inesperado al asignar la tarea", "details": str(e)}), 500
+
+        return jsonify({"error": "No entendí, ¿quieres 'marca como hecha', 'elimina' o 'asigna' con un nombre o ID de tarea?"}), 400
+
+    def get_task_id_asana(task_name, asana_token):
+        """Obtiene el task_id de una tarea por su nombre en Asana."""
+        try:
+            headers = {"Authorization": f"Bearer {asana_token}"}
+            workspaces_response = requests.get("https://app.asana.com/api/1.0/workspaces", headers=headers, timeout=10)
+            print(f"Workspaces GET response: {workspaces_response.status_code} {workspaces_response.text}")
+            if workspaces_response.status_code != 200:
+                return None
+
+            workspace_id = workspaces_response.json().get("data", [])[0]["gid"]
+            tasks_response = requests.get(
+                f"https://app.asana.com/api/1.0/tasks?workspace={workspace_id}&opt_fields=gid,name",
                 headers=headers,
-                json={"data": {"assignee": assignee}}
+                timeout=10
             )
-            return jsonify({"success": f"¡Listo! Asigné la tarea a '{assignee}'."}) if response.status_code == 200 else jsonify({"error": "No pude asignarla, ¿lo intentamos otra vez?"}), response.status_code
+            print(f"Tasks GET response: {tasks_response.status_code} {tasks_response.text}")
+            if tasks_response.status_code != 200:
+                return None
 
-        return jsonify({"error": "No entendí, ¿quieres 'marca como hecha', 'elimina' o 'asigna'?"}), 400
-
+            tasks = tasks_response.json().get("data", [])
+            for task in tasks:
+                if task.get("name", "").lower() == task_name.lower():
+                    return task["gid"]
+            return None
+        except requests.exceptions.RequestException as e:
+            print(f"Error al buscar task_id: {str(e)}")
+            return None
+    
     @app.route("/accion-clickup", methods=["POST"])
     def ejecutar_accion_clickup():
         data = request.json

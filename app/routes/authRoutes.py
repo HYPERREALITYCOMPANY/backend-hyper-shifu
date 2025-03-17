@@ -41,7 +41,8 @@ def setup_auth_routes(app, mongo, cache):
             return jsonify({"error": "Faltan campos obligatorios"}), 400
         
         # Usa Redis para obtener el usuario
-        usuario = get_user_from_db(data["correo"], cache, mongo)
+        usuario = mongo.database.usuarios.find_one({'correo': data["correo"]})
+        cache.set(usuario.email, usuario, timeout=1800)  # Guarda en caché por 30 minutos
 
         if not usuario or not check_password_hash(usuario["password"], data["password"]):
             return jsonify({"error": "Credenciales incorrectas"}), 401
@@ -62,9 +63,8 @@ def setup_auth_routes(app, mongo, cache):
         email = request.args.get('email')
         if not email:
             return jsonify({"error": "email de usuario no proporcionado"}), 400
-        
         try:
-            usuario = get_user_from_db(email, cache, mongo)
+            usuario = mongo.database.usuarios.find_one({'correo': email})
         except Exception as e:
             return jsonify({"error": str(e)}), 500
         

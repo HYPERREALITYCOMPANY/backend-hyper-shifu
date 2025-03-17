@@ -3,7 +3,6 @@ import requests
 import os
 import datetime
 from dotenv import load_dotenv
-from app.utils.utils import get_user_from_db
 
 load_dotenv()
 
@@ -27,9 +26,7 @@ def setup_routes_refresh(app, mongo, cache):
                 f"integrations.{integration_name}.token": access_token,
                 f"integrations.{integration_name}.timestamp": datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
             }
-            # Eliminar la caché anterior
-            
-            cache.delete(user_email)
+
             # Actualizar MongoDB
             result = mongo.database.usuarios.update_one(
                 {"correo": user_email},
@@ -37,16 +34,14 @@ def setup_routes_refresh(app, mongo, cache):
             )
             if result.matched_count == 0:
                 raise ValueError("No se encontró el usuario para actualizar el token")
-            
-            print(f"Token de {integration_name} actualizado en DB para {user_email}")
+            print(f"Token de {integration_name} actualizado en MongoDB para {user_email}. Modificados: {result.modified_count}")
+
             # Obtener el usuario actualizado de MongoDB
             updated_user = mongo.database.usuarios.find_one({"correo": user_email})
             if not updated_user:
                 raise ValueError("No se pudo obtener el usuario actualizado después de la operación")
 
             # Actualizar la caché con el usuario actualizado
-            cache.set(user_email, updated_user, timeout=1800)  # Guarda en caché por 30 minutos
-            print(f"Cache updated for user {user_email} with refreshed token for {integration_name}")
             return updated_user
 
         except Exception as e:
@@ -185,9 +180,6 @@ def setup_routes_refresh(app, mongo, cache):
                 return jsonify({"success": False, "message": "No se encontraron refresh tokens para este usuario"}), 404
 
             refreshed_tokens, errors = refresh_tokens(integrations, user_email, integration_name)
-            
-            updated_user = get_user_from_db(user_email, cache, mongo)
-            print(updated_user)
 
             if errors and not refreshed_tokens:
                 return jsonify({"success": False, "message": "Fallaron todas las actualizaciones", "errors": errors}), 500

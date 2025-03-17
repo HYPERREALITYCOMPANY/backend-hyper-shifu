@@ -15,7 +15,7 @@ openai.api_key=Config.CHAT_API_KEY
 def setup_routes_chats(app, mongo, cache, refresh_functions):
     cache = Cache(app)
     functions = setup_routes_searchs(app, mongo, cache, refresh_functions)
-    functionsPost = setup_post_routes(app, mongo, cache)
+    functionsPost = setup_post_routes(app, mongo, cache, refresh_functions)
     functions2 = setup_rules_routes(app, mongo, cache)
     search_gmail = functions["search_gmail"]
     search_outlook = functions["search_outlook"]

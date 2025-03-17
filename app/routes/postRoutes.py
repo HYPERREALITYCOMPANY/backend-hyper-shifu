@@ -12,13 +12,90 @@ openai.api_key=Config.CHAT_API_KEY
 from flask_caching import Cache
 from app.utils.utils import get_user_from_db
 
-def setup_post_routes(app,mongo,cache):
+def setup_post_routes(app,mongo,cache, refresh_functions):
     cache = Cache(app)
     def get_clickup_headers(token):
         return {
             "Authorization": token,
             "Content-Type": "application/json"
     }
+    get_refresh_tokens_from_db = refresh_functions["get_refresh_tokens_from_db"]
+    refresh_tokens_func = refresh_functions["refresh_tokens"]
+
+    def should_refresh_tokens(email):
+        """Determina si se deben refrescar los tokens basado en el tiempo desde el último refresco."""
+        last_refresh_key = f"last_refresh_{email}"
+        last_refresh = cache.get(last_refresh_key)
+
+        if last_refresh is None:
+            print(f"[INFO] No hay registro de refresco previo para {email}, refrescando por primera vez")
+            return True
+
+        current_time = datetime.utcnow()
+        last_refresh_time = datetime.fromtimestamp(last_refresh)
+        refresh_interval = timedelta(minutes=15)  # Cambia a 10 si prefieres 10 minutos
+
+        if current_time >= (last_refresh_time + refresh_interval):
+            print(f"[INFO] Han pasado más de 15 minutos desde el último refresco para {email}")
+            return True
+        
+        print(f"[INFO] Refresco no necesario para {email}, último refresco fue hace menos de 15 minutos")
+        return False
+
+    def get_user_with_refreshed_tokens(email):
+        """Obtiene el usuario y refresca tokens solo la primera vez y cada 15 minutos."""
+        try:
+            user = get_user_from_db(email, cache, mongo)
+            if not user:
+                return None
+
+            integrations = user.get("integrations", {})
+            refresh_tokens_dict = get_refresh_tokens_from_db(email)
+            if not refresh_tokens_dict:
+                print(f"[INFO] No hay refresh tokens para {email}, usando tokens existentes")
+                return user
+
+            # Verificar si debemos refrescar basado en el tiempo
+            if should_refresh_tokens(email):
+                tokens_to_refresh = {}
+                for service, token_data in integrations.items():
+                    refresh_token = token_data.get("refresh_token")
+                    # Saltar servicios con tokens infinitos (refresh_token = "n/a" o ausente)
+                    if not refresh_token or refresh_token == "n/a":
+                        print(f"[INFO] Saltando refresco para {service}: token infinito")
+                        continue
+                    if service in refresh_tokens_dict:
+                        tokens_to_refresh[service] = refresh_tokens_dict[service]
+                        print(f"[INFO] Incluyendo {service} para refresco")
+
+                if tokens_to_refresh:
+                    print(f"[INFO] Refrescando tokens para {email}: {list(tokens_to_refresh.keys())}")
+                    refreshed_tokens, errors = refresh_tokens_func(tokens_to_refresh, email)
+                    
+                    if refreshed_tokens:
+                        print(f"[SUCCESS] Tokens refrescados: {list(refreshed_tokens.keys())}")
+                        updated_user = mongo.database.usuarios.find_one({"correo": email})
+                        if updated_user:
+                            cache.set(email, updated_user, timeout=1800)
+                            # Registrar la hora del refresco en la caché
+                            cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
+                            print(f"[INFO] Caché actualizada y refresco registrado para {email}")
+                            return updated_user
+                        else:
+                            print(f"[ERROR] No se pudo obtener usuario actualizado de la BD")
+                    elif errors:
+                        print(f"[WARNING] Errores al refrescar tokens: {errors}")
+                else:
+                    print(f"[INFO] No hay tokens para refrescar (todos infinitos o no aplicables)")
+                    # Si no hay nada que refrescar, aún marcamos el tiempo para evitar chequeos frecuentes
+                    cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
+
+            return user
+            
+        except Exception as e:
+            print(f"[ERROR] Error general en get_user_with_refreshed_tokens: {e}")
+            return None
+
 
 ############################################################################################################################
     def post_to_gmail(query):
@@ -27,7 +104,7 @@ def setup_post_routes(app,mongo,cache):
         if not email:
             return jsonify({"error": "Se debe proporcionar un email"}), 400
 
-        user = mongo.database.usuarios.find_one({'correo': email})
+        user = get_user_with_refreshed_tokens(email)
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -382,7 +459,7 @@ def setup_post_routes(app,mongo,cache):
         if not email:
             return jsonify({"error": "Se debe proporcionar un email"}), 400
 
-        user = mongo.database.usuarios.find_one({'correo': email})
+        user = get_user_with_refreshed_tokens(email)
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -504,7 +581,7 @@ def setup_post_routes(app,mongo,cache):
         if not email:
             return jsonify({"error": "Se debe proporcionar un email"}), 400
 
-        user = mongo.database.usuarios.find_one({'correo': email})
+        user = get_user_with_refreshed_tokens(email)
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -552,7 +629,7 @@ def setup_post_routes(app,mongo,cache):
         if not email:
             return jsonify({"error": "Se debe proporcionar un email"}), 400
 
-        user = mongo.database.usuarios.find_one({'correo': email})
+        user = get_user_with_refreshed_tokens(email)
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -618,7 +695,7 @@ def setup_post_routes(app,mongo,cache):
         if not email:
             return jsonify({"error": "Se debe proporcionar un email"}), 400
 
-        user = mongo.database.usuarios.find_one({'correo': email})
+        user = get_user_with_refreshed_tokens(email)
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -656,7 +733,7 @@ def setup_post_routes(app,mongo,cache):
         email = request.args.get('email')
         if not email:
             return jsonify({"error": "Se debe proporcionar un email"}), 400
-        user = mongo.database.usuarios.find_one({'correo': email})
+        user = get_user_with_refreshed_tokens(email)
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
         dropbox_token = user.get("integrations", {}).get("Dropbox", {}).get("token")
@@ -930,7 +1007,7 @@ def setup_post_routes(app,mongo,cache):
         email = request.args.get('email')
         if not email:
             return jsonify({"error": "Se debe proporcionar un email"}), 400
-        user = mongo.database.usuarios.find_one({'correo': email})
+        user = get_user_with_refreshed_tokens(email)
 
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
@@ -1182,7 +1259,7 @@ def setup_post_routes(app,mongo,cache):
             return jsonify({"error": "Se debe proporcionar un email"}), 400
 
         # Buscar usuario en la base de datos
-        user = mongo.database.usuarios.find_one({'correo': email})
+        user = get_user_with_refreshed_tokens(email)
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -1234,7 +1311,7 @@ def setup_post_routes(app,mongo,cache):
             return jsonify({"error": "Se debe proporcionar un email"}), 400
 
         # Buscar usuario en la base de datos
-        user = mongo.database.usuarios.find_one({'correo': email})
+        user = get_user_with_refreshed_tokens(email)
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 

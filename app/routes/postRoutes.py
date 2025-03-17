@@ -235,7 +235,7 @@ def setup_post_routes(app,mongo,cache, refresh_functions):
         print("Query de eliminación de correos:", query)
 
         # Expresión regular para capturar "eliminar correos de (remitente)"
-        match = re.search(r'eliminar correos de\s*([\w\.-]+@[\w\.-]+)', query, re.IGNORECASE)
+        match = re.search(r'eliminar correos from:\s*([\w\.-]+@[\w\.-]+)', query, re.IGNORECASE)
         print("Match de eliminación de correos:", match)
 
         if match:
@@ -423,7 +423,7 @@ def setup_post_routes(app,mongo,cache, refresh_functions):
             cuerpo = match.group(3).strip()
 
             if destinatario == 'destinatario':
-                return {"message": "⚠️ ¡Oops! 😅 Parece que olvidaste poner el correo de destino. 📧 Por favor, incluye una dirección válida para que podamos enviarlo. ✉️"}
+                return {"message": f"⚠️ ¡Oops! 😅 Parece que olvidaste poner el correo de destino. 📧 Por favor, incluye una dirección válida para que podamos enviarlo. ✉️"}
 
             mensaje = MIMEText(cuerpo)
             mensaje["To"] = destinatario
@@ -448,7 +448,7 @@ def setup_post_routes(app,mongo,cache, refresh_functions):
                 else:
                     return {"error": f"⚠️ No se pudo enviar el correo. Error: {response_json}"}
             except Exception as e:
-                return {"error": "⚠️ Error inesperado al procesar la respuesta de Gmail."}
+                return {"message": f"⚠️ Error inesperado al procesar la respuesta de Gmail."}
 
         return {"message": f"No se encontró una acción válida en la consulta"}
 
@@ -1038,11 +1038,11 @@ def setup_post_routes(app,mongo,cache, refresh_functions):
 
             # Verificar si se encontró el archivo o carpeta
             if archivo_o_carpeta == 'n/a':
-                return {"message": "⚠️ ¡Oh no! No se ha especificado el nombre del archivo o carpeta. 📂 Por favor, intenta de nuevo con el nombre de lo que quieres compartir. ✍️"}
+                return {"message": f"⚠️ ¡Oh no! No se ha especificado el nombre del archivo o carpeta. 📂 Por favor, intenta de nuevo con el nombre de lo que quieres compartir. ✍️"}
 
             # Validar si se especificaron destinatarios
             if destinatarios == ': n/a':
-                return {"message": "⚠️ ¡Ups! No se especificaron destinatarios. 🤔 Indica a quién deseas compartirlo. 👥"}
+                return {"message": f"⚠️ ¡Ups! No se especificaron destinatarios. 🤔 Indica a quién deseas compartirlo. 👥"}
             
             # Limpiar destinatarios para eliminar el símbolo ":" y cualquier espacio innecesario
             destinatarios_limpios = [email.strip(":").strip() for email in destinatarios.split(',')]
@@ -1066,7 +1066,7 @@ def setup_post_routes(app,mongo,cache, refresh_functions):
 
             if results:
                 file_id = results[0]['id']
-                print(f"Se encontró el archivo/carpeta con ID: {file_id}")
+                print("Se encontró el archivo/carpeta con ID: {file_id}")
 
                 # Ahora, compartimos el archivo o carpeta con los destinatarios
                 for email in destinatarios_limpios:
@@ -1303,6 +1303,7 @@ def setup_post_routes(app,mongo,cache, refresh_functions):
             if not file_id:
                 return jsonify({"error": f"Archivo '{file_name}' no encontrado en OneDrive"}), 404
 
+################################################################################################
     def post_to_onedrive(query):
 
         # Obtener email del usuario

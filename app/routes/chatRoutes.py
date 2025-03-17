@@ -316,6 +316,7 @@ def setup_routes_chats(app, mongo, cache, refresh_functions):
                     f"3. **Eliminar elementos** (acciones como 'eliminar', 'borrar', 'suprimir'):\n"
                     f"   - Ejemplo: Eliminar un contacto, tarea, archivo. (Esto se envía a Notion, Asana, ClickUp)\n"
                     f"   - Si se menciona **'eliminar correos'**, debe enviarse a **Gmail** y **Outlook**\n"
+                    f"   - Si se menciona **'eliminar correos de'** la query debe ser OBLIGATORIAMENTE 'eliminar correo|s from: [destinatario]' con un espacio\n"
                     f"   - Si se menciona **'elimina la cita'** o 'elimina la reunion' debe enviarse a **Gmail**\n"
                     f"   - **Eliminar archivos de Google Drive, Dropbox o OneDrive**: Para eliminar un archivo, se debe especificar el nombre del archivo a eliminar. Si no se menciona el nombre, el nombre del archivo debe ser 'n/a'.\n"
                     f"   - **Formato de query para Google Drive, Dropbox o OneDrive**: 'eliminar archivo: [nombre_archivo]'.\n"
@@ -385,6 +386,15 @@ def setup_routes_chats(app, mongo, cache, refresh_functions):
                     f"     - Recuperar archivo: documento.pdf → Se intentará recuperar 'documento.pdf' a su ubicación original.\n"
                     f"     - Recuperar archivo: presentación.pptx → Se restaurará 'presentación.pptx' desde la papelera.\n"
                     f"     - Recuperar archivo: informe.docx → Se buscará y restaurará 'informe.docx' desde la papelera.\n"
+
+                    f"11. **Mover Correos a Spam** (acciones como 'mover a spam', 'enviar a spam', 'marcar como spam'):\n"
+                    f"   - Se interpreta cualquier solicitud relacionada con mover correos de un remitente específico a la carpeta de spam en Gmail.\n"
+                    f"   - La solicitud debe contener obligatoriamente el formato: 'mover a spam from: correoejemplo@gmail.com'.\n"
+                    f"   - Ejemplos:\n"
+                    f"     - Mover a spam from: usuario@correo.com → Se moverán todos los correos de 'usuario@correo.com' a la carpeta de spam.\n"
+                    f"     - Enviar a spam from: ventas@tienda.com → Se marcarán como spam los correos de 'ventas@tienda.com'.\n"
+                    f"     - Marcar como spam from: publicidad@correo.net → Se trasladarán los correos de 'publicidad@correo.net' a la carpeta de spam.\n"
+
                     f"Cuando detectes una solicitud de POST, identifica a qué servicios corresponde basándote en las acciones. Usa 'N/A' para las APIs que no apliquen.\n"
                     f"**Generación de Consulta**: Asegúrate de que las consultas sean claras y sin palabras adicionales como '¿Podrías...?'. Utiliza los datos específicos proporcionados (nombre, fecha, tarea, etc.) para generar las queries."
                     f"""- Si la solicitud implica crear un evento en Google Calendar (por ejemplo, con palabras como 'haz una reunión', 'agenda', 'agendar', 'programar' y menciona 'Google Calendar' o 'calendario'), genera una query para la clave "gmail" en el formato: "create_event|summary:<asunto>|start:<fecha_inicio>|end:<fecha_fin>[|attendees:<lista_de_correos>][|meet:True]", donde:

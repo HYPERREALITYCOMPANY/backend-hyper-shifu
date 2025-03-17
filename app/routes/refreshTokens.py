@@ -42,7 +42,7 @@ def setup_routes_refresh(app, mongo, cache):
             
             print(f"Token de {integration_name} actualizado en DB para {user_email}")
             # Obtener el usuario actualizado de MongoDB
-            updated_user = mongo.database.usuarios.find_one({"correo": email})
+            updated_user = mongo.database.usuarios.find_one({"correo": user_email})
             if not updated_user:
                 raise ValueError("No se pudo obtener el usuario actualizado después de la operación")
 

@@ -10,7 +10,55 @@ from app.utils.utils import get_user_from_db
 openai.api_key=Config.CHAT_API_KEY
 
 def setup_routes_secretary_gets(app, mongo, cache):
-    cache = Cache(app)
+    # Función modificada para garantizar que se refresquen los tokens
+    def get_user_with_refreshed_tokens(email):
+        """Obtiene el usuario y asegura que todos sus tokens estén actualizados"""
+        try:
+            # Primero intentamos obtener el usuario de la BD/caché
+            user = get_user_with_refreshed_tokens(email)
+            if not user:
+                return None
+            
+            # Importamos las funciones de refreshTokens aquí para evitar circular imports
+            from app.routes.refreshTokens import setup_routes_refresh
+            
+            # Obtenemos las funciones necesarias para refrescar tokens
+            refresh_functions = setup_routes_refresh(app, mongo, cache)
+            get_refresh_tokens_from_db = refresh_functions["get_refresh_tokens_from_db"]
+            refresh_tokens_func = refresh_functions["refresh_tokens"]
+            
+            # Obtenemos los refresh tokens del usuario
+            try:
+                refresh_tokens_dict = get_refresh_tokens_from_db(email)
+                
+                if refresh_tokens_dict:
+                    print(f"[INFO] Refrescando TODOS los tokens para {email} antes de acceder a las APIs")
+                    # Refrescamos todos los tokens
+                    refreshed_tokens, errors = refresh_tokens_func(refresh_tokens_dict, email)
+                    
+                    if refreshed_tokens:
+                        print(f"[SUCCESS] Tokens refrescados exitosamente: {list(refreshed_tokens.keys())}")
+                        # Obtenemos el usuario actualizado
+                        updated_user = mongo.database.usuarios.find_one({"correo": email})
+                        # Actualizamos la caché
+                        if updated_user:
+                            cache.set(email, updated_user, timeout=1800)
+                            print(f"[INFO] Caché actualizada para {email}")
+                            return updated_user
+                    elif errors:
+                        print(f"[WARNING] Errores al refrescar tokens: {errors}")
+            except Exception as e:
+                print(f"[ERROR] Error al intentar refrescar tokens: {e}")
+            
+            # Si hay errores o no podemos refrescar, retornamos el usuario original
+            return user
+            
+        except Exception as e:
+            print(f"[ERROR] Error general en get_user_with_refreshed_tokens: {e}")
+            return None
+    
+    def get_gmail_headers(token):
+        return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     
     def get_gmail_headers(token):
         return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
@@ -110,7 +158,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
     def obtener_ultimo_correo_gmail():
         email = request.args.get("email")
         try:
-            user = get_user_from_db(email, cache, mongo)
+            user = get_user_with_refreshed_tokens(email)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -160,7 +208,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
     def obtener_ultimo_correo_outlook():
         email = request.args.get("email")
         try:
-            user = get_user_from_db(email, cache, mongo)
+            user = get_user_with_refreshed_tokens(email)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -200,7 +248,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
     def obtener_ultima_notificacion_notion():
         email = request.args.get("email")
         try:
-            user = get_user_from_db(email, cache, mongo)
+            user = get_user_with_refreshed_tokens(email)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -301,7 +349,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
     def obtener_ultimo_mensaje_slack():
         email = request.args.get("email")
         try:
-            user = get_user_from_db(email, cache, mongo)
+            user = get_user_with_refreshed_tokens(email)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -345,7 +393,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
     def obtener_ultimo_archivo_onedrive():
         email = request.args.get("email")
         try:
-            user = get_user_from_db(email, cache, mongo)
+            user = get_user_with_refreshed_tokens(email)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -384,7 +432,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
 
         try:
             # Obtener usuario de la base de datos
-            user = get_user_from_db(email, cache, mongo)
+            user = get_user_with_refreshed_tokens(email)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -459,7 +507,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
     def obtener_ultimo_archivo_dropbox():
         email = request.args.get("email")
         try:
-            user = get_user_from_db(email, cache, mongo)
+            user = get_user_with_refreshed_tokens(email)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -543,7 +591,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
     def get_last_notification_hubspot():
         email = request.args.get("email")
         try:
-            user = get_user_from_db(email, cache, mongo)
+            user = get_user_with_refreshed_tokens(email)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -597,7 +645,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
     def obtener_ultima_notificacion_clickup():
         email = request.args.get("email")
         try:
-            user = get_user_from_db(email, cache, mongo)
+            user = get_user_with_refreshed_tokens(email)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -630,7 +678,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
     def obtener_ultimo_archivo_drive():
         email = request.args.get("email")
         try:
-            user = get_user_from_db(email, cache, mongo)
+            user = get_user_with_refreshed_tokens(email)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 

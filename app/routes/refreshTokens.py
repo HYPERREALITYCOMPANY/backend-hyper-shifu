@@ -22,19 +22,31 @@ def setup_routes_refresh(app, mongo, cache):
                 refresh_tokens[name] = integration["refresh_token"]
         return refresh_tokens
 
-    # Guardar token en la DB
+    # Guardar token en la DB y actualizar la caché
     def save_access_token_to_db(user_email, integration_name, access_token):
         try:
             update_data = {
                 f"integrations.{integration_name}.token": access_token,
                 f"integrations.{integration_name}.timestamp": datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
             }
+            # Eliminar la caché anterior
             cache.delete(user_email)
+            # Actualizar MongoDB
             mongo.database.usuarios.update_one(
                 {"correo": user_email},
                 {"$set": update_data}
             )
             print(f"Token de {integration_name} actualizado en DB")
+
+            # Obtener el usuario actualizado de MongoDB
+            updated_user = mongo.database.usuarios.find_one({"correo": user_email})
+            if not updated_user:
+                raise ValueError("No se pudo obtener el usuario actualizado después de la operación")
+
+            # Actualizar la caché con el usuario actualizado
+            cache.set(user_email, updated_user, timeout=1800)  # Guarda en caché por 30 minutos
+            print(f"Cache updated for user {user_email} with refreshed token for {integration_name}")
+
         except Exception as e:
             print(f"Error al actualizar token en DB para {integration_name}: {e}")
             raise

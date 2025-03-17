@@ -7,8 +7,12 @@ from datetime import datetime
 import re
 import json
 import openai
+from app.utils.utils import get_user_from_db
+from flask_caching import Cache
 
-def setup_execute_routes(app,mongo):
+
+def setup_execute_routes(app,mongo, cache):
+    cache = Cache(app)
     @app.route('/execute/gmail', methods=['GET'])
     def execute_gmail_rules():
         email = request.args.get('email')
@@ -143,10 +147,12 @@ def setup_execute_routes(app,mongo):
             condition_match = re.search(r"de\s+([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z0-9]{2,})", condition)
             if condition_match:
                 expected_sender = condition_match.group(1).lower().strip()
+                print(f"Outlook: Regla con remitente específico '{expected_sender}'")
             else:
                 company_match = re.search(r"de\s+(.+)", condition)
                 if company_match:
                     expected_sender = company_match.group(1).lower().strip()
+                    print(f"Outlook: Buscando correos de remitentes que contengan '{expected_sender}'")
                 else:
                     print(f"Outlook: No se pudo extraer un remitente válido de la condición: {condition}")
                     expected_sender = None
@@ -358,6 +364,7 @@ def setup_execute_routes(app,mongo):
             headers = {'Authorization': f'Bearer {asana_token}'}
             workspace_url = "https://app.asana.com/api/1.0/workspaces"
             workspace_response = requests.get(workspace_url, headers=headers)
+            print(workspace_response)
             if workspace_response.status_code != 200:
                 return jsonify({"error": "Error obteniendo el workspace de Asana"}), 500
             

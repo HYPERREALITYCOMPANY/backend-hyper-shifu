@@ -115,17 +115,28 @@ def setup_routes_secretary_gets(app, mongo):
                 return jsonify({"error": "Token no disponible"}), 400
 
             headers = get_gmail_headers(token)
-            response = requests.get("https://www.googleapis.com/gmail/v1/users/me/messages?maxResults=1", headers=headers)
+            # Filtrar solo correos en bandeja de entrada, excluyendo enviados por el usuario
+            response = requests.get(
+                "https://www.googleapis.com/gmail/v1/users/me/messages",
+                headers=headers,
+                params={
+                    "maxResults": 1,
+                    "q": "in:inbox -from:me"  # Solo recibidos en la bandeja de entrada
+                }
+            )
 
             if response.status_code != 200:
                 return jsonify({"error": "Error al obtener correos"}), response.status_code
 
             messages = response.json().get("messages", [])
             if not messages:
-                return jsonify({"error": "No hay correos"})
+                return jsonify({"error": "No hay correos nuevos en tu bandeja de entrada, ¿reviso luego?"}), 404
 
             message_id = messages[0]["id"]
-            response = requests.get(f"https://www.googleapis.com/gmail/v1/users/me/messages/{message_id}?format=full", headers=headers)
+            response = requests.get(
+                f"https://www.googleapis.com/gmail/v1/users/me/messages/{message_id}?format=full",
+                headers=headers
+            )
             message = response.json()
             headers_list = message.get("payload", {}).get("headers", [])
 
@@ -134,13 +145,13 @@ def setup_routes_secretary_gets(app, mongo):
 
             return jsonify({
                 "id": message_id,
-                "from": sender,
-                "subject": subject,
-                "snippet": message.get("snippet", "(Sin contenido)")
+                "from": "Gmail",
+                "subject": f"Hola, te llegó un correo de {sender}",
+                "snippet": f"Es sobre: {subject}."
             })
         except Exception as e:
-            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
-
+            return jsonify({"error": "Uy, algo salió mal al revisar tu Gmail, ¿lo intento de nuevo?", "details": str(e)}), 500
+                
     @app.route("/ultima-notificacion/outlook", methods=["GET"])
     def obtener_ultimo_correo_outlook():
         email = request.args.get("email")
@@ -154,9 +165,14 @@ def setup_routes_secretary_gets(app, mongo):
                 return jsonify({"error": "Token no disponible"}), 400
 
             headers = get_outlook_headers(token)
+            # Usar 'inbox' directamente en lugar de buscar el ID
             response = requests.get(
-                "https://graph.microsoft.com/v1.0/me/messages?$top=1&$filter=parentFolderId ne 'JunkEmail'",
-                headers=headers
+                "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages",
+                headers=headers,
+                params={
+                    "$top": 1,
+                    "$orderby": "receivedDateTime desc"  # Último recibido
+                }
             )
 
             if response.status_code != 200:
@@ -164,84 +180,119 @@ def setup_routes_secretary_gets(app, mongo):
 
             messages = response.json().get("value", [])
             if not messages:
-                return jsonify({"error": "No hay correos"}), 404
+                return jsonify({"error": "No hay correos nuevos en tu bandeja de entrada, ¿te aviso si llega algo?"}), 404
 
             message = messages[0]
             return jsonify({
                 "id": message["id"],
-                "from": message["from"]["emailAddress"]["address"],
-                "subject": message["subject"],
-                "snippet": message["bodyPreview"]
+                "from": "Outlook",
+                "subject": f"Hola, tienes un correo nuevo de {message['from']['emailAddress']['address']}",
+                "snippet": f"Es sobre: {message['subject']}."
             })
         except Exception as e:
-            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
-
+            return jsonify({"error": "Ups, algo falló con Outlook, ¿lo reviso otra vez?", "details": str(e)}), 500
+            
     @app.route("/ultima-notificacion/notion", methods=["GET"])
     def obtener_ultima_notificacion_notion():
-
         email = request.args.get("email")
-
         try:
             user = mongo.database.usuarios.find_one({'correo': email})
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
-            notion_integration = user.get('integrations', {}).get('Notion', None)
-            notion_token = notion_integration.get('token') if notion_integration else None
-
+            notion_token = user.get('integrations', {}).get('Notion', {}).get('token')
             if not notion_token:
                 return jsonify({"error": "Token de Notion no disponible"}), 400
 
-            headers = {
-                "Authorization": f"Bearer {notion_token}",
-                "Notion-Version": "2022-06-28",
-                "Content-Type": "application/json"
-            }
+            headers = get_notion_headers(notion_token)
 
-            # 🔍 Buscar elementos ordenados por última edición
-            payload = {
-                "sort": {
-                    "direction": "descending",
-                    "timestamp": "last_edited_time"
-                },
-                "page_size": 5  # Buscamos más de 1 para poder filtrar
-            }
+            # Función auxiliar para obtener el título de un objeto
+            def get_title(properties):
+                for prop_name, prop_value in properties.items():
+                    if prop_value.get("type") == "title" and prop_value.get("title"):
+                        return prop_value["title"][0].get("text", {}).get("content", "(Sin título)")
+                return "(Sin título)"
 
-            response = requests.post("https://api.notion.com/v1/search", headers=headers, json=payload)
-            notion_data = response.json()
+            # 1. Obtener todas las páginas accesibles
+            pages_response = requests.post(
+                "https://api.notion.com/v1/search",
+                headers=headers,
+                json={
+                    "sort": {"direction": "descending", "timestamp": "last_edited_time"},
+                    "page_size": 100,  # Máximo permitido por Notion
+                    "filter": {"value": "page", "property": "object"}
+                }
+            )
+            if pages_response.status_code != 200:
+                return jsonify({"error": "Error al obtener páginas de Notion"}), pages_response.status_code
 
-            if response.status_code != 200:
-                return jsonify({"error": "Error al obtener notificaciones de Notion"}), response.status_code
-
-            results = notion_data.get("results", [])
-            if not results:
-                return jsonify({"error": "No hay notificaciones"}), 404
-
-            # ❌ Filtrar elementos archivados
-            filtered_results = [
-                item for item in results
-                if not item.get("archived", False) and item.get("object") == "page"
+            pages = [
+                {
+                    "id": page["id"],
+                    "type": "Página",
+                    "title": get_title(page.get("properties", {})),
+                    "last_edited_time": page["last_edited_time"]
+                }
+                for page in pages_response.json().get("results", [])
+                if not page.get("archived", False)
             ]
-            if not filtered_results:
-                return jsonify({"error": "No hay notificaciones activas"}), 404
 
-            # 📌 Tomar el más reciente después del filtro
-            last_update = filtered_results[0]
+            # 2. Obtener todas las bases de datos accesibles
+            databases_response = requests.post(
+                "https://api.notion.com/v1/search",
+                headers=headers,
+                json={
+                    "sort": {"direction": "descending", "timestamp": "last_edited_time"},
+                    "page_size": 100,
+                    "filter": {"value": "database", "property": "object"}
+                }
+            )
+            if databases_response.status_code != 200:
+                return jsonify({"error": "Error al obtener bases de datos de Notion"}), databases_response.status_code
 
-            # 📝 Extraer título
-            title_prop = last_update.get("properties", {}).get("title", {}).get("title", [])
-            title = title_prop[0].get("text", {}).get("content", "(Sin título)") if title_prop else "(Sin título)"
+            databases = databases_response.json().get("results", [])
 
+            # 3. Consultar las filas (items) de cada base de datos
+            all_items = pages  # Combinaremos páginas y filas aquí
+            for db in databases:
+                db_id = db["id"]
+                query_response = requests.post(
+                    f"https://api.notion.com/v1/databases/{db_id}/query",
+                    headers=headers,
+                    json={
+                        "sorts": [{"property": "last_edited_time", "direction": "descending"}],
+                        "page_size": 1  # Solo queremos el más reciente por base de datos
+                    }
+                )
+                if query_response.status_code == 200:
+                    db_items = query_response.json().get("results", [])
+                    for item in db_items:
+                        if not item.get("archived", False):
+                            all_items.append({
+                                "id": item["id"],
+                                "type": f"Fila en base de datos '{get_title(db.get('properties', {}))}'",
+                                "title": get_title(item.get("properties", {})),
+                                "last_edited_time": item["last_edited_time"]
+                            })
+
+            # 4. Si no hay elementos, devolver mensaje
+            if not all_items:
+                return jsonify({"error": "No hay páginas ni filas recientes en Notion, ¿reviso después?"}), 404
+
+            # 5. Ordenar todos los elementos por last_edited_time y tomar el más reciente
+            latest_item = max(all_items, key=lambda x: x["last_edited_time"])
+
+            # 6. Formatear la respuesta
             return jsonify({
+                "id": latest_item["id"],
                 "from": "Notion",
-                "subject": title,
-                "snippet": f"Última edición: {last_update['last_edited_time']}",
-                "id": last_update["id"]
+                "subject": f"Hola, hay algo nuevo en Notion",
+                "snippet": f"Es una {latest_item['type']} llamada '{latest_item['title']}'."
             })
 
         except Exception as e:
-            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
-        
+            return jsonify({"error": "Uy, algo salió mal revisando Notion, ¿lo intento de nuevo?", "details": str(e)}), 500
+                
     @app.route("/ultima-notificacion/slack", methods=["GET"])
     def obtener_ultimo_mensaje_slack():
         email = request.args.get("email")
@@ -255,8 +306,6 @@ def setup_routes_secretary_gets(app, mongo):
                 return jsonify({"error": "Token no disponible"}), 400
 
             headers = get_slack_headers(token)
-
-            # 1️⃣ Obtener la lista de DMs del usuario
             response = requests.get("https://slack.com/api/conversations.list?types=im", headers=headers)
             response_json = response.json()
 
@@ -265,244 +314,229 @@ def setup_routes_secretary_gets(app, mongo):
 
             dms = response_json.get("channels", [])
             if not dms:
-                return jsonify({"error": "No hay conversaciones directas"}), 404
+                return jsonify({"error": "No tienes mensajes directos recientes en Slack, ¿todo bien por ahí?"}), 404
 
-            # 2️⃣ Ordenar DMs por el último mensaje recibido (latest)
             dms.sort(key=lambda x: x.get("latest", {}).get("ts", "0"), reverse=True)
 
-            # 3️⃣ Tomar el canal más reciente y obtener mensajes
             for dm in dms:
                 channel_id = dm["id"]
-
                 history_response = requests.get(f"https://slack.com/api/conversations.history?channel={channel_id}&limit=1", headers=headers)
                 history_json = history_response.json()
 
                 if history_json.get("ok") and history_json.get("messages"):
-                    message = history_json["messages"][0]  # Último mensaje en ese canal
+                    message = history_json["messages"][0]
                     return jsonify({
                         "id": message["ts"],
-                        "name": "Slack",
-                        "lastMessage": message["text"],
-                        "from": f"Usuario {message['user']}",
-                        "subject": "Mensaje de Slack",
-                        "snippet": message["text"]
+                        "from": "Slack",
+                        "subject": f"Oye, te escribió alguien en Slack",
+                        "snippet": f"Es este mensaje: '{message['text']}'."
                     })
 
-            return jsonify({"error": "No se encontraron mensajes"}), 404
+            return jsonify({"error": "No hay mensajes nuevos en Slack por ahora, ¿reviso después?"}), 404
 
         except Exception as e:
-            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+            return jsonify({"error": "Ups, algo falló con Slack, ¿quieres que lo revise otra vez?", "details": str(e)}), 500
 
     @app.route("/ultima-notificacion/onedrive", methods=["GET"])
     def obtener_ultimo_archivo_onedrive():
         email = request.args.get("email")
         try:
-            # Buscar al usuario en la base de datos
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
-            # Obtener el token de OneDrive
             token = user.get("integrations", {}).get("OneDrive", {}).get("token")
             if not token:
                 return jsonify({"error": "Token no disponible"}), 400
 
-            # Configurar los headers de la API de OneDrive
-            headers = {
-                "Authorization": f"Bearer {token}"
-            }
-
-            # Nueva URL para buscar archivos en TODO OneDrive
+            headers = get_onedrive_headers(token)
             url = "https://graph.microsoft.com/v1.0/me/drive/root/search(q='')"
-            params = {
-                "$orderby": "lastModifiedDateTime desc",
-                "$top": "5",  # Obtener solo los más recientes
-                "$select": "id,name,file,lastModifiedDateTime,parentReference"
-            }
+            params = {"$orderby": "lastModifiedDateTime desc", "$top": "5", "$select": "id,name,file,lastModifiedDateTime"}
             response = requests.get(url, headers=headers, params=params)
 
-            # Verificar que la respuesta fue exitosa
             if response.status_code != 200:
                 return jsonify({"error": "Error al obtener archivos de OneDrive"}), response.status_code
 
             items = response.json().get('value', [])
-            if not items:
-                return jsonify({"error": "No hay archivos nuevos"}), 404
-
-            # Filtrar solo archivos (descartar carpetas)
             archivos = [item for item in items if "file" in item]
             if not archivos:
-                return jsonify({"error": "No hay archivos recientes"}), 404
+                return jsonify({"error": "No hay archivos recientes en OneDrive, ¿te aviso si cambia algo?"}), 404
 
-            # Obtener el archivo más reciente
             last_file = archivos[0]
-
             return jsonify({
                 "from": "OneDrive",
-                "subject": f"Último archivo modificado: {last_file['name']}",
-                "snippet": f"Archivo: {last_file['name']}",
-                "id": last_file["id"],
-                "modified_time": last_file.get("lastModifiedDateTime", "(Sin fecha de modificación)"),
-                "file_path": last_file.get("parentReference", {}).get("path", "Desconocido")  # Ruta del archivo
+                "subject": f"Hola, vi un archivo actualizado en OneDrive",
+                "snippet": f"Es '{last_file['name']}'.",
+                "id": last_file["id"]
             })
-
         except Exception as e:
-            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
-
+            return jsonify({"error": "Algo salió mal con OneDrive, ¿lo intento de nuevo?", "details": str(e)}), 500
 
     @app.route("/ultima-notificacion/asana", methods=["GET"])
     def obtener_ultima_notificacion_asana():
         email = request.args.get("email")
+        if not email:
+            return jsonify({"error": "Se debe proporcionar un email"}), 400
+
         try:
-            user = mongo.database.usuarios.find_one({'correo': email})
+            # Obtener usuario de la base de datos
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
+            # Obtener token de Asana
             token = user.get("integrations", {}).get("Asana", {}).get("token")
             if not token:
                 return jsonify({"error": "Token no disponible"}), 400
 
-            headers = {"Authorization": f"Bearer {token.strip()}"}
+            headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+            print(f"Obteniendo notificaciones para email: {email}, token disponible: {bool(token)}")
 
-            # 🔹 Obtener workspace_id
-            workspaces_response = requests.get("https://app.asana.com/api/1.0/workspaces", headers=headers)
-            workspaces_data = workspaces_response.json()
-
+            # Obtener el workspace
+            workspaces_response = requests.get("https://app.asana.com/api/1.0/workspaces", headers=headers, timeout=10)
+            print("Workspaces response:", workspaces_response.status_code, workspaces_response.text)
             if workspaces_response.status_code != 200:
-                return jsonify({"error": "No se pudo obtener el workspace"}), workspaces_response.status_code
+                return jsonify({"error": "No se pudo obtener el workspace", "details": workspaces_response.text}), workspaces_response.status_code
 
-            workspaces = workspaces_data.get("data", [])
-            if not workspaces:
-                return jsonify({"error": "No hay workspaces disponibles"}), 404
+            workspace_id = workspaces_response.json().get("data", [])[0]["gid"]
 
-            workspace_id = workspaces[0]["gid"]  # 🏢 Tomamos el primero
-
-            # 🔹 Obtener user_id del usuario autenticado
-            user_response = requests.get("https://app.asana.com/api/1.0/users/me", headers=headers)
-            user_data = user_response.json()
-
+            # Obtener el ID del usuario
+            user_response = requests.get("https://app.asana.com/api/1.0/users/me", headers=headers, timeout=10)
+            print("User response:", user_response.status_code, user_response.text)
             if user_response.status_code != 200:
-                return jsonify({"error": "No se pudo obtener el usuario"}), user_response.status_code
+                return jsonify({"error": "No se pudo obtener el usuario", "details": user_response.text}), user_response.status_code
 
-            user_id = user_data.get("data", {}).get("gid")
-            if not user_id:
-                return jsonify({"error": "No se encontró el ID del usuario"}), 404
+            user_id = user_response.json().get("data", {}).get("gid")
 
-            # 🔍 Obtener tareas asignadas al usuario en el workspace
+            # Obtener las tareas asignadas al usuario, incluyendo created_at y completed
             response = requests.get(
-                f"https://app.asana.com/api/1.0/tasks?assignee={user_id}&workspace={workspace_id}&limit=1",
-                headers=headers
+                f"https://app.asana.com/api/1.0/tasks?assignee={user_id}&workspace={workspace_id}&limit=50&opt_fields=name,gid,created_at,completed",
+                headers=headers,
+                timeout=10
             )
-            response_data = response.json()
-
+            print("Tasks response:", response.status_code, response.text)
             if response.status_code != 200:
-                return jsonify({"error": "Error al obtener tareas", "details": response_data}), response.status_code
+                return jsonify({"error": "Error al obtener tareas", "details": response.text}), response.status_code
 
-            tasks = response_data.get("data", [])
+            tasks = response.json().get("data", [])
             if not tasks:
-                return jsonify({"error": "No hay tareas asignadas"}), 404
+                return jsonify({"error": "No hay tareas asignadas en Asana, ¿reviso después?"}), 404
 
-            task = tasks[0]
+            # Filtrar tareas no completadas
+            incomplete_tasks = [task for task in tasks if not task.get("completed", False)]
+            if not incomplete_tasks:
+                return jsonify({"error": "No hay tareas no completadas en Asana, ¿reviso después?"}), 404
+
+            # Ordenar tareas no completadas por created_at (más reciente primero)
+            incomplete_tasks.sort(key=lambda x: x["created_at"], reverse=True)
+            latest_task = incomplete_tasks[0]  # La tarea no completada más reciente
+
+            # Actualizar la caché después de obtener las tareas
+            updated_user = mongo.database.usuarios.find_one({"correo": email})
+            if updated_user:
+                cache.set(email, updated_user, timeout=1800)
+                print(f"Cache updated for user {email} after fetching tasks")
+
             return jsonify({
                 "from": "Asana",
-                "subject": task.get("name", "(Sin título)"),
-                "snippet": f"Tarea asignada: {task.get('name', '(Sin título)')}",
-                "id": task["gid"],
+                "subject": f"Hola, tienes una tarea nueva en Asana",
+                "snippet": f"Es '{latest_task.get('name', '(Sin título)')}'.",
+                "id": latest_task["gid"]
             })
 
+        except requests.exceptions.RequestException as e:
+            print(f"Error en la solicitud a Asana: {str(e)}")
+            return jsonify({"error": "Ups, algo falló con Asana, ¿lo intento de nuevo?", "details": str(e)}), 500
         except Exception as e:
-            print("❌ Error inesperado:", str(e))
-            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
-
+            print(f"Error inesperado: {str(e)}")
+            return jsonify({"error": "Ups, algo falló, ¿lo intento de nuevo?", "details": str(e)}), 500
+        
     @app.route("/ultima-notificacion/dropbox", methods=["GET"])
     def obtener_ultimo_archivo_dropbox():
         email = request.args.get("email")
         try:
-            # Buscar al usuario en la base de datos
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
-            # Obtener el token de Dropbox
             token = user.get("integrations", {}).get("Dropbox", {}).get("token")
             if not token:
                 return jsonify({"error": "Token no disponible"}), 400
 
-            # Configuración de headers para la API de Dropbox
             headers = get_dropbox_headers(token)
-            
-            # Llamada a la API para obtener la lista de archivos y carpetas en Dropbox
             response = requests.post("https://api.dropboxapi.com/2/files/list_folder", headers=headers, json={"path": ""})
-
             if response.status_code != 200:
                 return jsonify({"error": "Error al obtener archivos"}), response.status_code
 
             entries = response.json().get("entries", [])
             if not entries:
-                return jsonify({"error": "No hay archivos o carpetas nuevos"})
+                return jsonify({"error": "No hay nada nuevo en Dropbox, ¿te aviso después?"}), 404
 
-            # Filtramos los archivos y las carpetas
-            files_and_folders = []
-            for entry in entries:
-                if entry[".tag"] == "file":
-                    files_and_folders.append({
-                        "type": "file",
-                        "name": entry["name"],
-                        "path_display": entry["path_display"],
-                        "client_modified": entry.get("client_modified", ""),
-                        "id": entry["id"]
-                    })
-                elif entry[".tag"] == "folder":
-                    files_and_folders.append({
-                        "type": "folder",
-                        "name": entry["name"],
-                        "path_display": entry["path_display"],
-                        "client_modified": entry.get("client_modified", ""),
-                        "id": entry["id"]
-                    })
-            
-            # Ordenamos los archivos y las carpetas por fecha de modificación (del más reciente al más antiguo)
-            files_and_folders.sort(key=lambda x: x.get('client_modified', ''), reverse=True)
+            files = [entry for entry in entries if entry[".tag"] == "file"]
+            if not files:
+                return jsonify({"error": "No hay archivos recientes en Dropbox, ¿reviso luego?"}), 404
 
-            # Obtenemos el más reciente (archivo o carpeta)
-            last_entry = files_and_folders[0]
-
-            # Construimos la respuesta según el tipo de la entrada (archivo o carpeta)
-            if last_entry["type"] == "file":
-                return jsonify({
-                    "from": "Dropbox",  # Nombre fijo para Dropbox
-                    "subject": f"Ultimo cambio detectado fue en la ruta {last_entry['path_display']} en el archivo llamado: {last_entry['name']}",
-                    "snippet": f"Archivo: {last_entry['name']}",
-                    "id": last_entry["id"],
-                    "server_modified": last_entry.get("client_modified", "(Sin fecha de modificación)"),  # Fecha de modificación
-                    "file_path": last_entry["path_display"]  # Carpeta donde se encuentra el archivo
-                })
-            else:
-                return jsonify({
-                    "from": "Dropbox",  # Nombre fijo para Dropbox
-                    "subject": f"Ultimo cambio detectado fue en la ruta {last_entry['path_display']} en la carpeta llamada: {last_entry['name']}",
-                    "snippet": f"Carpeta: {last_entry['name']}",
-                    "id": last_entry["id"],
-                    "server_modified": last_entry.get("client_modified", "(Sin fecha de modificación)"),  # Fecha de modificación
-                    "file_path": last_entry["path_display"]  # Carpeta donde se encuentra la carpeta
-                })
-
+            last_file = sorted(files, key=lambda x: x.get('client_modified', ''), reverse=True)[0]
+            return jsonify({
+                "from": "Dropbox",
+                "subject": f"Hola, hay un archivo actualizado en Dropbox",
+                "snippet": f"Es '{last_file['name']}'",
+                "id": last_file["id"]
+            })
         except Exception as e:
-            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+            return jsonify({"error": "Algo salió mal con Dropbox, ¿lo intento de nuevo?", "details": str(e)}), 500
+        
+    def parse_hubspot_date(date_string, timezone="UTC", output_format="day_month_year_time"):
+        """
+        Parsea una fecha de HubSpot en formato ISO 8601 y la convierte a un formato legible.
 
-    def parse_hubspot_date(date_str):
-        """Convierte una fecha ISO8601 de HubSpot a timestamp en milisegundos"""
+        Args:
+            date_string (str): Fecha en formato ISO 8601 (ej: "2025-03-16T12:34:56Z").
+            timezone (str): Zona horaria para ajustar la fecha (default: "UTC").
+            output_format (str): Formato de salida. Opciones:
+                - "day_month_year_time" (default): "16 de marzo de 2025, 12:34"
+                - "iso": "2025-03-16T12:34:56Z" (sin cambios)
+                - "datetime": Devuelve objeto datetime sin formatear
+
+        Returns:
+            str o datetime: Fecha formateada o objeto datetime según output_format.
+
+        Raises:
+            ValueError: Si la fecha no es válida.
+        """
         try:
-            dt = datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S.%fZ")
-            dt = dt.replace(tzinfo=ZoneInfo("UTC"))
-            return int(dt.timestamp() * 1000)  # Convertir a milisegundos
-        except Exception as e:
-            print(f"Error al convertir fecha: {date_str} -> {str(e)}")
-            return 0  # Retorna 0 si hay error
+            # Parsear la fecha ISO 8601
+            dt = datetime.fromisoformat(date_string.replace("Z", "+00:00"))
 
+            # Convertir a la zona horaria especificada
+            tz = ZoneInfo(timezone)
+            dt = dt.astimezone(tz)
+
+            # Mapa de meses para formato legible en español
+            months = {
+                1: "enero", 2: "febrero", 3: "marzo", 4: "abril", 5: "mayo", 6: "junio",
+                7: "julio", 8: "agosto", 9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre"
+            }
+
+            # Devolver según el formato solicitado
+            if output_format == "day_month_year_time":
+                day = dt.day
+                month = months[dt.month]
+                year = dt.year
+                time = dt.strftime("%H:%M")
+                return f"{day} de {month} de {year}, {time}"
+            elif output_format == "iso":
+                return dt.isoformat()
+            elif output_format == "datetime":
+                return dt
+            else:
+                raise ValueError("Formato de salida no soportado. Usa 'day_month_year_time', 'iso' o 'datetime'.")
+
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"No pude parsear la fecha '{date_string}': {str(e)}")
+    
     @app.route('/ultima-notificacion/hubspot', methods=['GET'])
     def get_last_notification_hubspot():
-
         email = request.args.get("email")
         user = mongo.database.usuarios.find_one({'correo': email})
         if not user:
@@ -615,74 +649,51 @@ def setup_routes_secretary_gets(app, mongo):
 
             headers = get_clickup_headers(token)
             response = requests.get("https://api.clickup.com/api/v2/team", headers=headers)
-
             if response.status_code != 200:
                 return jsonify({"error": "Error al obtener notificaciones"}), response.status_code
 
-            teams = response.json().get("teams", [])
-            if not teams:
-                return jsonify({"error": "No hay equipos en ClickUp"})
-
-            team_id = teams[0]["id"]
+            team_id = response.json().get("teams", [])[0]["id"]
             response = requests.get(f"https://api.clickup.com/api/v2/team/{team_id}/task", headers=headers)
-
             tasks = response.json().get("tasks", [])
             if not tasks:
-                return jsonify({"error": "No hay tareas nuevas"})
+                return jsonify({"error": "No hay tareas nuevas en ClickUp, ¿reviso después?"}), 404
 
             task = tasks[0]
-            due_date = convertir_fecha(task.get("due_date"))
-
             return jsonify({
-                "id": task["id"],
-                "name": task["name"],
-                "status": task["status"]["status"],
-                "due_date": due_date,
-                "from": "ClickUp",  # ✅ Para que no falle en el frontend
-                "subject": task["name"],  # ✅ Adaptación para React
-                "snippet": f"Estado: {task['status']['status']}, Fecha límite: {due_date}"
+                "from": "ClickUp",
+                "subject": f"Hola, te llegó una tarea en ClickUp",
+                "snippet": f"Es '{task['name']}'.",
+                "id": task["id"]
             })
         except Exception as e:
-            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+            return jsonify({"error": "Algo salió mal con ClickUp, ¿lo intento de nuevo?", "details": str(e)}), 500    
 
     @app.route("/ultima-notificacion/drive", methods=["GET"])
     def obtener_ultimo_archivo_drive():
         email = request.args.get("email")
         try:
-            # Buscar al usuario en la base de datos
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
-            # Obtener el token de Google Drive
             token = user.get("integrations", {}).get("Drive", {}).get("token")
             if not token:
                 return jsonify({"error": "Token no disponible"}), 400
 
-            # Configurar los headers de la API de Google Drive
-            headers = {
-                "Authorization": f"Bearer {token}"
-            }
-
-            # Realizar la solicitud a la API de Google Drive para listar los archivos
+            headers = get_google_drive_headers(token)
             url = "https://www.googleapis.com/drive/v3/files"
-            params = {
-                "pageSize": 10,  # Obtener los primeros 10 archivos
-                "fields": "files(id, name, mimeType, modifiedTime, parents)",
-                "orderBy": "modifiedTime desc"  # Ordenar por la fecha de modificación
-            }
+            params = {"pageSize": 10, "fields": "files(id, name, mimeType, modifiedTime)", "orderBy": "modifiedTime desc"}
             response = requests.get(url, headers=headers, params=params)
 
-            # Verificar que la respuesta fue exitosa
             if response.status_code != 200:
                 return jsonify({"error": "Error al obtener archivos de Google Drive"}), response.status_code
 
             files = response.json().get('files', [])
             if not files:
-                return jsonify({"error": "No hay archivos o carpetas nuevos"}), 404
+                return jsonify({"error": "No hay nada nuevo en Drive, ¿te aviso si cambia algo?"}), 404
 
-            # Obtener el archivo o carpeta más reciente
             last_entry = files[0]
+            entry_type = "carpeta" if last_entry["mimeType"] == "application/vnd.google-apps.folder" else "archivo"
 
             # Clasificar si es un archivo o una carpeta
             if last_entry["mimeType"] == "application/vnd.google-apps.folder":
@@ -737,12 +748,14 @@ def setup_routes_secretary_gets(app, mongo):
 
             chat = chats[0]
             return jsonify({
-                "id": chat["id"],
-                "last_message_preview": chat["lastMessagePreview"]["body"]["content"]
+                "from": "Google Drive",
+                "subject": f"Hola, vi que hay un {entry_type} actualizado en Drive",
+                "snippet": f"Se llama '{last_entry['name']}'.",
+                "id": last_entry["id"]
             })
         except Exception as e:
-            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
-        
+            return jsonify({"error": "Algo salió mal revisando Drive, ¿lo intento de nuevo?", "details": str(e)}), 500
+            
     return {
         "get_gmail_headers": get_gmail_headers,
         "get_outlook_headers": get_outlook_headers,

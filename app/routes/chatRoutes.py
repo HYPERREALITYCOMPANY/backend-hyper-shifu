@@ -304,7 +304,6 @@ def setup_routes_chats(app, mongo):
                     f"ESPECIFICAMENTE SI Y SOLO SI LA SOLICITUD ES TIPO POST SIMPLE:\n"
                     f"OBLIGATORIO: Responde con 'es una solicitud post' seguido del JSON de abajo\n"
                     f"Detecta las acciones solicitadas por el usuario y genera la consulta para la API correspondiente:\n"
-                    
                     f"1. **Crear o Agregar elementos** (acciones como 'crear', 'agregar', 'añadir', 'subir', 'agendar', 'hacer', 'querer'):\n"
                     f"   - Ejemplo: Crear un contacto, tarea, archivo. (Esto se envía a Notion, Asana, ClickUp)\n"
                     f"   - Si se menciona **'crear carpeta, hacer carpeta, quiero una carpeta o expresiones similares que involucren crear una nueva carpeta'**, la query OBLIGATORIAMENTE tiene que decir 'crear carpeta: nombreejemplo en: dropbox|googledrive|onedrive'. Si no se especifica, se asume Google Drive.\n"
@@ -511,10 +510,98 @@ def setup_routes_chats(app, mongo):
                 response = openai.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[
-                        {"role": "system", "content": "Eres un asistente que identifica saludos o solicitudes."},
+                        {"role": "system", "content": """Eres un asistente especializado en interpretar solicitudes del usuario para diferentes APIs (Gmail, Notion, Slack, HubSpot, Outlook, ClickUp, Dropbox, Asana, Google Drive, OneDrive, Teams). Tu objetivo principal es clasificar correctamente el tipo de solicitud y extraer información relevante en formato JSON para cada servicio aplicable.
+                        #### REGLAS PARA CLASIFICACIÓN DE SOLICITUDES:
+                        1. SOLICITUDES GET (CONSULTA/BÚSQUEDA DE INFORMACIÓN):
+                        - Cuando el usuario usa verbos como "Mándame", "Pásame", "Envíame", "Muéstrame", "Busca", "Encuentra", "Dame", "Dime", "Quiero ver" dirigidos a SÍ MISMO.
+                        - Cuando pregunta sobre información existente: "¿Cuáles son...?", "¿Dónde están...?", "¿Qué tareas...?"
+                        - Ejemplos claros:
+                            * "Mándame los correos de marketing" = GET (buscar correos)
+                            * "Busca documentos sobre presupuesto" = GET (buscar archivos)
+                            * "Quiero ver mis tareas pendientes" = GET (buscar tareas)
+                        - RESPUESTA: "Es una solicitud GET" + JSON con queries específicas para cada API
+
+                        2. SOLICITUDES POST SIMPLE (ACCIÓN ÚNICA):
+                        - Verbos de acción hacia sistemas o terceros: "Crear", "Enviar (a otra persona)", "Eliminar", "Mover", "Actualizar", "Editar", "Agregar"
+                        - Ejemplos claros:
+                            * "Crea una tarea para el proyecto X" = POST (crear tarea)
+                            * "Envía un correo a Juan con asunto..." = POST (enviar correo)
+                            * "Elimina los documentos duplicados" = POST (eliminar archivos)
+                        - RESPUESTA: "Es una solicitud POST" + JSON con acciones para cada API aplicable
+
+                        3. SOLICITUDES POST AUTOMATIZADAS (CONDICIONALES/REPETITIVAS):
+                        - Frases que indican automatización: "Cada vez que", "Siempre que", "Cuando ocurra", "Automáticamente"
+                        - Contienen una condición Y una acción
+                        - Ejemplos claros:
+                            * "Cuando reciba correos de marketing, muévelos a la carpeta promociones" = AUTOMATIZADA
+                            * "Si una tarea cambia a completada, notifica al equipo en Slack" = AUTOMATIZADA
+                        - RESPUESTA: "Es una solicitud automatizada" + JSON con condition/action para cada API aplicable
+
+                        4. SALUDOS:
+                        - Expresiones como: "Hola", "Buenos días", "Qué tal", etc. sin solicitud adicional
+                        - RESPUESTA: "Es un saludo"
+
+                        5. REFERENCIAS A CONVERSACIONES PREVIAS:
+                        - Cuando menciona "como hablamos antes", "de lo que mencionaste", "respuesta anterior"
+                        - RESPUESTA: "Se refiere a la respuesta anterior"
+
+                        #### GUÍA DETALLADA PARA INTERPRETACIÓN:
+
+                        - VERBOS DIRIGIDOS AL USUARIO vs ACCIONES HACIA SISTEMAS:
+                        * "Mándame/Pásame/Muéstrame X" = GET (el usuario quiere VER/RECIBIR información)
+                        * "Manda/Pasa/Crea/Elimina X (en un sistema)" = POST (el usuario quiere EJECUTAR una acción)
+
+                        - ESPECÍFICOS PARA EMAIL (GMAIL/OUTLOOK):
+                        * GET: "Mándame correos de Juan" → query=from:juan
+                        * POST: "Envía un correo a juan@example.com" → acción=enviar, destinatario=juan@example.com
+                        * AUTOMATIZADA: "Cuando reciba correos de spam, elimínalos" → condition=recepción de spam, action=eliminar
+
+                        - ESPECÍFICOS PARA SLACK:
+                        * GET: "Muéstrame mensajes del canal marketing" → query=in:marketing
+                        * GET: "Busca mensajes donde se mencionó el proyecto Alpha" → query=proyecto Alpha
+                        * POST: "Envía un mensaje al canal general" → acción=enviar mensaje, canal=general
+                        * POST: "Notifica a @dev-team sobre la actualización" → acción=enviar mensaje, destinatario=@dev-team
+                        * AUTOMATIZADA: "Cuando alguien mencione 'urgente' en Slack, notifícame" → condition=mención de 'urgente', action=notificar
+                        * AUTOMATIZADA: "Si hay mensajes sin responder después de 2 horas, envía un recordatorio" → condition=mensajes sin respuesta, action=enviar recordatorio
+
+                        - ESPECÍFICOS PARA HUBSPOT:
+                        * GET: "Muéstrame contactos de la empresa XYZ" → query=contacto XYZ
+                        * GET: "Encuentra empresas del sector tecnológico" → query=empresa tecnológico
+                        * GET: "Busca negocios con valor mayor a 10k" → query=negocio >10k
+                        * GET: "Dame información sobre el contacto Pedro García" → query=contacto Pedro García
+                        * POST: "Crea un contacto para María López con email maria@ejemplo.com" → acción=crear contacto
+                        * POST: "Actualiza el teléfono de Juan Pérez a 555-123-4567" → acción=actualizar contacto
+                        * POST: "Registra una nueva empresa llamada ABC Corp" → acción=crear empresa
+                        * AUTOMATIZADA: "Cuando un lead pase a calificado, asígnalo a ventas" → condition=cambio estado lead, action=asignar
+                        * AUTOMATIZADA: "Si un contacto no responde en 7 días, envía email de seguimiento" → condition=sin respuesta, action=enviar seguimiento
+
+                        - ESPECÍFICOS PARA TAREAS (NOTION/CLICKUP/ASANA):
+                        * GET: "Muéstrame tareas pendientes" → query=tareas pendientes
+                        * POST: "Marca como completada la tarea X" → acción=actualizar estado
+                        * AUTOMATIZADA: "Cuando una tarea pase a En Progreso, notifica al equipo" → condition=cambio de estado, action=notificar
+
+                        - ESPECÍFICOS PARA ARCHIVOS (GOOGLE DRIVE/DROPBOX/ONEDRIVE):
+                        * GET: "Encuentra documentos de presupuesto" → query=presupuesto
+                        * POST: "Comparte la carpeta Proyectos con maria@example.com" → acción=compartir
+                        * AUTOMATIZADA: "Cuando se suban archivos PDF, notifícame" → condition=subida de PDF, action=notificar
+
+                        - ESPECÍFICOS PARA TEAMS:
+                        * GET: "Encuentra conversaciones con Juan sobre el proyecto" → query=conversation with:Juan proyecto
+                        * GET: "Busca mensajes donde se mencionó la reunión semanal" → query=message:reunión semanal
+                        * POST: "Envía un mensaje a María en Teams" → acción=enviar mensaje, destinatario=María
+                        * AUTOMATIZADA: "Cuando alguien comparta un archivo en el canal Proyectos, notifícame" → condition=archivo compartido, action=notificar
+
+                        Si encuentras ambigüedad, analiza el contexto completo y la intención principal del usuario. Prioriza la interpretación como GET cuando el usuario busca información para sí mismo, y como POST cuando claramente solicita ejecutar acciones en plataformas.
+
+                        Genera respuestas estructuradas y precisas en el formato JSON solicitado, excluyendo servicios no aplicables (usa "N/A"). Asegúrate de capturar todos los detalles relevantes de la solicitud del usuario.
+
+                        RECUERDA:
+                        - Para HubSpot, identifica claramente el tipo de objeto (contacto, empresa, negocio) en las consultas GET
+                        - Para Slack, adapta la consulta de Gmail pero hazla más informal y directa para contextos de mensajería
+                        - En todos los casos, solo incluye en el JSON los servicios que son relevantes para la solicitud específica """},
                         {"role": "user", "content": prompt}
                     ],
-                    max_tokens=1800
+                    max_tokens=2500
                 )
                 ia_interpretation = response.choices[0].message.content.strip().lower()
                 print(ia_interpretation)
@@ -750,27 +837,46 @@ def setup_routes_chats(app, mongo):
                     start = ia_interpretation.find('{')
                     end = ia_interpretation.rfind('}') + 1
                     json_block = ia_interpretation[start:end]
-                    queries = json.loads(json_block)
 
-                    print(queries)
-                    if queries:
-                        try:
-                            for api, data in queries.items():
-                                condition = data.get('condition', '')
-                                action = data.get('action', '')    
-                                if condition and action and condition.lower() != "n/a" and action.lower() != "n/a":
-                                    function_name = f"post_auto_{api}"
-                                    if function_name in functionsAuto:
-                                        function = functionsAuto[function_name]
-                                        response = function(condition, action)
-                                        if response:
-                                            print(response)
-                                        else:
-                                            print(f"No se pudo ejecutar la acción para {api}.")
-                                    else:
-                                        print(f"La función para {api} no está definida en functionsPost.")                     
-                        except json.JSONDecodeError:
-                            return jsonify({"error": "Formato JSON inválido"}), 400
+                    try:
+                        queries = json.loads(json_block)
+                        print(queries)
+
+                        post_results_data = {}
+
+                        for api, data in queries.items():
+                            condition = data.get('condition', '').lower()
+                            action = data.get('action', '').lower()
+                            
+                            if condition != "n/a" and action != "n/a" and api:
+                                try:
+                                    function = functionsAuto[f"post_auto_{api}"]
+                                    response = function(condition, action)
+                                    
+                                    if response:
+                                        response_json = response.get_json()
+                                        message = response_json.get('message', None)
+                                        print(response_json)
+                                        
+                                        if message and message != "Sin mensaje":
+                                            if api not in post_results_data:
+                                                post_results_data[api] = []
+                                            post_results_data[api].append(message)
+                                            
+                                except Exception as e:
+                                    pass  # Manejo de errores opcional
+
+                        if post_results_data:
+                            return jsonify({
+                                "message": "✅ ¡Tus reglas de automatización han sido creadas con éxito! 🎉 Ahora tus acciones se realizaran según las reglas establecidas. 📩✨"
+                            }), 200
+                        else:
+                            return jsonify({
+                                "message": "⚠️ No se pudieron crear tus reglas de automatización. ¿Podrías reformularlas? 🤔"
+                            }), 400
+
+                    except json.JSONDecodeError:
+                        return jsonify({"error": "Formato JSON inválido"}), 400
                 elif 'anterior' in ia_interpretation:
                     reference_prompt = f"El usuario dijo: '{last_message}'\n"
                     reference_prompt += f"La última respuesta de la IA fue: '{last_response}'.\n"
@@ -783,7 +889,7 @@ def setup_routes_chats(app, mongo):
                     - Si el usuario comparte cómo se siente o menciona una situación personal, responde con empatía y comprensión.
                     - Si el usuario solicita automatizaciones o reglas persistentes (quemadas), identifícalas correctamente.
                     - Siempre mantén una respuesta natural y cercana, evitando un tono robótico.
-            """},
+                    """},
                                 {"role": "user", "content": reference_prompt}],
                         max_tokens=150
                     )

@@ -641,24 +641,36 @@ def setup_routes_secretary_gets(app, mongo, cache, refresh_functions):
 
             headers = get_clickup_headers(token)
             response = requests.get("https://api.clickup.com/api/v2/team", headers=headers)
+
             if response.status_code != 200:
                 return jsonify({"error": "Error al obtener notificaciones"}), response.status_code
 
-            team_id = response.json().get("teams", [])[0]["id"]
+            teams = response.json().get("teams", [])
+            if not teams:
+                return jsonify({"error": "No hay equipos en ClickUp"})
+
+            team_id = teams[0]["id"]
             response = requests.get(f"https://api.clickup.com/api/v2/team/{team_id}/task", headers=headers)
+
             tasks = response.json().get("tasks", [])
             if not tasks:
-                return jsonify({"error": "No hay tareas nuevas en ClickUp, ¿reviso después?"}), 404
+                return jsonify({"error": "No hay tareas nuevas"})
 
             task = tasks[0]
+            due_date = parse_hubspot_date(task.get("due_date"))
+
             return jsonify({
-                "from": "ClickUp",
-                "subject": f"Hola, te llegó una tarea en ClickUp",
-                "snippet": f"Es '{task['name']}'.",
-                "id": task["id"]
+                "id": task["id"],
+                "name": task["name"],
+                "status": task["status"]["status"],
+                "due_date": due_date,
+                "from": "ClickUp",  # ✅ Para que no falle en el frontend
+                "subject": task["name"],  # ✅ Adaptación para React
+                "snippet": f"Estado: {task['status']['status']}, Fecha límite: {due_date}"
             })
         except Exception as e:
-            return jsonify({"error": "Algo salió mal con ClickUp, ¿lo intento de nuevo?", "details": str(e)}), 500    
+            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+
 
     @app.route("/ultima-notificacion/drive", methods=["GET"])
     def obtener_ultimo_archivo_drive():

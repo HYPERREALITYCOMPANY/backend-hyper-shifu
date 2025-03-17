@@ -9,7 +9,8 @@ from app.utils.utils import get_user_from_db
 load_dotenv()
 
 def setup_routes_refresh(app, mongo, cache):
-    # Obtener refresh tokens desde la DB
+    cache = Cache(app)
+
     def get_refresh_tokens_from_db(user_email):
         user_data = get_user_from_db(user_email, cache, mongo)
         if not user_data or "integrations" not in user_data:
@@ -20,9 +21,9 @@ def setup_routes_refresh(app, mongo, cache):
         for name, integration in integrations.items():
             if "refresh_token" in integration and integration["refresh_token"] != "n/a":
                 refresh_tokens[name] = integration["refresh_token"]
+        print(f"Refresh tokens encontrados para {user_email}: {refresh_tokens}")
         return refresh_tokens
 
-    # Guardar token en la DB y actualizar la caché
     def save_access_token_to_db(user_email, integration_name, access_token):
         try:
             update_data = {
@@ -32,26 +33,28 @@ def setup_routes_refresh(app, mongo, cache):
             # Eliminar la caché anterior
             cache.delete(user_email)
             # Actualizar MongoDB
-            mongo.database.usuarios.update_one(
+            result = mongo.database.usuarios.update_one(
                 {"correo": user_email},
                 {"$set": update_data}
             )
-            print(f"Token de {integration_name} actualizado en DB")
-
+            if result.matched_count == 0:
+                raise ValueError("No se encontró el usuario para actualizar el token")
+            
+            print(f"Token de {integration_name} actualizado en DB para {user_email}")
             # Obtener el usuario actualizado de MongoDB
-            updated_user = mongo.database.usuarios.find_one({"correo": user_email})
+            updated_user = mongo.database.usuarios.find_one({"correo": email})
             if not updated_user:
                 raise ValueError("No se pudo obtener el usuario actualizado después de la operación")
 
             # Actualizar la caché con el usuario actualizado
             cache.set(user_email, updated_user, timeout=1800)  # Guarda en caché por 30 minutos
             print(f"Cache updated for user {user_email} with refreshed token for {integration_name}")
+            return updated_user
 
         except Exception as e:
             print(f"Error al actualizar token en DB para {integration_name}: {e}")
             raise
 
-    # Métodos de refresco por integración
     def refresh_gmail_token(refresh_token):
         url = "https://oauth2.googleapis.com/token"
         data = {
@@ -60,8 +63,9 @@ def setup_routes_refresh(app, mongo, cache):
             "refresh_token": refresh_token,
             "grant_type": "refresh_token"
         }
-        response = requests.post(url, data=data)
+        response = requests.post(url, data=data, timeout=10)
         response.raise_for_status()
+        print(f"Gmail token refresh response: {response.status_code} {response.text}")
         return response.json()["access_token"]
 
     def refresh_dropbox_token(refresh_token):
@@ -72,8 +76,9 @@ def setup_routes_refresh(app, mongo, cache):
             "client_id": os.getenv("DROPBOX_CLIENT_ID"),
             "client_secret": os.getenv("DROPBOX_CLIENT_SECRET")
         }
-        response = requests.post(url, data=data)
+        response = requests.post(url, data=data, timeout=10)
         response.raise_for_status()
+        print(f"Dropbox token refresh response: {response.status_code} {response.text}")
         return response.json()["access_token"]
 
     def refresh_asana_token(refresh_token):
@@ -87,8 +92,8 @@ def setup_routes_refresh(app, mongo, cache):
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
         
         try:
-            response = requests.post(url, data=data, headers=headers)
-            print(f"Respuesta de Asana (status: {response.status_code}): {response.text}")
+            response = requests.post(url, data=data, headers=headers, timeout=10)
+            print(f"Asana token refresh response: {response.status_code} {response.text}")
             response.raise_for_status()
             
             response_json = response.json()
@@ -111,8 +116,9 @@ def setup_routes_refresh(app, mongo, cache):
             "client_secret": os.getenv("HUBSPOT_CLIENT_SECRET"),
             "refresh_token": refresh_token
         }
-        response = requests.post(url, data=data)
+        response = requests.post(url, data=data, timeout=10)
         response.raise_for_status()
+        print(f"HubSpot token refresh response: {response.status_code} {response.text}")
         return response.json()["access_token"]
 
     def refresh_drive_token(refresh_token):
@@ -123,26 +129,25 @@ def setup_routes_refresh(app, mongo, cache):
             "refresh_token": refresh_token,
             "grant_type": "refresh_token"
         }
-        response = requests.post(url, data=data)
+        response = requests.post(url, data=data, timeout=10)
         response.raise_for_status()
+        print(f"Drive token refresh response: {response.status_code} {response.text}")
         return response.json()["access_token"]
 
-    # Lógica de refresco
     def refresh_tokens(integrations, user_email, integration_name=None):
         refreshed_tokens = {}
         errors = {}
         target_integrations = {integration_name: integrations[integration_name]} if integration_name else integrations
 
-        # Lista de integraciones soportadas
         supported_integrations = ["Gmail", "Dropbox", "Asana", "HubSpot", "Drive"]
 
         for name, refresh_token in target_integrations.items():
-            # Solo intentar refrescar si la integración está soportada
             if name not in supported_integrations:
                 print(f"Ignorando {name}: no es una integración soportada para refresco")
                 continue
 
             try:
+                print(f"Intentando refrescar token para {name} con refresh_token: {refresh_token[:5]}...")  # Mostrar solo parte por seguridad
                 new_access_token = None
                 if name == "Gmail":
                     new_access_token = refresh_gmail_token(refresh_token)
@@ -156,7 +161,7 @@ def setup_routes_refresh(app, mongo, cache):
                     new_access_token = refresh_drive_token(refresh_token)
 
                 if new_access_token:
-                    save_access_token_to_db(user_email, name, new_access_token)
+                    updated_user = save_access_token_to_db(user_email, name, new_access_token)
                     refreshed_tokens[name] = new_access_token
                 else:
                     errors[name] = "No se obtuvo nuevo token"
@@ -164,10 +169,9 @@ def setup_routes_refresh(app, mongo, cache):
             except Exception as e:
                 errors[name] = str(e)
                 print(f"Error al refrescar token de {name}: {e}")
-        
+
         return refreshed_tokens, errors
 
-    # Endpoint
     @app.route("/refresh_tokens", methods=["POST"])
     def refresh_tokens_endpoint():
         try:
@@ -178,6 +182,9 @@ def setup_routes_refresh(app, mongo, cache):
                 return jsonify({"success": False, "message": "Falta userEmail"}), 400
 
             integrations = get_refresh_tokens_from_db(user_email)
+            if not integrations:
+                return jsonify({"success": False, "message": "No se encontraron refresh tokens para este usuario"}), 404
+
             refreshed_tokens, errors = refresh_tokens(integrations, user_email, integration_name)
 
             if errors and not refreshed_tokens:
@@ -190,3 +197,9 @@ def setup_routes_refresh(app, mongo, cache):
         except Exception as e:
             print(f"Error en refresh_tokens_endpoint: {e}")
             return jsonify({"success": False, "message": "Error al refrescar tokens"}), 500
+
+    return {
+        "refresh_tokens": refresh_tokens,
+        "save_access_token_to_db": save_access_token_to_db,
+        "get_refresh_tokens_from_db": get_refresh_tokens_from_db
+    }

@@ -10,12 +10,12 @@ from app.utils.utils import get_user_from_db
 openai.api_key=Config.CHAT_API_KEY
 
 def setup_routes_secretary_gets(app, mongo, cache):
-    # Función modificada para garantizar que se refresquen los tokens
+
     def get_user_with_refreshed_tokens(email):
         """Obtiene el usuario y asegura que todos sus tokens estén actualizados"""
         try:
-            # Primero intentamos obtener el usuario de la BD/caché
-            user = get_user_with_refreshed_tokens(email)
+            # Corregido: usar get_user_from_db en lugar de get_user_with_refreshed_tokens
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return None
             
@@ -56,7 +56,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
         except Exception as e:
             print(f"[ERROR] Error general en get_user_with_refreshed_tokens: {e}")
             return None
-    
+        
     def get_gmail_headers(token):
         return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     

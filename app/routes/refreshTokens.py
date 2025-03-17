@@ -9,7 +9,7 @@ from app.utils.utils import get_user_from_db
 load_dotenv()
 
 def setup_routes_refresh(app, mongo, cache):
-    cache = Cache(app)
+    cache2 = Cache(app)
 
     def get_refresh_tokens_from_db(user_email):
         user_data = get_user_from_db(user_email, cache, mongo)
@@ -31,7 +31,7 @@ def setup_routes_refresh(app, mongo, cache):
                 f"integrations.{integration_name}.timestamp": datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
             }
             # Eliminar la caché anterior
-            cache.delete(user_email)
+            cache2.delete(user_email)
             # Actualizar MongoDB
             result = mongo.database.usuarios.update_one(
                 {"correo": user_email},
@@ -47,7 +47,7 @@ def setup_routes_refresh(app, mongo, cache):
                 raise ValueError("No se pudo obtener el usuario actualizado después de la operación")
 
             # Actualizar la caché con el usuario actualizado
-            cache.set(user_email, updated_user, timeout=1800)  # Guarda en caché por 30 minutos
+            cache2.set(user_email, updated_user, timeout=1800)  # Guarda en caché por 30 minutos
             print(f"Cache updated for user {user_email} with refreshed token for {integration_name}")
             return updated_user
 

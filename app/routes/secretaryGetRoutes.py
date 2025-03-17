@@ -110,7 +110,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
     def obtener_ultimo_correo_gmail():
         email = request.args.get("email")
         try:
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -160,7 +160,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
     def obtener_ultimo_correo_outlook():
         email = request.args.get("email")
         try:
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -200,7 +200,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
     def obtener_ultima_notificacion_notion():
         email = request.args.get("email")
         try:
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -301,7 +301,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
     def obtener_ultimo_mensaje_slack():
         email = request.args.get("email")
         try:
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -345,7 +345,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
     def obtener_ultimo_archivo_onedrive():
         email = request.args.get("email")
         try:
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -384,7 +384,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
 
         try:
             # Obtener usuario de la base de datos
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -459,7 +459,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
     def obtener_ultimo_archivo_dropbox():
         email = request.args.get("email")
         try:
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -543,7 +543,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
     def get_last_notification_hubspot():
         email = request.args.get("email")
         try:
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -597,7 +597,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
     def obtener_ultima_notificacion_clickup():
         email = request.args.get("email")
         try:
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -630,7 +630,7 @@ def setup_routes_secretary_gets(app, mongo, cache):
     def obtener_ultimo_archivo_drive():
         email = request.args.get("email")
         try:
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 

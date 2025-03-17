@@ -28,7 +28,6 @@ def setup_post_routes(app,mongo,cache, refresh_functions):
         last_refresh = cache.get(last_refresh_key)
 
         if last_refresh is None:
-            print(f"[INFO] No hay registro de refresco previo para {email}, refrescando por primera vez")
             return True
 
         current_time = datetime.utcnow()
@@ -36,10 +35,8 @@ def setup_post_routes(app,mongo,cache, refresh_functions):
         refresh_interval = timedelta(minutes=15)  # Cambia a 10 si prefieres 10 minutos
 
         if current_time >= (last_refresh_time + refresh_interval):
-            print(f"[INFO] Han pasado más de 15 minutos desde el último refresco para {email}")
             return True
         
-        print(f"[INFO] Refresco no necesario para {email}, último refresco fue hace menos de 15 minutos")
         return False
 
     def get_user_with_refreshed_tokens(email):
@@ -52,7 +49,6 @@ def setup_post_routes(app,mongo,cache, refresh_functions):
             integrations = user.get("integrations", {})
             refresh_tokens_dict = get_refresh_tokens_from_db(email)
             if not refresh_tokens_dict:
-                print(f"[INFO] No hay refresh tokens para {email}, usando tokens existentes")
                 return user
 
             # Verificar si debemos refrescar basado en el tiempo
@@ -62,38 +58,31 @@ def setup_post_routes(app,mongo,cache, refresh_functions):
                     refresh_token = token_data.get("refresh_token")
                     # Saltar servicios con tokens infinitos (refresh_token = "n/a" o ausente)
                     if not refresh_token or refresh_token == "n/a":
-                        print(f"[INFO] Saltando refresco para {service}: token infinito")
                         continue
                     if service in refresh_tokens_dict:
                         tokens_to_refresh[service] = refresh_tokens_dict[service]
-                        print(f"[INFO] Incluyendo {service} para refresco")
 
                 if tokens_to_refresh:
-                    print(f"[INFO] Refrescando tokens para {email}: {list(tokens_to_refresh.keys())}")
                     refreshed_tokens, errors = refresh_tokens_func(tokens_to_refresh, email)
                     
                     if refreshed_tokens:
-                        print(f"[SUCCESS] Tokens refrescados: {list(refreshed_tokens.keys())}")
                         updated_user = mongo.database.usuarios.find_one({"correo": email})
                         if updated_user:
                             cache.set(email, updated_user, timeout=1800)
                             # Registrar la hora del refresco en la caché
                             cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
-                            print(f"[INFO] Caché actualizada y refresco registrado para {email}")
                             return updated_user
                         else:
                             print(f"[ERROR] No se pudo obtener usuario actualizado de la BD")
                     elif errors:
                         print(f"[WARNING] Errores al refrescar tokens: {errors}")
                 else:
-                    print(f"[INFO] No hay tokens para refrescar (todos infinitos o no aplicables)")
                     # Si no hay nada que refrescar, aún marcamos el tiempo para evitar chequeos frecuentes
                     cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
 
             return user
             
         except Exception as e:
-            print(f"[ERROR] Error general en get_user_with_refreshed_tokens: {e}")
             return None
 
 
@@ -219,8 +208,10 @@ def setup_post_routes(app,mongo,cache, refresh_functions):
 
                     return {
                         "message": (
-                            f"Evento creado con éxito: {summary}\n"
-                            f"Fecha: {start_formatted} - {end_formatted}"
+                            f"✅ ¡Evento creado con éxito! 🎉\n"
+                            f"📅 *Título:* {summary}\n"
+                            f"🕒 *Fecha y hora:* {start_formatted} - {end_formatted}\n"
+                            f"✨ ¡Está todo listo en tu calendario! 📆"
                         )
                     }
                 else:
@@ -450,7 +441,7 @@ def setup_post_routes(app,mongo,cache, refresh_functions):
             except Exception as e:
                 return {"message": f"⚠️ Error inesperado al procesar la respuesta de Gmail."}
 
-        return {"message": f"No se encontró una acción válida en la consulta"}
+        return {"error": f"No se encontró una acción válida en la consulta"}
 
 ##############################################################################################
     def post_to_outlook(query):
@@ -859,8 +850,6 @@ def setup_post_routes(app,mongo,cache, refresh_functions):
             results = response.json().get('matches', [])
 
             file_path = None
-            if len(results) == 0:
-                return {"message": f"⚠️ No se encontró el archivo '{file_name}' en Dropbox. Revisa el nombre e intenta de nuevo. 📂"}
 
             # Si hay varios archivos con nombres similares
             if len(results) > 1:
@@ -875,9 +864,6 @@ def setup_post_routes(app,mongo,cache, refresh_functions):
                 if dropbox_file_name.lower().startswith(file_name.lower()):
                     file_path = dropbox_file_path
                     break
-
-            if not file_path:
-                return {"message": f"⚠️ No se encontró el archivo '{file_name}' en Dropbox. Revisa el nombre e intenta de nuevo. 📂"}
 
             folder_path = f"/{folder_name}/{dropbox_file_name}"
 
@@ -922,9 +908,6 @@ def setup_post_routes(app,mongo,cache, refresh_functions):
 
             if file_name == 'n/a':
                 return {"message": "⚠️ ¡Ups! No se especificó el nombre del archivo que deseas eliminar. 📂 Por favor, indícalo e intentalo de nuevo. ✍️"}
-
-            if not results:
-                return {"message": f"❌ ¡Oh no! No encontramos un archivo que coincida con '{file_name}' en Dropbox. Revisa y prueba de nuevo. 🔍"}
 
             if len(results) > 1:
                 # Si hay varios resultados con nombres similares, mostramos una lista de opciones
@@ -998,7 +981,7 @@ def setup_post_routes(app,mongo,cache, refresh_functions):
 
             return {"message": f"🎉 La carpeta '{folder_name}' ha sido eliminada de Dropbox con éxito! 🗑️"}
 
-        return ({"message": "Disculpa, no pude entender la acción que deseas realizar, intentalo de nuevo, porfavor."})
+        return ({"error": "Disculpa, no pude entender la acción que deseas realizar, intentalo de nuevo, porfavor."})
 
 #####################################################################################################################
     def post_to_googledrive(query):
@@ -1038,11 +1021,11 @@ def setup_post_routes(app,mongo,cache, refresh_functions):
 
             # Verificar si se encontró el archivo o carpeta
             if archivo_o_carpeta == 'n/a':
-                return {"message": f"⚠️ ¡Oh no! No se ha especificado el nombre del archivo o carpeta. 📂 Por favor, intenta de nuevo con el nombre de lo que quieres compartir. ✍️"}
+                return {"message": "⚠️ ¡Oh no! No se ha especificado el nombre del archivo o carpeta. 📂 Por favor, intenta de nuevo con el nombre de lo que quieres compartir. ✍️"}
 
             # Validar si se especificaron destinatarios
             if destinatarios == ': n/a':
-                return {"message": f"⚠️ ¡Ups! No se especificaron destinatarios. 🤔 Indica a quién deseas compartirlo. 👥"}
+                return {"message": "⚠️ ¡Ups! No se especificaron destinatarios. 🤔 Indica a quién deseas compartirlo. 👥"}
             
             # Limpiar destinatarios para eliminar el símbolo ":" y cualquier espacio innecesario
             destinatarios_limpios = [email.strip(":").strip() for email in destinatarios.split(',')]
@@ -1066,7 +1049,7 @@ def setup_post_routes(app,mongo,cache, refresh_functions):
 
             if results:
                 file_id = results[0]['id']
-                print("Se encontró el archivo/carpeta con ID: {file_id}")
+                print(f"Se encontró el archivo/carpeta con ID: {file_id}")
 
                 # Ahora, compartimos el archivo o carpeta con los destinatarios
                 for email in destinatarios_limpios:
@@ -1246,64 +1229,11 @@ def setup_post_routes(app,mongo,cache, refresh_functions):
             headers = {"Authorization": f"Bearer {google_drive_token}"}
 
             response = requests.delete(empty_trash_url, headers=headers)
-            return {"message": "🗑️ ¡La papelera de Google Drive ha sido vaciada con éxito! Todo lo que estaba ahí, ¡ya no está! 🚮"}       
+            return {"message": f"🗑️ ¡La papelera de Google Drive ha sido vaciada con éxito! Todo lo que estaba ahí, ¡ya no está! 🚮"}       
 
-        return ({"message": "Disculpa, no pude entender la acción que deseas realizar, intentalo de nuevo, porfavor."})
+        return ({"error": "Disculpa, no pude entender la acción que deseas realizar, intentalo de nuevo, porfavor."})
 
 #################################################################################################################    
-    def post_to_onedrive(query):
-
-        # Obtener email del usuario
-        email = request.args.get('email')
-        if not email:
-            return jsonify({"error": "Se debe proporcionar un email"}), 400
-
-        # Buscar usuario en la base de datos
-        user = get_user_with_refreshed_tokens(email)
-        if not user:
-            return jsonify({"error": "Usuario no encontrado"}), 404
-
-        # Obtener el token de OneDrive
-        OneDrive_token = user.get('integrations', {}).get('OneDrive', {}).get('token')
-        if not OneDrive_token:
-            return jsonify({"error": "Token de OneDrive no disponible"}), 400
-
-        # ==================================================
-        #   🗑️ Mover archivos a la papelera en OneDrive 🗑️
-        # ==================================================
-
-        matchEliminar = re.search(r'eliminar\s*(archivo)?[:\s]*([\w\.\-_]+)', query, re.IGNORECASE)
-
-        if matchEliminar:
-            file_name = matchEliminar.group(2).strip()
-
-            # Buscar archivo en OneDrive
-            search_url = f"https://graph.microsoft.com/v1.0/me/drive/root/search(q='{file_name}')"
-            headers = {
-                'Authorization': f"Bearer {OneDrive_token}",
-                'Content-Type': 'application/json'
-            }
-
-            response = requests.get(search_url, headers=headers)
-            if response.status_code == 401:
-                return jsonify({"error": "No autorizado. Verifica el token de acceso."}), 401
-
-            response.raise_for_status()
-            results = response.json().get('value', [])
-
-            file_id = None
-            for result in results:
-                OneDrive_file_name = result['name']
-                OneDrive_file_id = result['id']
-                
-                if OneDrive_file_name.lower().startswith(file_name.lower()):
-                    file_id = OneDrive_file_id
-                    break
-
-            if not file_id:
-                return jsonify({"error": f"Archivo '{file_name}' no encontrado en OneDrive"}), 404
-
-################################################################################################
     def post_to_onedrive(query):
 
         # Obtener email del usuario

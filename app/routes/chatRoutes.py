@@ -341,6 +341,8 @@ def setup_routes_chats(app, mongo, cache, refresh_functions):
                     f"   - Si el usuario no indica un destinatario, el destinatario obligatoriamente tiene que decir 'destinatario'\n"
                     f"   - Si el usuario no indica un asunto, el asunto obligatoriamente tiene que decir 'n/a'\n"
                     f"   - Si el usuario no indica un cuerpo, el cuerpo obligatoriamente tiene que decir 'n/a'\n"
+                    f"   - Si el usuario solo te da una idea en la petición de lo que quiere que diga el correo, tu tienes que ponerle un asunto y escribir el cuerpo\n"
+                    f"   - Ejemplo 3: 'Mandale un correo a gallodelacruz1977 que diga cosas bonitas. **tu le tienes que redactar el mensaje y ponerle un asunto**\n"
                     f"   - Si el usuario dice 'mandame un correo', 'manda el correo' u otras expresiones similares tienes que tomarlo en cuenta\n"
                     f"   - Para que tomes en cuenta la solicitud tiene que decir OBLIGATORIAMENTE algo que tenga que ver con enviar, mandar, compartir, etc. un correo\n"
                     f"   - OBLIGATORIO: Respetar el nombre del destinatario tal como lo ingresa el usuario, sin modificar letras ni números.\n"
@@ -357,6 +359,8 @@ def setup_routes_chats(app, mongo, cache, refresh_functions):
                     f"   - La IA debe interpretar diferentes formas de pedir la creación de un borrador y adaptarse según el contexto y la plataforma seleccionada.\n"
                     f"   - Si el usuario no indica un asunto, el asunto obligatoriamente tiene que decir 'n/a'\n"
                     f"   - Si el usuario no indica un cuerpo, el cuerpo obligatoriamente tiene que decir 'n/a'\n"
+                    f"   - Si el usuario solo te da una idea en la petición de lo que quiere que diga el correo, tu tienes que ponerle un asunto y escribir el cuerpo\n"
+                    f"   - Ejemplo 3: 'Crea un borrador a gallodelacruz1977 que diga cosas bonitas. **tu le tienes que redactar el mensaje y ponerle un asunto**\n"
 
                     f"8. **Compartir archivos o carpetas** (acciones como 'compartir archivo', 'comparte el archivo', 'compartir carpeta', 'enviar archivo', 'compartir con', 'enviar a'):\n"
                     f"   - Si no se especifica el dominio en los correos de destino, se asume '@gmail.com'.\n"

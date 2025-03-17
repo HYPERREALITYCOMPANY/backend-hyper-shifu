@@ -1,6 +1,6 @@
 from flask import request, jsonify
 from datetime import datetime
-from flask_caching import Cache
+
 def setup_integrations_routes(app, mongo, cache):
     @app.route('/get_integrations', methods=['GET'])
     def get_integrations():

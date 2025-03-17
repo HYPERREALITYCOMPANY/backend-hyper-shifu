@@ -13,6 +13,7 @@ from app.routes.secretaryGetRoutes import setup_routes_secretary_gets
 from flask_caching import Cache
 from app.utils.utils import get_user_from_db
 def setup_routes_secretary_posts(app, mongo, cache):
+    cache = Cache(app)
     functions = setup_routes_secretary_gets(app, mongo, cache)
     get_gmail_headers = functions["get_gmail_headers"]
     get_outlook_headers = functions["get_outlook_headers"]
@@ -158,7 +159,7 @@ def setup_routes_secretary_posts(app, mongo, cache):
         user_text = data.get("action_text")
         page_id = data.get("message_id")
 
-        user = mongo.database.usuarios.find_one({'correo': email})
+        user = get_user_from_db(email, cache, mongo)
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -1027,4 +1028,3 @@ def setup_routes_secretary_posts(app, mongo, cache):
         except requests.exceptions.RequestException as e:
             print(f"Error al buscar en OneDrive: {str(e)}")
             return None
-

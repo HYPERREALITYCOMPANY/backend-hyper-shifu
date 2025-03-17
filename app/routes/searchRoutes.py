@@ -15,6 +15,8 @@ import os
 import quopri
 import openai
 openai.api_key=Config.CHAT_API_KEY
+from flask_caching import Cache
+from app.utils.utils import get_user_from_db
 
 def setup_routes_searchs(app, mongo, cache):
     def to_ascii(text):
@@ -48,7 +50,7 @@ def setup_routes_searchs(app, mongo, cache):
     def search_gmail(query):
         email = request.args.get('email')
         try:
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -187,7 +189,7 @@ def setup_routes_searchs(app, mongo, cache):
         
         try:
             # Verificar usuario en la base de datos
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -325,7 +327,7 @@ def setup_routes_searchs(app, mongo, cache):
         email = request.args.get('email')
         try:
             # Verificar existencia de usuario
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -389,7 +391,7 @@ def setup_routes_searchs(app, mongo, cache):
     def search_outlook(query):
         email = request.args.get('email')
         try:
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -464,7 +466,7 @@ def setup_routes_searchs(app, mongo, cache):
 
         # Buscar usuario en la base de datos
         email = request.args.get("email")
-        user = mongo.database.usuarios.find_one({'correo': email})
+        user = get_user_from_db(email, cache, mongo)
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -798,7 +800,7 @@ def setup_routes_searchs(app, mongo, cache):
     def search_dropbox(query):
         email = request.args.get('email')
         try:
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -937,7 +939,7 @@ def setup_routes_searchs(app, mongo, cache):
     def search_asana(query):
         email = request.args.get('email')
         try:
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -1026,7 +1028,7 @@ def setup_routes_searchs(app, mongo, cache):
             return jsonify({"error": "Faltan parámetros (email y query)"}), 400
 
         try:
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -1090,7 +1092,7 @@ def setup_routes_searchs(app, mongo, cache):
         email = request.args.get('email')
         try:
             # Obtener el usuario desde la base de datos
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -1223,7 +1225,7 @@ def setup_routes_searchs(app, mongo, cache):
 
         try:
             # 📌 Recuperar token de Google Drive
-            user = mongo.database.usuarios.find_one({'correo': email})
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado."}), 404
 

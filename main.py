@@ -40,7 +40,11 @@ def create_app():
     except Exception as e:
         print("Error al conectar con MongoDB:", e)
 
+<<<<<<< HEAD
     setup_routes(app, mongo)
+=======
+    setup_routes(app, mongo, cache)
+>>>>>>> cecd1e54a8b263a11d321156e748b383e69c4c17
     setup_auth_routes(app, mongo, cache)
     setup_user_routes(app, mongo, cache)
     setup_integrations_routes(app, mongo, cache)

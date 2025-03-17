@@ -45,7 +45,7 @@ def setup_rules_routes(app, mongo):
             "created_at": datetime.utcnow(),
             "last_executed": None
         }
-
+        
         mongo.database.usuarios.update_one(
             {'correo': email},
             {"$push": {"automatizaciones": rule}}

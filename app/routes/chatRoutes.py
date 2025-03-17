@@ -241,66 +241,61 @@ def setup_routes_chats(app, mongo):
             try:
                 last_message = user_messages[-1].get("content", "").lower()
                 prompt = (
-                    f"Interpreta el siguiente mensaje del usuario: '{last_message}'. "
-                    f"TEN EN CUENTA QUE LA FECHA DE HOY ES {hoy}\n"
-                    f"1. LO MÁS IMPORTANTE: Identifica si es un saludo, una solicitud GET o POST, o si se refiere a la respuesta anterior enviada por la IA.\n"
-                    f"   - Si es un saludo, responde con 'Es un saludo'.\n"
-                    f"   - Si es una solicitud GET, responde con 'Es una solicitud GET'.\n"
-                    f"   - Si es una solicitud POST simple (acción única), responde con 'Es una solicitud POST'.\n"
-                    f"   - Si es una solicitud POST automatizada o quemada (para ejecutar siempre cuando ocurra algo), responde con 'Es una solicitud automatizada'.\n"
-                    f"   - Si es una solicitud que menciona algo sobre una conversación o respuesta anterior (ejemplo: 'de lo que hablamos antes', 'en la conversación anterior', 'acerca del mensaje previo', 'respuesta anterior', 'de que trataba', etc), responde con 'Se refiere a la respuesta anterior'.\n"
-                    f"En caso de ser una solicitud GET o POST, desglosa las partes relevantes para cada API (Gmail, Notion, Slack, HubSpot, Outlook, ClickUp, Dropbox, Asana, Google Drive, OneDrive, Teams).\n"
-                    f"Asegúrate de lo siguiente:\n"
-                    f"ESPECIFICAMENTE SI Y SOLO SI LA SOLICITUD ES TIPO GET"
-                    f"- No coloques fechas en ninguna query, ni after ni before'.\n"
-                    f"- Si se menciona un nombre propio (detectado si hay una combinación de nombre y apellido), responde 'from: <nombre completo>'.\n"
-                    f"- Si se menciona un correo electrónico, responde 'from: <correo mencionado>'. Usa una expresión regular para verificar esto.\n"
-                    f"- Usa la misma query de Gmail también para Outlook.\n"
-                    f"- Usa la misma query de Notion en Asana y Clickup"
-                    f"- En HubSpot, identifica qué tipo de objeto busca el usuario (por ejemplo: contacto, compañía, negocio, empresa, tarea, etc.) y ajusta la query de forma precisa. "
-                    f"El valor debe seguir esta estructura: \"<tipo de objeto> <query>\", como por ejemplo \"contacto osuna\" o \"compañía osuna\".\n\n"
-                    f"Para Slack, adapta la query de Gmail.\n\n"
-                    f"""En ClickUp, la consulta debe ajustarse específicamente si el usuario menciona tareas, proyectos, estados o fechas.
-                    Si menciona 'tarea de <nombre>' o 'estado de la tarea <nombre>', responde: 'tarea <nombre>'.
-                    Si menciona 'proyecto <nombre>' o 'estado del proyecto <nombre>', responde: 'proyecto <nombre>'.
-                    Si solo menciona 'estado' sin contexto adicional, devuelve 'estado de tareas' para obtener una visión general.
-                    Si el usuario menciona fechas, ajusta la búsqueda para encontrar tareas dentro de ese rango.\n"""
-                    f"""
-                        Genera una consulta para Dropbox, OneDrive y Google Drive basada en el mensaje del usuario.
-                            
-                            - Si menciona un archivo: "archivo:<nombre>"
-                            - Si menciona una carpeta: "carpeta:<nombre>"
-                            - Si menciona un archivo dentro de una carpeta: "archivo:<nombre> en carpeta:<ubicación>"
-                            - Si no se puede interpretar una búsqueda para Dropbox, devuelve "N/A"
-                    \n"""
-                    f"En Asana, si menciona un proyecto o tarea, ajusta la consulta a ese nombre específico.\n"
-                    f"En Google Drive, si menciona un archivo, carpeta o documento, ajusta la consulta a su nombre o ubicación.\n"
-                    f"En Teams, ajusta la consulta según lo que menciona el usuario:\n"
-                    f"- Si menciona un canal (ejemplo: 'en el canal de proyectos', 'en #soporte'): usa \"channel:<nombre del canal>\".\n"
-                    f"- Si el usuario menciona que está 'hablando con', 'conversando con', 'chateando con' o términos similares seguidos de un nombre propio o usuario como: 'pvasquez-2018044', usa: \"conversation with:<nombre> <palabras clave>\", asegurándote de incluir cualquier referencia a temas mencionados.\n"
-                    f"- Si menciona un tema específico sin un contacto, pero da detalles del contenido, usa \"message:<palabras clave>\".\n"
-                    f"- Si el usuario usa términos como 'mensaje sobre', 'hablamos de', 'tema de conversación', extrae las palabras clave y úsalas en \"message:<palabras clave>\".\n"
-                    f"- Si no se puede interpretar una búsqueda específica para Teams, devuelve \"N/A\".\n"
-                    f"- SI EL USUARIO MENCIONA EXPLICITAMENTE 'TEAMS' O 'MICROSOFT TEAMS' HAZ LA QUERY\n"
-                    f"- SI EL USUARIO MENCIONA EXPLICITAMENTE 'TEAMS' O 'MICROSOFT TEAMS' HAZ LA QUERY"
-                    f"- SI SE PONE ALGUNA ACCIÓN POST, NO SE TOMA EN CUENTA NADA DE GET, COMPLETAMENTE OBLIGATORIO"
-                    f"Estructura del JSON:\n"
-                    f"{{\n"
-                    f"    \"gmail\": \"<query para Gmail> Se conciso y evita palabras de solicitud y solo pon la query y evita los is:unread\",\n"
-                    f"    \"notion\": \"<query para Notion o 'N/A' si no aplica, siempre existira mediante se mencionen status de proyectos o tareas. O se mencionen compañias, empresas o proyectos en la query>\",\n"
-                    f"    \"slack\": \"<query para Slack o 'N/A' si no aplica, usa la de Gmail pero más redireccionada a como un mensaje, si es una solicitud, hazla más informal y directa>\",\n"
-                    f"    \"hubspot\": \"Si el usuario menciona 'contactos de <empresa o nombre>', responde 'contacto <empresa o nombre>'. Si menciona 'empresas de <sector>', responde 'empresa <sector>'. Si menciona 'negocio >nombre>' o 'negocio de <empresa>', responde 'negocio <sector o empresa>'. Si menciona 'compañías de <sector>', responde 'compañía <sector>'. Si el usuario menciona un contacto específico con un nombre propio y pide información (como número, correo, etc.), responde 'contacto <nombre> (<campo solicitado>)'.\",\n"
-                    f"    \"outlook\": \"<query para Outlook, misma que Gmail>\",\n"
-                    f"    \"clickup\": \"<query para ClickUp, o 'N/A' si no aplica. Siempre existira si y solo si se mencionan status de proyectos, tareas, compañías, empresas, proyectos específicos o fechas en la query. Además, se realizará la búsqueda en tareas, calendarios, diagramas de Gantt y tablas relacionadas con el equipo y las tareas asociadas, dependiendo de los elementos presentes en la consulta.>"
-                    f"    \"dropbox\": \"<query para Dropbox o 'N/A' si no aplica>\",\n"
-                    f"    \"asana\": \"<query para Asana o 'N/A' si no aplica>\",\n"
-                    f"    \"googledrive\": \"<query para Google Drive o 'N/A' si no aplica>\",\n"
-                    f"    \"onedrive\": \"<query para OneDrive o 'N/A' si no aplica>\",\n"
-                    f"    \"teams\": \"<query para Teams o 'N/A' si no aplica>\"\n"
-                    f"}}\n\n"
-                    f"El JSON debe incluir solo información relevante extraída del mensaje del usuario y ser fácilmente interpretable por sistemas automatizados."
-                    f"Si el mensaje del usuario no puede ser interpretado para una de las aplicaciones, responde 'N/A' o 'No se puede interpretar'." 
-                    f""
+                f"Interpreta el siguiente mensaje del usuario: '{last_message}'. "
+                f"TEN EN CUENTA QUE LA FECHA DE HOY ES {hoy}\n"
+                f"1. LO MÁS IMPORTANTE: Identifica si es un saludo, una solicitud GET o POST, o si se refiere a la respuesta anterior enviada por la IA.\n"
+                f"   - Si es un saludo, responde con 'Es un saludo'.\n"
+                f"   - Si es una solicitud GET, responde con 'Es una solicitud GET'.\n"
+                f"   - Si es una solicitud POST simple (acción única), responde con 'Es una solicitud POST'.\n"
+                f"   - Si es una solicitud POST automatizada o quemada (para ejecutar siempre cuando ocurra algo), responde con 'Es una solicitud automatizada'.\n"
+                f"   - Si es una solicitud que menciona algo sobre una conversación o respuesta anterior (ejemplo: 'de lo que hablamos antes', 'en la conversación anterior', 'acerca del mensaje previo', 'respuesta anterior', 'de que trataba', etc), responde con 'Se refiere a la respuesta anterior'.\n\n"
+                
+                f"REGLAS CRÍTICAS PARA CLASIFICACIÓN DE SOLICITUDES:\n"
+                f"- SOLICITUDES GET: Cuando el usuario usa verbos como 'Mándame', 'Pásame', 'Envíame', 'Muéstrame', 'Busca', 'Encuentra', 'Dame', 'Dime', 'Quiero ver' dirigidos a SÍ MISMO.\n"
+                f"- SOLICITUDES POST SIMPLE: Verbos de acción hacia sistemas o terceros: 'Crear', 'Enviar (a otra persona)', 'Eliminar', 'Mover', 'Actualizar', 'Editar', 'Agregar'.\n"
+                f"- SOLICITUDES POST AUTOMATIZADAS: Frases que indican automatización: 'Cada vez que', 'Siempre que', 'Cuando ocurra', 'Automáticamente', contienen una condición Y una acción.\n\n"
+                
+                f"ESPECIFICAMENTE SI Y SOLO SI LA SOLICITUD ES TIPO GET:\n"
+                f"En caso de ser una solicitud GET, desglosa las partes relevantes para cada API (Gmail, Notion, Slack, HubSpot, Outlook, ClickUp, Dropbox, Asana, Google Drive, OneDrive, Teams).\n"
+                f"Asegúrate de lo siguiente:\n"
+                f"- No coloques fechas en ninguna query, ni after ni before'.\n"
+                f"- Si se menciona un nombre propio (detectado si hay una combinación de nombre y apellido), responde 'from: <nombre completo>'.\n"
+                f"- Si se menciona un correo electrónico, responde 'from: <correo mencionado>'.\n"
+                f"- Usa la misma query de Gmail también para Outlook.\n"
+                f"- Usa la misma query de Notion en Asana y Clickup.\n"
+                f"- En HubSpot, identifica qué tipo de objeto busca el usuario (por ejemplo: contacto, compañía, negocio, empresa, tarea, etc.) y ajusta la query de forma precisa. "
+                f"El valor debe seguir esta estructura: \"<tipo de objeto> <query>\", como por ejemplo \"contacto osuna\" o \"compañía osuna\".\n"
+                f"- Para Slack, adapta la query de Gmail pero hazla más informal y directa para contextos de mensajería.\n"
+                f"- En ClickUp, la consulta debe ajustarse específicamente si el usuario menciona tareas, proyectos, estados o fechas.\n"
+                f"  Si menciona 'tarea de <nombre>' o 'estado de la tarea <nombre>', responde: 'tarea <nombre>'.\n"
+                f"  Si menciona 'proyecto <nombre>' o 'estado del proyecto <nombre>', responde: 'proyecto <nombre>'.\n"
+                f"  Si solo menciona 'estado' sin contexto adicional, devuelve 'estado de tareas' para obtener una visión general.\n"
+                f"- Genera una consulta para Dropbox, OneDrive y Google Drive basada en el mensaje del usuario.\n"
+                f"  Si menciona un archivo: \"archivo:<nombre>\"\n"
+                f"  Si menciona una carpeta: \"carpeta:<nombre>\"\n"
+                f"  Si menciona un archivo dentro de una carpeta: \"archivo:<nombre> en carpeta:<ubicación>\"\n"
+                f"- En Asana, si menciona un proyecto o tarea, ajusta la consulta a ese nombre específico.\n"
+                f"- En Teams, ajusta la consulta según lo que menciona el usuario:\n"
+                f"  Si menciona un canal: usa \"channel:<nombre del canal>\".\n"
+                f"  Si el usuario menciona que está 'hablando con' alguien: usa \"conversation with:<nombre> <palabras clave>\".\n"
+                f"  Si menciona un tema específico sin un contacto: usa \"message:<palabras clave>\".\n"
+                f"  SI EL USUARIO MENCIONA EXPLICITAMENTE 'TEAMS' O 'MICROSOFT TEAMS' HAZ LA QUERY.\n\n"
+                
+                f"Estructura del JSON para GET:\n"
+                f"{{\n"
+                f"    \"gmail\": \"<query para Gmail> Se conciso y evita palabras de solicitud y solo pon la query y evita los is:unread\",\n"
+                f"    \"notion\": \"<query para Notion o 'N/A' si no aplica>\",\n"
+                f"    \"slack\": \"<query para Slack o 'N/A' si no aplica>\",\n"
+                f"    \"hubspot\": \"<query para HubSpot o 'N/A' si no aplica>\",\n"
+                f"    \"outlook\": \"<query para Outlook, misma que Gmail>\",\n"
+                f"    \"clickup\": \"<query para ClickUp, o 'N/A' si no aplica>\",\n"
+                f"    \"dropbox\": \"<query para Dropbox o 'N/A' si no aplica>\",\n"
+                f"    \"asana\": \"<query para Asana o 'N/A' si no aplica>\",\n"
+                f"    \"googledrive\": \"<query para Google Drive o 'N/A' si no aplica>\",\n"
+                f"    \"onedrive\": \"<query para OneDrive o 'N/A' si no aplica>\",\n"
+                f"    \"teams\": \"<query para Teams o 'N/A' si no aplica>\"\n"
+                f"}}\n\n"
+                
                     f"ESPECIFICAMENTE SI Y SOLO SI LA SOLICITUD ES TIPO POST SIMPLE:\n"
                     f"OBLIGATORIO: Responde con 'es una solicitud post' seguido del JSON de abajo\n"
                     f"Detecta las acciones solicitadas por el usuario y genera la consulta para la API correspondiente:\n"
@@ -388,133 +383,174 @@ def setup_routes_chats(app, mongo):
                     f"     - Recuperar archivo: documento.pdf → Se intentará recuperar 'documento.pdf' a su ubicación original.\n"
                     f"     - Recuperar archivo: presentación.pptx → Se restaurará 'presentación.pptx' desde la papelera.\n"
                     f"     - Recuperar archivo: informe.docx → Se buscará y restaurará 'informe.docx' desde la papelera.\n"
-                    f"Cuando detectes una solicitud de POST, identifica a qué servicios corresponde basándote en las acciones. Usa 'N/A' para las APIs que no apliquen.\n"
-                    f"**Generación de Consulta**: Asegúrate de que las consultas sean claras y sin palabras adicionales como '¿Podrías...?'. Utiliza los datos específicos proporcionados (nombre, fecha, tarea, etc.) para generar las queries."
-                    f"**Estructura del JSON para la respuesta (con acciones del usuario):**\n"
-                    f"{{\n"
-                    f"    \"gmail\": \"<query para Gmail, como 'Eliminar todos los correos de Dominos Pizza' o 'Mover a spam los correos de tal empresa'>\",\n"
-                    f"    \"notion\": \"<query para Notion, como 'Marca como completada la tarea tal'>\",\n"
-                    f"    \"slack\": \"<query para Slack, adaptada de forma informal si aplica>\",\n"
-                    f"    \"hubspot\": \"<query para HubSpot si se menciona contacto o negocio>\",\n"
-                    f"    \"outlook\": \"<query para Outlook, igual que Gmail>\",\n"
-                    f"    \"clickup\": \"<query para ClickUp, 'N/A' si no aplica>\",\n"
-                    f"    \"dropbox\": \"<query para Dropbox, 'N/A' si no aplica>\",\n"
-                    f"    \"asana\": \"<query para Asana, 'N/A' si no aplica>\",\n"
-                    f"    \"googledrive\": \"<query para Google Drive, 'N/A' si no aplica>\",\n"
-                    f"    \"onedrive\": \"<query para OneDrive, 'N/A' si no aplica>\",\n"
-                    f"    \"teams\": \"<query para Teams, 'N/A' si no aplica>\"\n"
-                    f"}}\n"
-                    f"El JSON debe incluir solo información relevante extraída del mensaje del usuario y ser fácilmente interpretable por sistemas automatizados. "
-                    f"Usa 'N/A' si una API no aplica a la solicitud.\n"
-                    f"ESPECIFICAMENTE SI Y SOLO SI LA SOLICITUD ES TIPO POST AUTOMATIZADA (QUEMADA):\n"
-                    f"OBLIGATORIO: Responde con 'es una solicitud post automatizada' seguido del JSON de abajo\n"
-                    f"Detecta los patrones de automatización solicitados por el usuario. Estos se identifican con frases como:\n"
-                    f"- 'Cada vez que...'\n"
-                    f"- 'Siempre que...'\n"
-                    f"- 'Mueve siempre...'\n"
-                    f"- 'Borra automáticamente...'\n"
-                    f"- 'Cuando reciba correos de...'\n"
-                    f"- 'Si un proyecto cambia a...'\n"
-                    f"- 'Contesta automáticamente a...'\n"
-                    f"- Cualquier indicación de acción repetitiva o condicional\n\n"
-                    
-                    f"Para estos casos, construye un JSON con:\n"
-                    f"1. 'condition': La condición que activa la automatización\n"
-                    f"2. 'action': La acción a realizar\n"
-                    f"⚠ **VALIDACIÓN ESTRICTA:** ⚠\n"
-                    f"Incluye **únicamente** los servicios que sean lógicamente aplicables a la acción descrita. **NO agregues servicios irrelevantes.**\n"
-                    f"\n"
-                    f"🔹 **Criterios de inclusión por tipo de automatización:**\n"
-                    f"- **Si la automatización menciona correos**, **SOLO** incluir 'gmail' y/o 'outlook'.\n"
-                    f"- **Si la automatización menciona proyectos o tareas**, **SOLO** incluir 'notion', 'asana' y/o 'clickup'.\n"
-                    f"- **Si la automatización menciona archivos**, **SOLO** incluir 'googledrive', 'dropbox' y/o 'onedrive'.\n"
-                    f"- **Si la automatización menciona mensajería/chat**, **SOLO** incluir 'slack' y/o 'teams'.\n"
-                    f"- **Si la automatización menciona contactos, CRM o ventas**, **SOLO** incluir 'hubspot'.\n"
-                    f"\n"
-                    f"🚫 **NO agregues un servicio si no está relacionado con la acción descrita en la VALIDACIÓN ESTRICTA.**\n"
-                    f"🚫 **No pongas claves con 'N/A', simplemente excluye el servicio si no aplica.**\n"
-                    f"\n"
-                    f"Ejemplo correcto:\n"
-                    f"Solicitud: 'Cuando una tarea esté 'En curso', cambia la prioridad a crítica.'\n"
-                    f"Respuesta esperada:\n"
-                    f"{{\n"
-                    f"    \"notion\": {{\n"
-                    f"        \"condition\": \"Cuando una tarea esté 'En curso'\",\n"
-                    f"        \"action\": \"cambiar la prioridad a crítica\"\n"
-                    f"    }},\n"
-                    f"    \"clickup\": {{\n"
-                    f"        \"condition\": \"Cuando una tarea esté 'En curso'\",\n"
-                    f"        \"action\": \"cambiar la prioridad a crítica\"\n"
-                    f"    }},\n"
-                    f"    \"asana\": {{\n"
-                    f"        \"condition\": \"Cuando una tarea esté 'En curso'\",\n"
-                    f"        \"action\": \"cambiar la prioridad a crítica\"\n"
-                    f"    }}\n"
-                    f"}}\n"
-                    
-                    f"**Estructura del JSON para la respuesta (con automatizaciones):**\n"
-                    f"{{\n"
-                    f"    \"gmail\": {{\n"
-                    f"        \"condition\": \"<condición que activa la acción, ej: 'Cuando llegue correo de Dominos Pizza'>\",\n"
-                    f"        \"action\": \"<acción a realizar, ej: 'borrar'>\"\n"
-                    f"    }},\n"
-                    f"    \"notion\": {{\n"
-                    f"        \"condition\": \"<condición, ej: 'Cuando un proyecto cambie a En Curso'>\",\n"
-                    f"        \"action\": \"<acción, ej: 'cambiar a prioridad crítica'>\"\n"
-                    f"    }},\n"
-                    f"    \"slack\": {{\n"
-                    f"        \"condition\": \"<condición>\",\n"
-                    f"        \"action\": \"<acción>\"\n"
-                    f"    }},\n"
-                    f"    \"hubspot\": {{\n"
-                    f"        \"condition\": \"<condición>\",\n"
-                    f"        \"action\": \"<acción>\"\n"
-                    f"    }},\n"
-                    f"    \"outlook\": {{\n"
-                    f"        \"condition\": \"<condición>\",\n"
-                    f"        \"action\": \"<acción>\"\n"
-                    f"    }},\n"
-                    f"    \"clickup\": {{\n"
-                    f"        \"condition\": \"<condición>\",\n"
-                    f"        \"action\": \"<acción>\"\n"
-                    f"    }},\n"
-                    f"    \"dropbox\": {{\n"
-                    f"        \"condition\": \"<condición>\",\n"
-                    f"        \"action\": \"<acción>\"\n"
-                    f"    }},\n"
-                    f"    \"asana\": {{\n"
-                    f"        \"condition\": \"<condición>\",\n"
-                    f"        \"action\": \"<acción>\"\n"
-                    f"    }},\n"
-                    f"    \"googledrive\": {{\n"
-                    f"        \"condition\": \"<condición>\",\n"
-                    f"        \"action\": \"<acción>\"\n"
-                    f"    }},\n"
-                    f"    \"onedrive\": {{\n"
-                    f"        \"condition\": \"<condición>\",\n"
-                    f"        \"action\": \"<acción>\"\n"
-                    f"    }},\n"
-                    f"    \"teams\": {{\n"
-                    f"        \"condition\": \"<condición>\",\n"
-                    f"        \"action\": \"<acción>\"\n"
-                    f"    }}\n"
-                    f"}}\n"
-                    f"Usa 'N/A' si una API no aplica a la solicitud de automatización.\n"
-                    f"Asegúrate de que las condiciones sean claras y específicas, y que las acciones sean ejecutables por el sistema.\n"
-                    f"Los saludos posibles que deberías detectar incluyen, pero no se limitan a: 'Hola', '¡Hola!', 'Buenos días', 'Buenas', 'Hey', 'Ciao', 'Bonjour', 'Hola a todos', '¡Qué tal!'. "
-                    f"Si detectas un saludo, simplemente responde con 'Es un saludo'."
-                )
+                """- Si la solicitud implica crear un evento en Google Calendar (por ejemplo, con palabras como 'haz una reunión', 'agenda', 'agendar', 'programar' y menciona 'Google Calendar' o 'calendario'), genera una query para la clave "gmail" en el formato: "create_event|summary:<asunto>|start:<fecha_inicio>|end:<fecha_fin>[|attendees:<lista_de_correos>][|meet:True]", donde:
+                    - <asunto> es el título del evento extraído de la consulta (con la primera letra en mayúscula). Si no se especifica un título claro, usa "Reunión" por defecto.
+                    - <fecha_inicio> y <fecha_fin> están en formato ISO (ej., "2023-10-18T14:00:00"), calculadas a partir de la fecha y hora proporcionadas por el usuario y la fecha actual ({hoy}). Si no se especifica duración, asume 1 hora por defecto.
+                    - Usa la fecha actual ({hoy}) para inferir el mes y año si el usuario solo menciona el día (ej., "el 18" → "2023-10-18" si hoy es octubre de 2023).
+                    - Si se mencionan asistentes (palabras como 'con', 'junto a', 'invita a', seguidas de nombres propios o correos electrónicos), agrega '|attendees:<correo1>,<correo2>,...' al final de la query. Detecta correos electrónicos con el formato '<texto>@<dominio>.<extensión>' y nombres propios como palabras con mayúscula inicial que no sean verbos ni preposiciones. Si no se detecta un correo válido, usa '<nombre>@example.com' como placeholder.
+                    - Si se menciona explícitamente 'Meet', 'Google Meet' o 'videollamada', agrega '|meet:True' al final de la query para indicar que se debe crear un enlace de Google Meet."""
+                f"Estructura del JSON para POST simple:\n"
+                f"{{\n"
+                f"    \"gmail\": \"<query para Gmail o 'N/A' si no aplica>\",\n"
+                f"    \"notion\": \"<query para Notion o 'N/A' si no aplica>\",\n"
+                f"    \"slack\": \"<query para Slack o 'N/A' si no aplica>\",\n"
+                f"    \"hubspot\": \"<query para HubSpot o 'N/A' si no aplica>\",\n"
+                f"    \"outlook\": \"<query para Outlook o 'N/A' si no aplica>\",\n"
+                f"    \"clickup\": \"<query para ClickUp o 'N/A' si no aplica>\",\n"
+                f"    \"dropbox\": \"<query para Dropbox o 'N/A' si no aplica>\",\n"
+                f"    \"asana\": \"<query para Asana o 'N/A' si no aplica>\",\n"
+                f"    \"googledrive\": \"<query para Google Drive o 'N/A' si no aplica>\",\n"
+                f"    \"onedrive\": \"<query para OneDrive o 'N/A' si no aplica>\",\n"
+                f"    \"teams\": \"<query para Teams o 'N/A' si no aplica>\"\n"
+                f"}}\n\n"
                 
+                f"ESPECIFICAMENTE SI Y SOLO SI LA SOLICITUD ES TIPO POST AUTOMATIZADA (QUEMADA):\n"
+                f"OBLIGATORIO: Responde con 'Es una solicitud automatizada' seguido del JSON de abajo\n"
+                f"Detecta los patrones de automatización solicitados por el usuario. Estos se identifican con frases como:\n"
+                f"- 'Cada vez que...'\n"
+                f"- 'Siempre que...'\n"
+                f"- 'Mueve siempre...'\n"
+                f"- 'Borra automáticamente...'\n"
+                f"- 'Cuando reciba correos de...'\n"
+                f"- 'Si un proyecto cambia a...'\n"
+                f"- 'Contesta automáticamente a...'\n"
+                f"- Cualquier indicación de acción repetitiva o condicional\n\n"
+                
+                f"⚠ **VALIDACIÓN ESTRICTA:** ⚠\n"
+                f"Incluye **únicamente** los servicios que sean lógicamente aplicables a la acción descrita:\n"
+                f"- **Si la automatización menciona correos**, **SOLO** incluir 'gmail' y/o 'outlook'.\n"
+                f"- **Si la automatización menciona proyectos o tareas**, **SOLO** incluir 'notion', 'asana' y/o 'clickup'.\n"
+                f"- **Si la automatización menciona archivos**, **SOLO** incluir 'googledrive', 'dropbox' y/o 'onedrive'.\n"
+                f"- **Si la automatización menciona mensajería/chat**, **SOLO** incluir 'slack' y/o 'teams'.\n"
+                f"- **Si la automatización menciona contactos, CRM o ventas**, **SOLO** incluir 'hubspot'.\n"
+                f"🚫 **NO agregues un servicio si no está relacionado con la acción descrita.**\n"
+                f"🚫 **No pongas claves con 'N/A', simplemente excluye el servicio si no aplica.**\n\n"
+                
+                f"Estructura del JSON para POST automatizada:\n"
+                f"{{\n"
+                f"    \"gmail\": {{\n"
+                f"        \"condition\": \"<condición que activa la acción>\",\n"
+                f"        \"action\": \"<acción a realizar>\"\n"
+                f"    }},\n"
+                f"    \"notion\": {{\n"
+                f"        \"condition\": \"<condición>\",\n"
+                f"        \"action\": \"<acción>\"\n"
+                f"    }},\n"
+                f"    // ... (y así para todos los servicios aplicables)\n"
+                f"}}\n\n"
+                
+                f"CAPACIDADES ESPECÍFICAS POR API:\n"
+                f"- GMAIL: Buscar correos por asunto/remitente, eliminar correos, mover a spam, enviar correo, crear borrador.\n"
+                f"- NOTION: Status de tareas, información de bloques de página.\n"
+                f"- CLICKUP: Status de tareas, marcar tareas como completadas.\n"
+                f"- OUTLOOK: Obtener correos, mover a spam, eliminar correos.\n"
+                f"- HUBSPOT: Mostrar información de contactos y negocios.\n"
+                f"- ASANA: Mostrar tareas con los status.\n"
+                f"- ONEDRIVE/GOOGLE DRIVE/DROPBOX: Mostrar archivos en carpetas, mover/eliminar archivos, crear carpetas.\n"
+                f"- SLACK: Buscar mensajes en canales.\n"
+                f"- TEAMS: Búsqueda de mensajes y conversaciones.\n\n"
+                
+                f"El JSON debe incluir solo información relevante extraída del mensaje del usuario y ser fácilmente interpretable por sistemas automatizados."
+                f"Si el mensaje del usuario no puede ser interpretado para una de las aplicaciones, responde 'N/A'."
+                )   
                 if last_ai_response:
                     prompt += f"\nLa última respuesta de la IA fue: '{last_ai_response}'.\n"
 
                 response = openai.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[
-                        {"role": "system", "content": "Eres un asistente que identifica saludos o solicitudes."},
+                        {"role": "system", "content": """Eres un asistente especializado en interpretar solicitudes del usuario para diferentes APIs (Gmail, Notion, Slack, HubSpot, Outlook, ClickUp, Dropbox, Asana, Google Drive, OneDrive, Teams). Tu objetivo principal es clasificar correctamente el tipo de solicitud y extraer información relevante en formato JSON para cada servicio aplicable.
+                        #### REGLAS PARA CLASIFICACIÓN DE SOLICITUDES:
+                        1. SOLICITUDES GET (CONSULTA/BÚSQUEDA DE INFORMACIÓN):
+                        - Cuando el usuario usa verbos como "Mándame", "Pásame", "Envíame", "Muéstrame", "Busca", "Encuentra", "Dame", "Dime", "Quiero ver" dirigidos a SÍ MISMO.
+                        - Cuando pregunta sobre información existente: "¿Cuáles son...?", "¿Dónde están...?", "¿Qué tareas...?"
+                        - Ejemplos claros:
+                            * "Mándame los correos de marketing" = GET (buscar correos)
+                            * "Busca documentos sobre presupuesto" = GET (buscar archivos)
+                            * "Quiero ver mis tareas pendientes" = GET (buscar tareas)
+                        - RESPUESTA: "Es una solicitud GET" + JSON con queries específicas para cada API
+
+                        2. SOLICITUDES POST SIMPLE (ACCIÓN ÚNICA):
+                        - Verbos de acción hacia sistemas o terceros: "Crear", "Enviar (a otra persona)", "Eliminar", "Mover", "Actualizar", "Editar", "Agregar"
+                        - Ejemplos claros:
+                            * "Crea una tarea para el proyecto X" = POST (crear tarea)
+                            * "Envía un correo a Juan con asunto..." = POST (enviar correo)
+                            * "Elimina los documentos duplicados" = POST (eliminar archivos)
+                        - RESPUESTA: "Es una solicitud POST" + JSON con acciones para cada API aplicable
+
+                        3. SOLICITUDES POST AUTOMATIZADAS (CONDICIONALES/REPETITIVAS):
+                        - Frases que indican automatización: "Cada vez que", "Siempre que", "Cuando ocurra", "Automáticamente"
+                        - Contienen una condición Y una acción
+                        - Ejemplos claros:
+                            * "Cuando reciba correos de marketing, muévelos a la carpeta promociones" = AUTOMATIZADA
+                            * "Si una tarea cambia a completada, notifica al equipo en Slack" = AUTOMATIZADA
+                        - RESPUESTA: "Es una solicitud automatizada" + JSON con condition/action para cada API aplicable
+
+                        4. SALUDOS:
+                        - Expresiones como: "Hola", "Buenos días", "Qué tal", etc. sin solicitud adicional
+                        - RESPUESTA: "Es un saludo"
+
+                        5. REFERENCIAS A CONVERSACIONES PREVIAS:
+                        - Cuando menciona "como hablamos antes", "de lo que mencionaste", "respuesta anterior"
+                        - RESPUESTA: "Se refiere a la respuesta anterior"
+
+                        #### GUÍA DETALLADA PARA INTERPRETACIÓN:
+
+                        - VERBOS DIRIGIDOS AL USUARIO vs ACCIONES HACIA SISTEMAS:
+                        * "Mándame/Pásame/Muéstrame X" = GET (el usuario quiere VER/RECIBIR información)
+                        * "Manda/Pasa/Crea/Elimina X (en un sistema)" = POST (el usuario quiere EJECUTAR una acción)
+
+                        - ESPECÍFICOS PARA EMAIL (GMAIL/OUTLOOK):
+                        * GET: "Mándame correos de Juan" → query=from:juan
+                        * POST: "Envía un correo a juan@example.com" → acción=enviar, destinatario=juan@example.com
+                        * AUTOMATIZADA: "Cuando reciba correos de spam, elimínalos" → condition=recepción de spam, action=eliminar
+
+                        - ESPECÍFICOS PARA SLACK:
+                        * GET: "Muéstrame mensajes del canal marketing" → query=in:marketing
+                        * GET: "Busca mensajes donde se mencionó el proyecto Alpha" → query=proyecto Alpha
+                        * POST: "Envía un mensaje al canal general" → acción=enviar mensaje, canal=general
+                        * POST: "Notifica a @dev-team sobre la actualización" → acción=enviar mensaje, destinatario=@dev-team
+                        * AUTOMATIZADA: "Cuando alguien mencione 'urgente' en Slack, notifícame" → condition=mención de 'urgente', action=notificar
+                        * AUTOMATIZADA: "Si hay mensajes sin responder después de 2 horas, envía un recordatorio" → condition=mensajes sin respuesta, action=enviar recordatorio
+
+                        - ESPECÍFICOS PARA HUBSPOT:
+                        * GET: "Muéstrame contactos de la empresa XYZ" → query=contacto XYZ
+                        * GET: "Encuentra empresas del sector tecnológico" → query=empresa tecnológico
+                        * GET: "Busca negocios con valor mayor a 10k" → query=negocio >10k
+                        * GET: "Dame información sobre el contacto Pedro García" → query=contacto Pedro García
+                        * POST: "Crea un contacto para María López con email maria@ejemplo.com" → acción=crear contacto
+                        * POST: "Actualiza el teléfono de Juan Pérez a 555-123-4567" → acción=actualizar contacto
+                        * POST: "Registra una nueva empresa llamada ABC Corp" → acción=crear empresa
+                        * AUTOMATIZADA: "Cuando un lead pase a calificado, asígnalo a ventas" → condition=cambio estado lead, action=asignar
+                        * AUTOMATIZADA: "Si un contacto no responde en 7 días, envía email de seguimiento" → condition=sin respuesta, action=enviar seguimiento
+
+                        - ESPECÍFICOS PARA TAREAS (NOTION/CLICKUP/ASANA):
+                        * GET: "Muéstrame tareas pendientes" → query=tareas pendientes
+                        * POST: "Marca como completada la tarea X" → acción=actualizar estado
+                        * AUTOMATIZADA: "Cuando una tarea pase a En Progreso, notifica al equipo" → condition=cambio de estado, action=notificar
+
+                        - ESPECÍFICOS PARA ARCHIVOS (GOOGLE DRIVE/DROPBOX/ONEDRIVE):
+                        * GET: "Encuentra documentos de presupuesto" → query=presupuesto
+                        * POST: "Comparte la carpeta Proyectos con maria@example.com" → acción=compartir
+                        * AUTOMATIZADA: "Cuando se suban archivos PDF, notifícame" → condition=subida de PDF, action=notificar
+
+                        - ESPECÍFICOS PARA TEAMS:
+                        * GET: "Encuentra conversaciones con Juan sobre el proyecto" → query=conversation with:Juan proyecto
+                        * GET: "Busca mensajes donde se mencionó la reunión semanal" → query=message:reunión semanal
+                        * POST: "Envía un mensaje a María en Teams" → acción=enviar mensaje, destinatario=María
+                        * AUTOMATIZADA: "Cuando alguien comparta un archivo en el canal Proyectos, notifícame" → condition=archivo compartido, action=notificar
+
+                        Si encuentras ambigüedad, analiza el contexto completo y la intención principal del usuario. Prioriza la interpretación como GET cuando el usuario busca información para sí mismo, y como POST cuando claramente solicita ejecutar acciones en plataformas.
+
+                        Genera respuestas estructuradas y precisas en el formato JSON solicitado, excluyendo servicios no aplicables (usa "N/A"). Asegúrate de capturar todos los detalles relevantes de la solicitud del usuario.
+
+                        RECUERDA:
+                        - Para HubSpot, identifica claramente el tipo de objeto (contacto, empresa, negocio) en las consultas GET
+                        - Para Slack, adapta la consulta de Gmail pero hazla más informal y directa para contextos de mensajería
+                        - En todos los casos, solo incluye en el JSON los servicios que son relevantes para la solicitud específica """},
                         {"role": "user", "content": prompt}
                     ],
-                    max_tokens=1800
+                    max_tokens=3500
                 )
                 ia_interpretation = response.choices[0].message.content.strip().lower()
                 print(ia_interpretation)
@@ -750,27 +786,46 @@ def setup_routes_chats(app, mongo):
                     start = ia_interpretation.find('{')
                     end = ia_interpretation.rfind('}') + 1
                     json_block = ia_interpretation[start:end]
-                    queries = json.loads(json_block)
 
-                    print(queries)
-                    if queries:
-                        try:
-                            for api, data in queries.items():
-                                condition = data.get('condition', '')
-                                action = data.get('action', '')    
-                                if condition and action and condition.lower() != "n/a" and action.lower() != "n/a":
-                                    function_name = f"post_auto_{api}"
-                                    if function_name in functionsAuto:
-                                        function = functionsAuto[function_name]
-                                        response = function(condition, action)
-                                        if response:
-                                            print(response)
-                                        else:
-                                            print(f"No se pudo ejecutar la acción para {api}.")
-                                    else:
-                                        print(f"La función para {api} no está definida en functionsPost.")                     
-                        except json.JSONDecodeError:
-                            return jsonify({"error": "Formato JSON inválido"}), 400
+                    try:
+                        queries = json.loads(json_block)
+                        print(queries)
+
+                        post_results_data = {}
+
+                        for api, data in queries.items():
+                            condition = data.get('condition', '').lower()
+                            action = data.get('action', '').lower()
+                            
+                            if condition != "n/a" and action != "n/a" and api:
+                                try:
+                                    function = functionsAuto[f"post_auto_{api}"]
+                                    response = function(condition, action)
+                                    
+                                    if response:
+                                        response_json = response.get_json()
+                                        message = response_json.get('message', None)
+                                        print(response_json)
+                                        
+                                        if message and message != "Sin mensaje":
+                                            if api not in post_results_data:
+                                                post_results_data[api] = []
+                                            post_results_data[api].append(message)
+                                            
+                                except Exception as e:
+                                    pass  # Manejo de errores opcional
+
+                        if post_results_data:
+                            return jsonify({
+                                "message": "✅ ¡Tus reglas de automatización han sido creadas con éxito! 🎉 Ahora tus acciones se realizaran según las reglas establecidas. 📩✨"
+                            }), 200
+                        else:
+                            return jsonify({
+                                "message": "⚠️ No se pudieron crear tus reglas de automatización. ¿Podrías reformularlas? 🤔"
+                            }), 400
+
+                    except json.JSONDecodeError:
+                        return jsonify({"error": "Formato JSON inválido"}), 400
                 elif 'anterior' in ia_interpretation:
                     reference_prompt = f"El usuario dijo: '{last_message}'\n"
                     reference_prompt += f"La última respuesta de la IA fue: '{last_response}'.\n"
@@ -783,7 +838,7 @@ def setup_routes_chats(app, mongo):
                     - Si el usuario comparte cómo se siente o menciona una situación personal, responde con empatía y comprensión.
                     - Si el usuario solicita automatizaciones o reglas persistentes (quemadas), identifícalas correctamente.
                     - Siempre mantén una respuesta natural y cercana, evitando un tono robótico.
-            """},
+                    """},
                                 {"role": "user", "content": reference_prompt}],
                         max_tokens=150
                     )

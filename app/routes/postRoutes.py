@@ -1,10 +1,8 @@
 from flask import request, jsonify
 import requests
-from datetime import datetime
 from zoneinfo import ZoneInfo
-from app import services
 from config import Config
-from datetime import datetime
+from datetime import datetime, timedelta
 import re
 import json
 import openai
@@ -12,7 +10,8 @@ import base64
 from email.mime.text import MIMEText
 openai.api_key=Config.CHAT_API_KEY
 
-def setup_post_routes(app,mongo):
+def setup_post_routes(app,mongo,cache):
+    cache = Cache(app)
     def get_clickup_headers(token):
         return {
             "Authorization": token,
@@ -35,13 +34,128 @@ def setup_post_routes(app,mongo):
             return jsonify({"error": "Token de Gmail no disponible"}), 400
 
         # =============================================
-        #   Busqueda de correos de gmail 📧
+        #   Crear evento en Google Calendar 📅
         # =============================================
+        if "create_event" in query:
+            try:
+                user_timezone = "America/Mexico_City"
+                parts = query.split("|")
+                
+                # Extraer parámetros específicos
+                summary = next((p.split(":", 1)[1] for p in parts if p.startswith("summary:")), "Reunión por defecto")
+                start_str = next((p.split(":", 1)[1] for p in parts if p.startswith("start:")), None)
+                end_str = next((p.split(":", 1)[1] for p in parts if p.startswith("end:")), None)
+                attendees_str = next((p.split(":", 1)[1] for p in parts if p.startswith("attendees:")), None)
+                meet = any(p.strip() == "meet:True" for p in parts)  # Opcional, pero no será necesario
 
+                # Validar parámetro obligatorio de inicio
+                if not start_str:
+                    return {"error": "Falta la fecha de inicio en la query"}
+
+                # Función para normalizar la fecha/hora
+                def parse_datetime(dt_str):
+                    # Reemplazar "t" minúscula por "T" y "Z" por zona horaria UTC
+                    dt_str = dt_str.replace("t", "T")
+                    dt_str = dt_str.replace("Z", "+00:00")
+                    
+                    try:
+                        dt = datetime.fromisoformat(dt_str)
+                    except ValueError:
+                        # Si el formato es incompleto, completamos hasta segundos
+                        if "T" in dt_str:
+                            time_part = dt_str.split("T")[1]
+                            if len(time_part) == 2:  # Solo hora (ej. 10)
+                                dt_str += ":00:00"
+                            elif len(time_part) == 5:  # Hora y minutos (ej. 10:30)
+                                dt_str += ":00"
+                        dt = datetime.fromisoformat(dt_str)
+                    return dt
+
+                # Normalizar fechas
+                start_dt = parse_datetime(start_str)
+                if not end_str:
+                    end_dt = start_dt + timedelta(hours=1)
+                else:
+                    end_dt = parse_datetime(end_str)
+                    if end_dt <= start_dt:
+                        end_dt = start_dt + timedelta(hours=1)
+                
+                # Construir el objeto del evento
+                event = {
+                    "summary": summary,
+                    "start": {
+                        "dateTime": start_dt.isoformat(),
+                        "timeZone": user_timezone
+                    },
+                    "end": {
+                        "dateTime": end_dt.isoformat(),
+                        "timeZone": user_timezone
+                    },
+                    # Agregar Google Meet por defecto
+                    "conferenceData": {
+                        "createRequest": {
+                            "requestId": f"meet-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+                            "conferenceSolutionKey": {"type": "hangoutsMeet"}
+                        }
+                    }
+                }
+
+                # Agregar asistentes si se especifican
+                if attendees_str:
+                    attendees = [{"email": email.strip()} for email in attendees_str.split(",")]
+                    event["attendees"] = attendees
+
+                # Configurar la solicitud a la API de Google Calendar
+                url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+                headers = {
+                    "Authorization": f"Bearer {gmail_token}",
+                    "Content-Type": "application/json"
+                }
+                # Configurar parámetros para notificaciones y Google Meet
+                params = {
+                    "sendNotifications": "true",
+                    "conferenceDataVersion": "1"  # Versión 2 para Google Meet
+                }
+
+                response = requests.post(url, json=event, headers=headers, params=params)
+
+                if response.status_code == 200:
+                    json_response = response.json()
+
+                    # Obtener enlace de Google Meet
+                    hangout_link = None
+                    if "hangoutLink" in json_response:
+                        hangout_link = json_response["hangoutLink"]
+                    elif "conferenceData" in json_response and "entryPoints" in json_response["conferenceData"]:
+                        for entry in json_response["conferenceData"]["entryPoints"]:
+                            if entry.get("entryPointType") == "video":
+                                hangout_link = entry.get("uri")
+                                break
+
+                    # Formatear fechas para el mensaje
+                    start_formatted = start_dt.strftime("%d/%m/%Y %H:%M")
+                    end_formatted = end_dt.strftime("%d/%m/%Y %H:%M")
+
+                    meet_msg = f"\nEnlace de Google Meet: {hangout_link}" if hangout_link else "\n(No se encontró enlace de Meet en la respuesta)"
+
+                    return {
+                        "message": (
+                            f"Evento creado con éxito: {summary}\n"
+                            f"Fecha: {start_formatted} - {end_formatted}"
+                        )
+                    }
+                else:
+                    return {
+                        "error": f"No se pudo crear el evento. Respuesta de Google: {response.text}"
+                    }
+            except Exception as e:
+                return {"error": f"Error al procesar la query para crear evento: {e}"}
+    # =============================================
+        #   Búsqueda y eliminación/movimiento a spam de correos en Gmail 📧
+        # =============================================
         match = re.search(r'todos los correos de (.+)', query, re.IGNORECASE)
         if match:
             sender = match.group(1)
-            # Determinar la acción: "delete" para eliminar, "spam" para mover a spam.
             action = "delete" if "eliminar" in query.lower() else "spam" if "mover a spam" in query.lower() else None
 
             if not action:
@@ -50,7 +164,6 @@ def setup_post_routes(app,mongo):
             headers = {"Authorization": f"Bearer {gmail_token}", "Content-Type": "application/json"}
             
             if action == "delete":
-                # Primero, buscamos los mensajes del remitente especificado
                 list_url = "https://www.googleapis.com/gmail/v1/users/me/messages"
                 params = {"q": f"from:{sender}"}
                 list_response = requests.get(list_url, headers=headers, params=params)
@@ -60,7 +173,6 @@ def setup_post_routes(app,mongo):
                     return {"error": f"No se encontraron correos del remitente {sender}"}
                 
                 delete_results = []
-                # Para cada mensaje, movemos a la papelera
                 for msg in messages:
                     message_id = msg["id"]
                     delete_url = f"https://www.googleapis.com/gmail/v1/users/me/messages/{message_id}/trash"
@@ -71,7 +183,6 @@ def setup_post_routes(app,mongo):
                     return {"message": f"Se han eliminado {len(delete_results)} correos del remitente {sender} 🧹✉️🚮"}
             
             elif action == "spam":
-                # Primero, buscamos los mensajes del remitente especificado
                 list_url = "https://www.googleapis.com/gmail/v1/users/me/messages"
                 params = {"q": f"from:{sender}"}
                 list_response = requests.get(list_url, headers=headers, params=params)
@@ -81,7 +192,6 @@ def setup_post_routes(app,mongo):
                     return {"error": f"No se encontraron correos del remitente {sender}"}
                 
                 spam_results = []
-                # Para cada mensaje, modificamos las etiquetas para agregar "SPAM"
                 for msg in messages:
                     message_id = msg["id"]
                     modify_url = f"https://www.googleapis.com/gmail/v1/users/me/messages/{message_id}/modify"
@@ -91,9 +201,13 @@ def setup_post_routes(app,mongo):
                 
                 if spam_results:
                     return {"message": f"Se han movido {len(spam_results)} correos del remitente {sender} a spam 🚫📩🛑"}
-        if "agendar" or "agendame" in query:
-            prompt = f"El usuario dijo: '{query}'. Devuelve un JSON con los campos 'date', 'time' y 'subject' que representen la fecha, hora y asunto de la cita agendada (el asunto ponlo con inicial mayuscula en la primer palabra) .Si no se puede extraer la información, devuelve 'unknown'."
-        
+
+        # =============================================
+        #   Agendar citas en Google Calendar (lógica existente, opcional si usas create_event)
+        # =============================================
+        if "agendar" in query or "agendame" in query:
+            prompt = f"El usuario dijo: '{query}'. Devuelve un JSON con los campos 'date', 'time' y 'subject' que representen la fecha, hora y asunto de la cita agendada (el asunto ponlo con inicial mayúscula en la primera palabra). Si no se puede extraer la información, devuelve 'unknown'."
+            
             response = openai.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
@@ -137,32 +251,28 @@ def setup_post_routes(app,mongo):
                     "end": {"dateTime": (event_datetime.replace(hour=event_datetime.hour + 1)).isoformat(), "timeZone": "UTC"}
                 }
 
-
                 url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
                 headers = {"Authorization": f"Bearer {gmail_token}", "Content-Type": "application/json"}
                 response = requests.post(url, json=event, headers=headers)
                 return {"message": f"¡Tu cita ha sido agendada con éxito! 📅🕒\n\nDetalles:\n- Asunto: {subject}\n- Fecha y hora de inicio: {event['start']['dateTime']}\n- Fecha y hora de fin: {event['end']['dateTime']}\n\n¡Nos vemos pronto! 😊"}
             except Exception as e:
                 print(f"Error al procesar la respuesta: {e}")
+                return {"error": f"Error al agendar la cita: {e}"}
 
         # =============================================
-        #   Crear borrador en gmail para enviar correo 📧
+        #   Crear borrador en Gmail 📧
         # =============================================
         match = re.search(r'crear\s*borrador\s*con\s*asunto:\s*(.*?)\s*y\s*cuerpo:\s*(.*)', query, re.IGNORECASE)
-
         if match:
             asunto = match.group(1).strip()
             cuerpo = match.group(2).strip()
 
-            # ✅ Crear mensaje en formato MIME
             mensaje = MIMEText(cuerpo)
             mensaje["Subject"] = asunto
 
-            # ✅ Convertir a Base64
             mensaje_bytes = mensaje.as_bytes()
             mensaje_base64 = base64.urlsafe_b64encode(mensaje_bytes).decode()
 
-            # ✅ Estructura final del borrador
             borrador = {
                 "message": {
                     "raw": mensaje_base64
@@ -173,34 +283,30 @@ def setup_post_routes(app,mongo):
             headers = {"Authorization": f"Bearer {gmail_token}", "Content-Type": "application/json"}
             response = requests.post(url, json=borrador, headers=headers)
             
-            # 📌 Imprimir la respuesta para debug
-            
             try:
                 response_json = response.json()
-
                 if response.status_code == 200:
                     return {"message": f"📩 ¡Borrador creado con éxito! El correo con asunto '{asunto}' ha sido guardado en Gmail. 🚀"}
                 else:
                     return {"error": f"⚠️ No se pudo crear el borrador. Error: {response_json}"}
-
             except Exception as e:
                 return {"error": "⚠️ Error inesperado al procesar la respuesta de Gmail."}
-        
-        # =============================================
-        #   📤 Enviar correo en Gmail (Mejorado) ✉️
-        # =============================================
 
+        # =============================================
+        #   Enviar correo en Gmail 📤
+        # =============================================
         match = re.search(
             r'enviar\s*correo\s*a\s*([\w\.-@,\s]+)\s*con\s*asunto:\s*(.*?)\s*y\s*cuerpo:\s*(.*)',
             query,
             re.IGNORECASE
         )
-
         if match:
+            destinatario = match.group(1).strip()
+            asunto = match.group(2).strip()
+            cuerpo = match.group(3).strip()
 
-            destinatario = match.group(1).strip()  # 📌 Captura el correo
-            asunto = match.group(2).strip()  # 📌 Captura el asunto
-            cuerpo = match.group(3).strip()  # 📌 Captura el cuerpo
+            if destinatario == 'destinatario':
+                return {"message": "⚠️ ¡Oops! 😅 Parece que olvidaste poner el correo de destino. 📧 Por favor, incluye una dirección válida para que podamos enviarlo. ✉️"}
 
             print(f"Destinatario: {destinatario}, Asunto: {asunto}, Cuerpo: {cuerpo}")
 
@@ -212,6 +318,7 @@ def setup_post_routes(app,mongo):
             mensaje = MIMEText(cuerpo)
             mensaje["To"] = destinatario
             mensaje["Subject"] = asunto
+            mensaje["From"] = "me"
 
             # ✅ Agregar el campo 'From' al mensaje
             mensaje["From"] = "me"  # Usamos 'me' que indica la cuenta autenticada
@@ -220,7 +327,6 @@ def setup_post_routes(app,mongo):
             mensaje_bytes = mensaje.as_bytes()
             mensaje_base64 = base64.urlsafe_b64encode(mensaje_bytes).decode()
 
-            # ✅ Estructura final del correo
             correo = {
                 "raw": mensaje_base64
             }
@@ -231,12 +337,10 @@ def setup_post_routes(app,mongo):
 
             try:
                 response_json = response.json()
-
                 if response.status_code == 200:
                     return {"message": f"📤 ¡Correo enviado con éxito! ✉️ El mensaje con asunto '{asunto}' fue enviado a {destinatario}. 🚀"}
                 else:
                     return {"error": f"⚠️ No se pudo enviar el correo. Error: {response_json}"}
-
             except Exception as e:
                 return {"error": "⚠️ Error inesperado al procesar la respuesta de Gmail."}
 

@@ -65,6 +65,7 @@ def setup_auth_routes(app, mongo, cache):
             return jsonify({"error": "email de usuario no proporcionado"}), 400
         try:
             usuario = mongo.database.usuarios.find_one({'correo': email})
+            cache.set(email, usuario, timeout=1800)
         except Exception as e:
             return jsonify({"error": str(e)}), 500
         

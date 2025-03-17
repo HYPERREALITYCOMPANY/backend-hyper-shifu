@@ -39,17 +39,12 @@ def create_app():
         print("Conexión exitosa a MongoDB!")
     except Exception as e:
         print("Error al conectar con MongoDB:", e)
-
-<<<<<<< HEAD
     setup_routes(app, mongo)
-=======
-    setup_routes(app, mongo, cache)
->>>>>>> cecd1e54a8b263a11d321156e748b383e69c4c17
     setup_auth_routes(app, mongo, cache)
     setup_user_routes(app, mongo, cache)
     setup_integrations_routes(app, mongo, cache)
     setup_routes_secretary_posts(app, mongo, cache)
-    setup_proxy_routes(app, mongo)
+    setup_proxy_routes(app, mongo, cache)
     setup_routes_chats(app, mongo, cache)
     setup_execute_routes(app, mongo, cache)
     setup_routes_refresh(app, mongo, cache)

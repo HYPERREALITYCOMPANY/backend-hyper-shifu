@@ -92,4 +92,4 @@ def setup_auth_routes(app, mongo, cache):
         if result.matched_count == 0:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
-        return jsonify({"message": "Usuario actualizado con éxito"}), 200
+        return jsonify({"message": "Usuario actualizado con éxito"}), 200 

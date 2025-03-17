@@ -380,27 +380,40 @@ def setup_routes_secretary_gets(app, mongo, cache):
     def obtener_ultima_notificacion_asana():
         email = request.args.get("email")
         try:
+            # Obtener usuario de la base de datos
             user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
+            # Obtener token de Asana
             token = user.get("integrations", {}).get("Asana", {}).get("token")
             if not token:
                 return jsonify({"error": "Token no disponible"}), 400
 
             headers = get_asana_headers(token)
+
+            # Obtener el workspace
             workspaces_response = requests.get("https://app.asana.com/api/1.0/workspaces", headers=headers)
+            print("Workspaces response:", workspaces_response.status_code, workspaces_response.text)
             if workspaces_response.status_code != 200:
-                return jsonify({"error": "No se pudo obtener el workspace"}), workspaces_response.status_code
+                return jsonify({"error": "No se pudo obtener el workspace", "details": workspaces_response.text}), workspaces_response.status_code
 
             workspace_id = workspaces_response.json().get("data", [])[0]["gid"]
+
+            # Obtener el ID del usuario
             user_response = requests.get("https://app.asana.com/api/1.0/users/me", headers=headers)
+            print("User response:", user_response.status_code, user_response.text)
+            if user_response.status_code != 200:
+                return jsonify({"error": "No se pudo obtener el usuario", "details": user_response.text}), user_response.status_code
+
             user_id = user_response.json().get("data", {}).get("gid")
 
+            # Obtener las tareas asignadas al usuario, incluyendo created_at
             response = requests.get(
-                f"https://app.asana.com/api/1.0/tasks?assignee={user_id}&workspace={workspace_id}&limit=1",
+                f"https://app.asana.com/api/1.0/tasks?assignee={user_id}&workspace={workspace_id}&limit=50&opt_fields=name,gid,created_at",
                 headers=headers
             )
+            print("Tasks response:", response.status_code, response.text)
             if response.status_code != 200:
                 return jsonify({"error": "Error al obtener tareas", "details": response.json()}), response.status_code
 
@@ -408,16 +421,19 @@ def setup_routes_secretary_gets(app, mongo, cache):
             if not tasks:
                 return jsonify({"error": "No hay tareas asignadas en Asana, ¿reviso después?"}), 404
 
-            task = tasks[0]
+            # Ordenar tareas por created_at (más reciente primero)
+            tasks.sort(key=lambda x: x["created_at"], reverse=True)
+            latest_task = tasks[0]  # La tarea más reciente
+
             return jsonify({
                 "from": "Asana",
                 "subject": f"Hola, tienes una tarea nueva en Asana",
-                "snippet": f"Es '{task.get('name', '(Sin título)')}'.",
-                "id": task["gid"]
+                "snippet": f"Es '{latest_task.get('name', '(Sin título)')}'.",
+                "id": latest_task["gid"]
             })
         except Exception as e:
             return jsonify({"error": "Ups, algo falló con Asana, ¿lo intento de nuevo?", "details": str(e)}), 500
-
+        
     @app.route("/ultima-notificacion/dropbox", methods=["GET"])
     def obtener_ultimo_archivo_dropbox():
         email = request.args.get("email")

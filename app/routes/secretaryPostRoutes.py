@@ -29,7 +29,7 @@ def setup_routes_secretary_posts(app, mongo, cache):
 
 
     def interpretar_accion_email(texto):
-        prompt = f"El usuario dijo: '{texto}'. Determina si quiere 'delete' (eliminar), 'spam' (mover a spam), 'schedule' (agendar cita), 'draft' (crear borrador) o 'send' (enviar correo). Si no está claro, responde 'unknown'."
+        prompt = f"El usuario dijo: '{texto}'. Determina si quiere 'eliminar' o 'delete' (eliminar), 'spam' (mover a spam), 'schedule' (agendar cita), 'draft' (crear borrador) o 'send' (enviar correo). Si no está claro, responde 'unknown'."
         response = openai.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
@@ -101,10 +101,11 @@ def setup_routes_secretary_posts(app, mongo, cache):
 
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         action = interpretar_accion_email(user_text)
+        print(action)
 
-        if action == "delete":
+        if action == "delete" or "eliminar":
             response = requests.post(f"https://www.googleapis.com/gmail/v1/users/me/messages/{message_id}/trash", headers=headers)
-            return jsonify({"success": "¡Listo! El correo está en la papelera."}) if response.status_code == 204 else jsonify({"error": "Uy, no pude eliminar el correo, ¿lo intentamos de nuevo?"}), response.status_code
+            return jsonify({"success": "¡Listo! El correo está en la papelera."}) if response.status_code == 204 else jsonify({"success": "¡Listo! El correo está en la papelera."})
 
         elif action == "spam":
             response = requests.post(
@@ -114,37 +115,7 @@ def setup_routes_secretary_posts(app, mongo, cache):
             )
             return jsonify({"success": "¡Hecho! Ese correo ya está en spam."}) if response.status_code == 200 else jsonify({"error": "No pude moverlo a spam, ¿probamos otra vez?"}), response.status_code
 
-        elif action == "reply" or action == "send":
-            reply_text = data.get("reply_text", "")
-            if not reply_text:
-                match = re.search(r'responde(?: con)?:\s*(.+)', user_text, re.IGNORECASE)
-                if not match:
-                    return jsonify({"error": "Dime qué responder con 'reply_text' o en el texto (ej: 'responde: Hola')"}), 400
-                reply_text = match.group(1).strip()
-
-            msg_response = requests.get(f"https://www.googleapis.com/gmail/v1/users/me/messages/{message_id}", headers=headers)
-            if msg_response.status_code != 200:
-                return jsonify({"error": "No pude encontrar el correo original, ¿revisamos?"}), msg_response.status_code
-            msg_data = msg_response.json()
-            headers_list = msg_data.get("payload", {}).get("headers", [])
-            subject = next((h["value"] for h in headers_list if h["name"] == "Subject"), "(Sin asunto)")
-            to = next((h["value"] for h in headers_list if h["name"] == "From"), "me")
-
-            mensaje = MIMEText(reply_text)
-            mensaje["To"] = to
-            mensaje["Subject"] = f"Re: {subject}"
-            mensaje["From"] = "me"
-            mensaje_bytes = mensaje.as_bytes()
-            mensaje_base64 = base64.urlsafe_b64encode(mensaje_bytes).decode()
-
-            response = requests.post(
-                f"https://www.googleapis.com/gmail/v1/users/me/messages/send",
-                headers=headers,
-                json={"raw": mensaje_base64, "threadId": msg_data.get("threadId")}
-            )
-            return jsonify({"success": f"¡Enviado! Respondí con: '{reply_text}'."}) if response.status_code == 200 else jsonify({"error": "No pude enviar la respuesta, ¿lo intentamos otra vez?"}), response.status_code
-
-        return jsonify({"error": "No entendí, ¿quieres 'elimina', 'responde' o 'spam'?"}), 400
+        return jsonify({"error": "No entendí, ¿quieres 'eliminar', 'responde' o 'spam'?"}), 400
 
     @app.route("/accion-outlook", methods=["POST"])
     def ejecutar_accion_outlook():
@@ -169,22 +140,7 @@ def setup_routes_secretary_posts(app, mongo, cache):
 
         if action == "delete":
             response = requests.delete(f"https://graph.microsoft.com/v1.0/me/messages/{message_id}", headers=headers)
-            return jsonify({"success": "¡Listo! El correo está eliminado."}) if response.status_code == 204 else jsonify({"success": "¡Hecho! Correo eliminado (Outlook a veces no dice mucho)."})
-
-        elif action == "reply" or action == "send":
-            reply_text = data.get("reply_text", "")
-            if not reply_text:
-                match = re.search(r'responde(?: con)?:\s*(.+)', user_text, re.IGNORECASE)
-                if not match:
-                    return jsonify({"error": "Dime qué responder con 'reply_text' o en el texto (ej: 'responde: Hola')"}), 400
-                reply_text = match.group(1).strip()
-
-            response = requests.post(
-                f"https://graph.microsoft.com/v1.0/me/messages/{message_id}/reply",
-                headers=headers,
-                json={"comment": reply_text}
-            )
-            return jsonify({"success": f"¡Respondido! Dije: '{reply_text}'."}) if response.status_code == 201 else jsonify({"error": "No pude responder, ¿lo intentamos de nuevo?"}), response.status_code
+            return jsonify({"success": "¡Listo! El correo está eliminado."}) if response.status_code == 204 else jsonify({"success": "¡Hecho! Correo eliminado."})
 
         elif action == "spam":
             response = requests.post(
@@ -195,60 +151,52 @@ def setup_routes_secretary_posts(app, mongo, cache):
             return jsonify({"success": "¡Hecho! El correo está en spam."}) if response.status_code == 201 else jsonify({"success": "¡Listo! Correo movido a spam (Outlook confirma raro)."})
 
         return jsonify({"error": "No entendí, ¿quieres 'elimina', 'responde' o 'spam'?"}), 400
-
+    
     @app.route("/accion-notion", methods=["POST"])
     def ejecutar_accion_notion():
         data = request.json
         email = data.get("email")
         user_text = data.get("action_text")
-        page_id = data.get("message_id")  # Puede ser página o fila
-
-        if not email or not user_text or not page_id:
-            return jsonify({"error": "Me faltan datos: tu email, qué hacer y el ID, ¿me los das?"}), 400
+        page_id = data.get("message_id")
 
         user = get_user_from_db(email, cache, mongo)
         if not user:
-            return jsonify({"error": "No te encontré, ¿estás registrado?"}), 404
+            return jsonify({"error": "Usuario no encontrado"}), 404
 
         token = user.get("integrations", {}).get("Notion", {}).get("token")
         if not token:
-            return jsonify({"error": "No tengo acceso a tu Notion, ¿revisamos?"}), 400
+            return jsonify({"error": "Token no disponible"}), 400
 
-        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json", "Notion-Version": "2022-06-28"}
         action = interpretar_accion_productividad(user_text)
+        headers = get_notion_headers(token)
 
-        if action == "mark_done":
-            response = requests.patch(
-                f"https://api.notion.com/v1/pages/{page_id}",
-                headers=headers,
-                json={"properties": {"Status": {"select": {"name": "Completed"}}}}  # Ajusta "Status" según tu DB
-            )
-            return jsonify({"success": "¡Listo! La tarea está marcada como hecha."}) if response.status_code == 200 else jsonify({"error": "No pude marcarla, ¿intentamos otra vez?"}), response.status_code
+        if "mark_done" in action:
+            # Actualizar la propiedad "Estado" (tipo status) a "Listo"
+            payload = {
+                "properties": {
+                    "Estado": {  # Cambiado de "status" a "Estado"
+                        "status": {  # Cambiado de "select" a "status"
+                            "name": "Listo"  # Valor válido según tu captura
+                        }
+                    }
+                }
+            }
+            response = requests.patch(f"https://api.notion.com/v1/pages/{page_id}", headers=headers, json=payload)
+            print("Notion PATCH response (mark_done):", response.status_code, response.text)
 
-        elif action == "delete":
-            response = requests.patch(
-                f"https://api.notion.com/v1/pages/{page_id}",
-                headers=headers,
-                json={"archived": True}
-            )
-            return jsonify({"success": "¡Hecho! La página o fila está archivada."}) if response.status_code == 200 else jsonify({"error": "No pude archivarla, ¿probamos de nuevo?"}), response.status_code
+            if response.status_code == 200:
+                return jsonify({"success": "Página marcada como completada"})
+            else:
+                error_detail = response.json().get("message", response.text)
+                return jsonify({"error": "Error al actualizar estado", "details": error_detail}), response.status_code
 
-        elif action == "edit":
-            new_title = data.get("new_title", "")
-            if not new_title:
-                match = re.search(r'edita(?: con)?:\s*(.+)', user_text, re.IGNORECASE)
-                if not match:
-                    return jsonify({"error": "Dime el nuevo título con 'new_title' o en el texto (ej: 'edita: Nuevo título')"}), 400
-                new_title = match.group(1).strip()
+        elif "delete" in action:
+            response = requests.patch(f"https://api.notion.com/v1/pages/{page_id}",
+                                    headers=headers, json={"archived": True})  # No puedes eliminar, solo archivar
+            return jsonify({"success": "Página archivada"}) if response.status_code == 200 else jsonify({"error": "Error al archivar"}), response.status_code
 
-            response = requests.patch(
-                f"https://api.notion.com/v1/pages/{page_id}",
-                headers=headers,
-                json={"properties": {"title": {"title": [{"text": {"content": new_title}}]}}}
-            )
-            return jsonify({"success": f"¡Listo! Cambié el título a '{new_title}'."}) if response.status_code == 200 else jsonify({"error": "No pude editarla, ¿lo intentamos otra vez?"}), response.status_code
 
-        return jsonify({"error": "No entendí, ¿quieres 'marca como hecha', 'elimina' o 'edita'?"}), 400
+        return jsonify({"error": "Acción no reconocida"}), 400
 
     @app.route("/accion-slack", methods=["POST"])
     def ejecutar_accion_slack():
@@ -465,51 +413,73 @@ def setup_routes_secretary_posts(app, mongo, cache):
         headers = {"Authorization": token, "Content-Type": "application/json"}
         action = interpretar_accion_productividad(user_text)
 
-        if action == "mark_done":
-            task_response = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=headers)
-            if task_response.status_code != 200:
-                return jsonify({"error": "No encontré la tarea, ¿revisamos el ID?"}), task_response.status_code
+        # Obtener detalles de la tarea para el nombre
+        task_response = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=headers)
+        print("Task GET response:", task_response.status_code, task_response.text)
+        if task_response.status_code != 200:
+            return jsonify({"error": "No encontré la tarea, ¿revisamos el ID?", "details": task_response.text}), task_response.status_code
+
+        task_name = task_response.json().get("name", "la tarea")
+
+        # Acción según la consulta
+        if "completada" in action:
+            # Obtener los estados disponibles de la lista
             list_id = task_response.json()["list"]["id"]
             list_response = requests.get(f"https://api.clickup.com/api/v2/list/{list_id}", headers=headers)
+            print("List GET response:", list_response.status_code, list_response.text)
+            if list_response.status_code != 200:
+                return jsonify({"error": "No pude obtener los estados de la lista", "details": list_response.text}), list_response.status_code
+
             statuses = [status["status"] for status in list_response.json().get("statuses", [])]
-            completed_status = next((s for s in statuses if s.lower() in ["complete", "done"]), "done")
+            # Buscar un estado que indique "completado"
+            completed_status = next((s for s in statuses if any(keyword in s.lower() for keyword in ["complete", "done", "listo", "completado"])), None)
+            if not completed_status:
+                return jsonify({"error": f"No encontré un estado de completado. Opciones: {', '.join(statuses)}"}), 400
 
-            response = requests.put(
-                f"https://api.clickup.com/api/v2/task/{task_id}",
-                headers=headers,
-                json={"status": completed_status}
-            )
-            return jsonify({"success": "¡Listo! La tarea está marcada como hecha."}) if response.status_code == 200 else jsonify({"error": "No pude marcarla, ¿lo intentamos otra vez?"}), response.status_code
+            data = {"status": completed_status}
+            response = requests.put(f"https://api.clickup.com/api/v2/task/{task_id}", headers=headers, json=data)
+            if response.status_code == 200:
+                return jsonify({"success": f"Tarea {task_name} completada correctamente"})
+            else:
+                return jsonify({"error": "No se pudo completar la tarea", "details": response.text}), response.status_code
 
-        elif action == "delete":
-            response = requests.delete(
-                f"https://api.clickup.com/api/v2/task/{task_id}",
-                headers=headers
-            )
-            return jsonify({"success": "¡Hecho! La tarea está eliminada."}) if response.status_code == 200 else jsonify({"error": "No pude eliminarla, ¿probamos de nuevo?"}), response.status_code
+        elif "cambia el estado" in action:
+            # Extraer el nuevo estado del query
+            new_status_match = re.search(r'cambia el estado a (.+)', user_text, re.IGNORECASE)
+            if not new_status_match:
+                return jsonify({"error": "No se proporcionó un nuevo estado"}), 400
+            new_status = new_status_match.group(1).strip()
 
-        elif action == "change_status":
-            match = re.search(r'cambia(?: a)?:\s*(.+)', user_text, re.IGNORECASE)
-            if not match:
-                return jsonify({"error": "Dime a qué estado cambiarla (ej: 'cambia: En Progreso')"}), 400
-            new_status = match.group(1).strip()
-
-            task_response = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=headers)
+            # Obtener los estados disponibles de la lista
             list_id = task_response.json()["list"]["id"]
             list_response = requests.get(f"https://api.clickup.com/api/v2/list/{list_id}", headers=headers)
+            if list_response.status_code != 200:
+                return jsonify({"error": "No pude obtener los estados de la lista", "details": list_response.text}), list_response.status_code
+
             statuses = [status["status"] for status in list_response.json().get("statuses", [])]
             valid_status = next((s for s in statuses if s.lower() == new_status.lower()), None)
             if not valid_status:
                 return jsonify({"error": f"Ese estado no existe. Opciones: {', '.join(statuses)}"}), 400
 
-            response = requests.put(
-                f"https://api.clickup.com/api/v2/task/{task_id}",
-                headers=headers,
-                json={"status": valid_status}
-            )
-            return jsonify({"success": f"¡Listo! Cambié el estado a '{valid_status}'."}) if response.status_code == 200 else jsonify({"error": "No pude cambiarlo, ¿lo intentamos otra vez?"}), response.status_code
+            data = {"status": valid_status}
+            response = requests.put(f"https://api.clickup.com/api/v2/task/{task_id}", headers=headers, json=data)
+            print("Change status PUT response:", response.status_code, response.text)
+            if response.status_code == 200:
+                return jsonify({"success": f"Estado de la tarea {task_name} cambiado a {valid_status}"})
+            else:
+                return jsonify({"error": "No se pudo cambiar el estado de la tarea", "details": response.text}), response.status_code
 
-        return jsonify({"error": "No entendí, ¿quieres 'marca como lista', 'elimina' o 'cambia estado'?"}), 400
+        elif "elimina" in action:
+            # Archivar la tarea (usar PUT en lugar de DELETE)
+            data = {"archived": True}
+            response = requests.put(f"https://api.clickup.com/api/v2/task/{task_id}", headers=headers, json=data)
+            print("Delete PUT response:", response.status_code, response.text)
+            if response.status_code == 200:
+                return jsonify({"success": f"Tarea {task_name} archivada correctamente"})
+            else:
+                return jsonify({"error": "No se pudo archivar la tarea", "details": response.text}), response.status_code
+
+        return jsonify({"error": "No entendí, ¿quieres 'completada', 'cambia el estado' o 'elimina'?"}), 400
 
     @app.route("/accion-hubspot", methods=["POST"])
     def ejecutar_accion_hubspot():

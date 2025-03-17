@@ -152,57 +152,95 @@ def setup_post_routes(app,mongo,cache):
                     }
             except Exception as e:
                 return {"error": f"Error al procesar la query para crear evento: {e}"}
-    # =============================================
+        # =============================================
         #   Búsqueda y eliminación/movimiento a spam de correos en Gmail 📧
         # =============================================
-        match = re.search(r'todos los correos de (.+)', query, re.IGNORECASE)
-        if match:
-            sender = match.group(1)
-            action = "delete" if "eliminar" in query.lower() else "spam" if "mover a spam" in query.lower() else None
+        print("Query de eliminación de correos:", query)
 
-            if not action:
-                return {"error": "Acción no reconocida para Gmail"}
+        # Expresión regular para capturar "eliminar correos de (remitente)"
+        match = re.search(r'eliminar correos de\s*([\w\.-]+@[\w\.-]+)', query, re.IGNORECASE)
+        print("Match de eliminación de correos:", match)
+
+        if match:
+            sender = match.group(1).strip()
+            print("remitente de eliminación:", sender)
+
+            if sender == 'n/a':
+                return {"message": f"¡Parece que olvidaste incluir un remitente! 😊 ¿Podrías indicarnos de quién deseas eliminar los correos? ✨ Inténtalo nuevamente y estaré listo para ayudarte. ¡Gracias!"}
 
             headers = {"Authorization": f"Bearer {gmail_token}", "Content-Type": "application/json"}
-            
-            if action == "delete":
-                list_url = "https://www.googleapis.com/gmail/v1/users/me/messages"
-                params = {"q": f"from:{sender}"}
-                list_response = requests.get(list_url, headers=headers, params=params)
-                messages = list_response.json().get("messages", [])
-                
-                if not messages:
-                    return {"error": f"No se encontraron correos del remitente {sender}"}
-                
+
+            # Buscar los correos del remitente en Gmail
+            list_url = "https://www.googleapis.com/gmail/v1/users/me/messages"
+            params = {"q": f"from:{sender}"}
+            list_response = requests.get(list_url, headers=headers, params=params)
+
+            if list_response.status_code != 200:
+                return {"message": f"❌ Hubo un problema al buscar los correos en Gmail. Intenta nuevamente."}
+
+            messages = list_response.json().get("messages", [])
+
+            if messages:
+                # Eliminar cada correo encontrado
                 delete_results = []
                 for msg in messages:
                     message_id = msg["id"]
                     delete_url = f"https://www.googleapis.com/gmail/v1/users/me/messages/{message_id}/trash"
                     delete_response = requests.post(delete_url, headers=headers)
-                    delete_results.append(delete_response.json())
-                
+
+                    if delete_response.status_code == 200:
+                        delete_results.append(message_id)
+
                 if delete_results:
-                    return {"message": f"Se han eliminado {len(delete_results)} correos del remitente {sender} 🧹✉️🚮"}
-            
-            elif action == "spam":
-                list_url = "https://www.googleapis.com/gmail/v1/users/me/messages"
-                params = {"q": f"from:{sender}"}
-                list_response = requests.get(list_url, headers=headers, params=params)
-                messages = list_response.json().get("messages", [])
-                
-                if not messages:
-                    return {"error": f"No se encontraron correos del remitente {sender}"}
-                
+                    return {"message": f"🧹 Se han eliminado {len(delete_results)} correos del remitente {sender} con éxito. 🚮"}
+
+            return {"message": f"📭 No se encontraron correos del remitente {sender}."}
+        
+        # =============================================
+        #   Mandar correos a SPAM 🛑
+        # =============================================
+
+        print("Query para mover correos a spam:", query)
+
+        # Expresión regular para capturar "mover correos de (remitente) a spam"
+        match = re.search(r'mover a spam\s*from:\s*([\w\.-]+@[\w\.-]+)', query, re.IGNORECASE)
+        print("Match para mover correos a spam:", match)
+
+        if match:
+            sender = match.group(1).strip()
+            print("remitente:", sender)
+
+            if sender == 'n/a':
+                return {"message": f"¡Parece que olvidaste incluir un remitente! 😊 ¿Podrías indicarnos de quién deseas eliminar los correos? ✨ Inténtalo nuevamente y estaré listo para ayudarte. ¡Gracias!"}
+
+            headers = {"Authorization": f"Bearer {gmail_token}", "Content-Type": "application/json"}
+
+            # Buscar los correos del remitente en Gmail
+            list_url = "https://www.googleapis.com/gmail/v1/users/me/messages"
+            params = {"q": f"from:{sender}"}
+            list_response = requests.get(list_url, headers=headers, params=params)
+
+            if list_response.status_code != 200:
+                return {"message": f"❌ Hubo un problema al buscar los correos en Gmail. Intenta nuevamente."}
+
+            messages = list_response.json().get("messages", [])
+
+            if messages:
+                # Mover cada correo a la carpeta de spam
                 spam_results = []
                 for msg in messages:
                     message_id = msg["id"]
                     modify_url = f"https://www.googleapis.com/gmail/v1/users/me/messages/{message_id}/modify"
                     modify_payload = {"addLabelIds": ["SPAM"]}
                     modify_response = requests.post(modify_url, headers=headers, json=modify_payload)
-                    spam_results.append(modify_response.json())
-                
+
+                    if modify_response.status_code == 200:
+                        spam_results.append(message_id)
+
                 if spam_results:
-                    return {"message": f"Se han movido {len(spam_results)} correos del remitente {sender} a spam 🚫📩🛑"}
+                    return {"message": f"🚫 Se han movido {len(spam_results)} correos del remitente {sender} a spam. 📩🛑"}
+            
+            return {"message": f"📭 No se encontraron correos del remitente {sender} para mover a spam."}
 
         # =============================================
         #   Agendar citas en Google Calendar (lógica existente, opcional si usas create_event)
@@ -335,7 +373,7 @@ def setup_post_routes(app,mongo,cache):
             except Exception as e:
                 return {"error": "⚠️ Error inesperado al procesar la respuesta de Gmail."}
 
-        return {"error": "No se encontró una acción válida en la consulta"}
+        return {"message": f"No se encontró una acción válida en la consulta"}
 
 ##############################################################################################
     def post_to_outlook(query):
@@ -906,8 +944,11 @@ def setup_post_routes(app,mongo,cache):
         #   📂 Compartir archivo o carpeta en Google Drive 📂
         # =============================================
         print("query compartir archivo:", query)
-        matchCompartirArchivo = re.search(r'compartir\s*(archivo|carpeta)\s*[:\s]*(\S.*)\s*con\s*(.+)', query, re.IGNORECASE)
+    
+        # Expresión regular para capturar "compartir archivo" o "compartir carpeta"
+        matchCompartirArchivo = re.search(r'compartir\s*(archivo|carpeta)\s*[:\s]*(\S.*)\s*con\s*[:\s]*(.+)', query, re.IGNORECASE)
         print("matchCompartirArchivo", matchCompartirArchivo)
+        
         if matchCompartirArchivo:
             tipo_archivo = matchCompartirArchivo.group(1).strip()  # 'archivo' o 'carpeta'
             archivo_o_carpeta = matchCompartirArchivo.group(2).strip()  # Nombre del archivo o carpeta
@@ -926,6 +967,9 @@ def setup_post_routes(app,mongo,cache):
             if destinatarios == ': n/a':
                 return {"message": "⚠️ ¡Ups! No se especificaron destinatarios. 🤔 Indica a quién deseas compartirlo. 👥"}
             
+            # Limpiar destinatarios para eliminar el símbolo ":" y cualquier espacio innecesario
+            destinatarios_limpios = [email.strip(":").strip() for email in destinatarios.split(',')]
+
             # Buscar el archivo o carpeta en Google Drive
             url = "https://www.googleapis.com/drive/v3/files"
             headers = {"Authorization": f"Bearer {google_drive_token}"}
@@ -948,14 +992,15 @@ def setup_post_routes(app,mongo,cache):
                 print(f"Se encontró el archivo/carpeta con ID: {file_id}")
 
                 # Ahora, compartimos el archivo o carpeta con los destinatarios
-                for destinatario in destinatarios.split(','):
-                    email = destinatario.strip()  # Asegurarse de que no tenga espacios extra
+                for email in destinatarios_limpios:
+                    print("Correo de destinatario:", email)
 
                     # Crear el permiso para compartir con el destinatario
                     permission_url = f"https://www.googleapis.com/drive/v3/files/{file_id}/permissions"
                     permission_data = {
-                        "type": "anyone",  # Esto lo haría accesible para cualquier persona
-                        "role": "reader",  # Puede ser 'reader' o 'writer'
+                        "type": "user",  # Esto lo hace accesible solo para el destinatario
+                        "role": "reader",  # Puede ser 'reader' o 'writer', según el nivel de acceso que deseas
+                        "emailAddress": email  # Aquí se especifica el correo electrónico del destinatario
                     }
 
                     permission_response = requests.post(permission_url, headers=headers, json=permission_data)

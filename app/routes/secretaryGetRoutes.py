@@ -18,71 +18,88 @@ def setup_routes_secretary_gets(app, mongo, cache, refresh_functions):
         """Determina si se deben refrescar los tokens basado en el tiempo desde el último refresco."""
         last_refresh_key = f"last_refresh_{email}"
         last_refresh = cache.get(last_refresh_key)
-
         current_time = datetime.utcnow()
 
         if last_refresh is None:
+            print(f"[INFO] No hay registro de último refresco para {email}, forzando refresco")
             return True
 
         last_refresh_time = datetime.fromtimestamp(last_refresh)
-        refresh_interval = timedelta(minutes=30)
+        refresh_interval = timedelta(minutes=30)  # Mantengo 30 min como en el original
         time_since_last_refresh = current_time - last_refresh_time
 
         if time_since_last_refresh >= refresh_interval:
+            print(f"[INFO] Han pasado {time_since_last_refresh} desde el último refresco para {email}, refrescando")
             return True
         
+        print(f"[INFO] Tokens de {email} aún vigentes, faltan {refresh_interval - time_since_last_refresh} para refrescar")
         return False
 
     def get_user_with_refreshed_tokens(email):
-        """Obtiene el usuario y refresca tokens solo si es necesario."""
+        """Obtiene el usuario y refresca tokens solo si es necesario, aprovechando la caché optimizada."""
         try:
-            # Primero intentamos obtener el usuario de la caché
+            # Intentamos obtener el usuario de la caché
             user = cache.get(email)
             if not user:
+                print(f"[INFO] Usuario {email} no está en caché, consultando DB")
                 user = get_user_from_db(email, cache, mongo)
                 if not user:
+                    print(f"[ERROR] Usuario {email} no encontrado en DB")
                     return None
-                cache.set(email, user, timeout=1800)
+                cache.set(email, user, timeout=1800)  # 30 min de caché
 
+            # Verificamos si necesitamos refrescar tokens
             if not should_refresh_tokens(email):
+                print(f"[INFO] Tokens de {email} no necesitan refresco, devolviendo usuario cacheado")
                 return user
 
-            # Solo llegamos aquí si necesitamos refrescar
-            integrations = user.get("integrations", {})
+            # Obtenemos los refresh tokens (cacheados o desde DB)
             refresh_tokens_dict = get_refresh_tokens_from_db(email)
             if not refresh_tokens_dict:
+                print(f"[INFO] No hay refresh tokens para {email}, marcando tiempo y devolviendo usuario")
                 cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
                 return user
 
-            tokens_to_refresh = {}
-            for service, token_data in integrations.items():
-                refresh_token = token_data.get("refresh_token")
-                if not refresh_token or refresh_token == "n/a":
-                    continue
-                if service in refresh_tokens_dict:
-                    tokens_to_refresh[service] = refresh_tokens_dict[service]
+            # Filtramos los tokens que realmente necesitamos refrescar
+            integrations = user.get("integrations", {})
+            tokens_to_refresh = {
+                service: refresh_tokens_dict[service]
+                for service in integrations
+                if service in refresh_tokens_dict and integrations[service].get("refresh_token") not in (None, "n/a")
+            }
 
-            if tokens_to_refresh:
-                refreshed_tokens, errors = refresh_tokens_func(tokens_to_refresh, email)
-                
-                if refreshed_tokens:
-                    updated_user = mongo.database.usuarios.find_one({"correo": email})
-                    if updated_user:
-                        cache.set(email, updated_user, timeout=1800)
-                        cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
-                        return updated_user
-                    else:
-                        print(f"[ERROR] No se pudo obtener usuario actualizado de la BD")
-                elif errors:
-                    print(f"[WARNING] Errores al refrescar tokens: {errors}")
-            else:
-                print(f"[INFO] No hay tokens para refrescar, marcando tiempo")
+            if not tokens_to_refresh:
+                print(f"[INFO] No hay tokens válidos para refrescar para {email}, marcando tiempo")
                 cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
+                return user
 
-            return user
+            # Refrescamos los tokens
+            print(f"[INFO] Refrescando tokens para {email}: {list(tokens_to_refresh.keys())}")
+            refreshed_tokens, errors = refresh_tokens_func(tokens_to_refresh, email)
+
+            if refreshed_tokens:
+                # Como save_access_token_to_db invalida la caché, recargamos el usuario
+                print(f"[INFO] Tokens refrescados para {email}: {list(refreshed_tokens.keys())}")
+                user = get_user_from_db(email, cache, mongo)  # Recarga desde DB o caché actualizada
+                if not user:
+                    print(f"[ERROR] No se pudo recargar usuario {email} tras refresco")
+                    return None
+                cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
+                return user
             
+            if errors:
+                print(f"[WARNING] Errores al refrescar tokens para {email}: {errors}")
+                # Devolvemos el usuario actual aunque haya errores, para no bloquear el flujo
+                cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
+                return user
+
+            # Si no hay tokens refrescados ni errores, marcamos el tiempo y devolvemos el usuario
+            print(f"[INFO] No se refrescaron tokens para {email}, marcando tiempo")
+            cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
+            return user
+
         except Exception as e:
-            print(f"[ERROR] Error general en get_user_with_refreshed_tokens: {e}")
+            print(f"[ERROR] Error en get_user_with_refreshed_tokens para {email}: {e}")
             return None
         
     def get_gmail_headers(token):

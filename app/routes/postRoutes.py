@@ -27,65 +27,72 @@ def setup_post_routes(app,mongo,cache, refresh_functions):
         last_refresh_key = f"last_refresh_{email}"
         last_refresh = cache.get(last_refresh_key)
 
+        current_time = datetime.utcnow()
+
         if last_refresh is None:
             return True
 
-        current_time = datetime.utcnow()
         last_refresh_time = datetime.fromtimestamp(last_refresh)
-        refresh_interval = timedelta(minutes=15)  # Cambia a 10 si prefieres 10 minutos
+        refresh_interval = timedelta(minutes=15)
+        time_since_last_refresh = current_time - last_refresh_time
 
-        if current_time >= (last_refresh_time + refresh_interval):
+        if time_since_last_refresh >= refresh_interval:
             return True
         
         return False
 
     def get_user_with_refreshed_tokens(email):
-        """Obtiene el usuario y refresca tokens solo la primera vez y cada 15 minutos."""
+        """Obtiene el usuario y refresca tokens solo si es necesario."""
         try:
-            user = get_user_from_db(email, cache, mongo)
+            # Primero intentamos obtener el usuario de la caché
+            user = cache.get(email)
             if not user:
-                return None
+                user = get_user_from_db(email, cache, mongo)
+                if not user:
+                    return None
+                cache.set(email, user, timeout=1800)
 
+            if not should_refresh_tokens(email):
+                return user
+
+            # Solo llegamos aquí si necesitamos refrescar
             integrations = user.get("integrations", {})
             refresh_tokens_dict = get_refresh_tokens_from_db(email)
             if not refresh_tokens_dict:
+                cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
                 return user
 
-            # Verificar si debemos refrescar basado en el tiempo
-            if should_refresh_tokens(email):
-                tokens_to_refresh = {}
-                for service, token_data in integrations.items():
-                    refresh_token = token_data.get("refresh_token")
-                    # Saltar servicios con tokens infinitos (refresh_token = "n/a" o ausente)
-                    if not refresh_token or refresh_token == "n/a":
-                        continue
-                    if service in refresh_tokens_dict:
-                        tokens_to_refresh[service] = refresh_tokens_dict[service]
+            tokens_to_refresh = {}
+            for service, token_data in integrations.items():
+                refresh_token = token_data.get("refresh_token")
+                if not refresh_token or refresh_token == "n/a":
+                    continue
+                if service in refresh_tokens_dict:
+                    tokens_to_refresh[service] = refresh_tokens_dict[service]
 
-                if tokens_to_refresh:
-                    refreshed_tokens, errors = refresh_tokens_func(tokens_to_refresh, email)
-                    
-                    if refreshed_tokens:
-                        updated_user = mongo.database.usuarios.find_one({"correo": email})
-                        if updated_user:
-                            cache.set(email, updated_user, timeout=1800)
-                            # Registrar la hora del refresco en la caché
-                            cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
-                            return updated_user
-                        else:
-                            print(f"[ERROR] No se pudo obtener usuario actualizado de la BD")
-                    elif errors:
-                        print(f"[WARNING] Errores al refrescar tokens: {errors}")
-                else:
-                    # Si no hay nada que refrescar, aún marcamos el tiempo para evitar chequeos frecuentes
-                    cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
+            if tokens_to_refresh:
+                refreshed_tokens, errors = refresh_tokens_func(tokens_to_refresh, email)
+                
+                if refreshed_tokens:
+                    updated_user = mongo.database.usuarios.find_one({"correo": email})
+                    if updated_user:
+                        cache.set(email, updated_user, timeout=1800)
+                        cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
+                        return updated_user
+                    else:
+                        print(f"[ERROR] No se pudo obtener usuario actualizado de la BD")
+                elif errors:
+                    print(f"[WARNING] Errores al refrescar tokens: {errors}")
+            else:
+                print(f"[INFO] No hay tokens para refrescar, marcando tiempo")
+                cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
 
             return user
             
         except Exception as e:
+            print(f"[ERROR] Error general en get_user_with_refreshed_tokens: {e}")
             return None
-
-
+        
 ############################################################################################################################
     def post_to_gmail(query):
         """Procesa la consulta y ejecuta la acción en Gmail API o Google Calendar si aplica."""

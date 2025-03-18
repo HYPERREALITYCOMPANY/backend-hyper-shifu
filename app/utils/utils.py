@@ -1,35 +1,39 @@
 from flask_caching import Cache
 import datetime
 
-def get_user_from_db(email, cache, mongo):
+def get_user_from_db(email, cache, mongo, refresh_tokens=False):
+    """
+    Obtiene un usuario desde caché o MongoDB. Refresca tokens solo si se indica explícitamente.
+    """
     cached_user = cache.get(email)
     if cached_user:
-        print("User found in cache!")
-        # Verificar si algún token está vencido
-        if needs_token_refresh(cached_user):
-            print("Token possibly expired, refreshing...")
-            updated_user = refresh_all_user_tokens(email, mongo, cache)  # Refresh ALL tokens
+        print(f"[INFO] Usuario {email} encontrado en caché")
+        if refresh_tokens and needs_token_refresh(cached_user):
+            print(f"[INFO] Refrescando tokens para {email} desde caché")
+            updated_user = refresh_all_user_tokens(email, mongo, cache)
             if updated_user:
                 return updated_user
-        return cached_user  # Si no necesita refresco, devolver el usuario en caché
+        return cached_user
 
-    print("User not found in cache, querying MongoDB...")
+    print(f"[INFO] Usuario {email} no está en caché, consultando MongoDB")
     user = mongo.database.usuarios.find_one({'correo': email})
-    if user:
-        print("User found in MongoDB, refreshing ALL tokens...")
-        # Always refresh all tokens when creating a new cache entry
-        user = refresh_all_user_tokens(email, mongo, cache)
-        if not user:  # If refresh failed, use original user
-            user = mongo.database.usuarios.find_one({'correo': email})
-        
-        cache.set(email, user, timeout=1800)  # Guarda en caché por 30 minutos
-        print("User saved to cache with refreshed tokens!")
+    if not user:
+        print(f"[ERROR] Usuario {email} no encontrado en MongoDB")
+        return None
+
+    # Solo refrescamos tokens si se pide explícitamente
+    if refresh_tokens:
+        print(f"[INFO] Refrescando todos los tokens para {email}")
+        user = refresh_all_user_tokens(email, mongo, cache) or user
+    else:
+        print(f"[INFO] No se pidieron refrescos de tokens para {email}")
+
+    cache.set(email, user, timeout=1800)  # Cacheamos por 30 min
     return user
 
 def needs_token_refresh(user):
     """
-    Determina si algún token del usuario necesita ser refrescado.
-    Por ejemplo, si el timestamp es mayor a 1 hora (3600 segundos).
+    Determina si algún token del usuario necesita ser refrescado (1 hora de expiración).
     """
     integrations = user.get("integrations", {})
     for integration_name, data in integrations.items():
@@ -39,11 +43,11 @@ def needs_token_refresh(user):
         try:
             token_time = datetime.datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
             time_diff = (datetime.datetime.utcnow() - token_time).total_seconds()
-            if time_diff > 3600:  # 1 hora como ejemplo de expiración
-                print(f"Token de {integration_name} vencido (diff: {time_diff}s)")
+            if time_diff > 3600:  # 1 hora
+                print(f"[INFO] Token de {integration_name} vencido (diff: {time_diff}s)")
                 return True
         except ValueError:
-            print(f"Timestamp inválido para {integration_name}: {timestamp_str}")
+            print(f"[WARNING] Timestamp inválido para {integration_name}: {timestamp_str}")
     return False
 
 def refresh_all_user_tokens(email, mongo, cache):
@@ -51,34 +55,30 @@ def refresh_all_user_tokens(email, mongo, cache):
     Refresca TODOS los tokens disponibles del usuario y actualiza la caché.
     """
     try:
-        # Import these functions here to avoid circular imports
         from app.routes.refreshTokens import setup_routes_refresh
         
-        # Get the refresh token functions
+        # Obtenemos las funciones de refresco
         refresh_functions = setup_routes_refresh(None, mongo, cache)
         get_refresh_tokens_from_db = refresh_functions["get_refresh_tokens_from_db"]
         refresh_tokens = refresh_functions["refresh_tokens"]
         
-        # Get all available refresh tokens
+        # Obtenemos todos los refresh tokens
         refresh_tokens_dict = get_refresh_tokens_from_db(email)
         if not refresh_tokens_dict:
-            print("No refresh tokens available for this user.")
+            print(f"[INFO] No hay refresh tokens disponibles para {email}")
             return None
 
-        # Refresh ALL tokens without specifying a specific integration
-        print(f"Refreshing ALL tokens for user {email}")
+        print(f"[INFO] Refrescando todos los tokens para {email}")
         refreshed_tokens, errors = refresh_tokens(refresh_tokens_dict, email)
         
         if refreshed_tokens:
-            print(f"Successfully refreshed tokens: {list(refreshed_tokens.keys())}")
-            # Get the updated user record
+            print(f"[INFO] Tokens refrescados exitosamente: {list(refreshed_tokens.keys())}")
             updated_user = mongo.database.usuarios.find_one({'correo': email})
-            # Update the cache
             cache.set(email, updated_user, timeout=1800)
             return updated_user
         elif errors:
-            print(f"Errors refreshing tokens: {errors}")
+            print(f"[WARNING] Errores al refrescar tokens: {errors}")
             return None
     except Exception as e:
-        print(f"Error refreshing tokens for {email}: {e}")
+        print(f"[ERROR] Error refrescando tokens para {email}: {e}")
         return None

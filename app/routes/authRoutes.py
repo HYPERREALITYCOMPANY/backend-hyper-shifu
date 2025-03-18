@@ -2,8 +2,8 @@ from flask import request, jsonify, session
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_pymongo import ObjectId
 from app.utils.utils import get_user_from_db
-def setup_auth_routes(app, mongo, cache):
 
+def setup_auth_routes(app, mongo, cache):
     @app.route('/register', methods=['POST'])
     def register_user():
         request_data = request.get_json() 
@@ -40,12 +40,17 @@ def setup_auth_routes(app, mongo, cache):
         if not data or not all(k in data for k in ("correo", "password")):
             return jsonify({"error": "Faltan campos obligatorios"}), 400
         
-        # Usa Redis para obtener el usuario
-        usuario = mongo.database.usuarios.find_one({'correo': data["correo"]})
-        cache.set(data["correo"], usuario, timeout=1800)  # Guarda en caché por 30 minutos
-
-        if not usuario or not check_password_hash(usuario["password"], data["password"]):
-            return jsonify({"error": "Credenciales incorrectas"}), 401
+        # Primero revisamos el caché
+        usuario = cache.get(data["correo"])
+        if usuario and check_password_hash(usuario["password"], data["password"]):
+            print(f"[INFO] Usuario {data['correo']} encontrado en caché, login rápido")
+        else:
+            # Si no está en caché, consultamos MongoDB
+            usuario = mongo.database.usuarios.find_one({'correo': data["correo"]})
+            if not usuario or not check_password_hash(usuario["password"], data["password"]):
+                return jsonify({"error": "Credenciales incorrectas"}), 401
+            cache.set(data["correo"], usuario, timeout=1800)  # Guardamos en caché por 30 min
+            print(f"[INFO] Usuario {data['correo']} cargado desde MongoDB y cacheado")
 
         session['user_id'] = str(usuario['_id'])
         name = usuario['nombre'] + " " + usuario['apellido']
@@ -66,14 +71,13 @@ def setup_auth_routes(app, mongo, cache):
         
         try:
             usuario = mongo.database.usuarios.find_one({"_id": ObjectId(user_id)})
+            if not usuario:
+                return jsonify({"error": "Usuario no encontrado"}), 404
+            usuario["_id"] = str(usuario["_id"])
+            cache.set(usuario["correo"], usuario, timeout=1800)  # Cacheamos por correo
+            return jsonify({"user": usuario}), 200
         except Exception as e:
             return jsonify({"error": str(e)}), 500
-        
-        if not usuario:
-            return jsonify({"error": "Usuario no encontrado"}), 404
-        
-        usuario["_id"] = str(usuario["_id"])
-        return jsonify({"user": usuario}), 200
 
     @app.route("/update_user", methods=["PUT"])
     def update_user():
@@ -88,8 +92,10 @@ def setup_auth_routes(app, mongo, cache):
             return jsonify({"error": "ID de usuario inválido"}), 400
 
         result = mongo.database.usuarios.update_one({"_id": ObjectId(user_id)}, {"$set": update_data})
-
         if result.matched_count == 0:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
+        # Invalidamos caché del usuario si el correo cambió
+        if "correo" in update_data:
+            cache.delete(update_data["correo"])
         return jsonify({"message": "Usuario actualizado con éxito"}), 200

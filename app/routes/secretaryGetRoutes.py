@@ -688,9 +688,15 @@ def setup_routes_secretary_gets(app, mongo, cache, refresh_functions):
             return datetime.utcfromtimestamp(int(timestamp) / 1000).strftime('%Y-%m-%d %H:%M:%S')
         return "No definida"
 
+    def convertir_fecha(timestamp):
+        if timestamp:
+            return datetime.utcfromtimestamp(int(timestamp) / 1000).strftime('%Y-%m-%d %H:%M:%S')
+        return "No definida"
+
     @app.route("/ultima-notificacion/clickup", methods=["GET"])
     def obtener_ultima_notificacion_clickup():
         email = request.args.get("email")
+
         try:
             user = get_user_from_db(email, cache, mongo)
             if not user:
@@ -707,20 +713,25 @@ def setup_routes_secretary_gets(app, mongo, cache, refresh_functions):
                 return jsonify({"error": "Error al obtener notificaciones"}), response.status_code
 
             teams = response.json().get("teams", [])
+
             if not teams:
                 return jsonify({"error": "No hay equipos en ClickUp"})
 
             team_id = teams[0]["id"]
             response = requests.get(f"https://api.clickup.com/api/v2/team/{team_id}/task", headers=headers)
 
+            if response.status_code != 200:
+                return jsonify({"error": "Error al obtener tareas"}), response.status_code
+
             tasks = response.json().get("tasks", [])
+
             if not tasks:
                 return jsonify({"error": "No hay tareas nuevas"})
 
             task = tasks[0]
             due_date = convertir_fecha(task.get("due_date"))
 
-            return jsonify({
+            result = {
                 "id": task["id"],
                 "name": task["name"],
                 "status": task["status"]["status"],
@@ -728,7 +739,11 @@ def setup_routes_secretary_gets(app, mongo, cache, refresh_functions):
                 "from": "ClickUp",  # ✅ Para que no falle en el frontend
                 "subject": task["name"],  # ✅ Adaptación para React
                 "snippet": f"Estado: {task['status']['status']}, Fecha límite: {due_date}"
-            })
+            }
+
+
+            return jsonify(result)
+        
         except Exception as e:
             return jsonify({"error": "Error inesperado", "details": str(e)}), 500
 

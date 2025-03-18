@@ -25,7 +25,7 @@ def setup_routes_secretary_gets(app, mongo, cache, refresh_functions):
             return True
 
         last_refresh_time = datetime.fromtimestamp(last_refresh)
-        refresh_interval = timedelta(minutes=15)
+        refresh_interval = timedelta(minutes=30)
         time_since_last_refresh = current_time - last_refresh_time
 
         if time_since_last_refresh >= refresh_interval:
@@ -665,12 +665,17 @@ def setup_routes_secretary_gets(app, mongo, cache, refresh_functions):
             })
         except Exception as e:
             return jsonify({"error": "Ups, algo falló con HubSpot, ¿lo intento de nuevo?", "details": str(e)}), 500
+    
+    def convertir_fecha(timestamp):
+        if timestamp:
+            return datetime.utcfromtimestamp(int(timestamp) / 1000).strftime('%Y-%m-%d %H:%M:%S')
+        return "No definida"
 
     @app.route("/ultima-notificacion/clickup", methods=["GET"])
     def obtener_ultima_notificacion_clickup():
         email = request.args.get("email")
         try:
-            user = get_user_with_refreshed_tokens(email)
+            user = get_user_from_db(email, cache, mongo)
             if not user:
                 return jsonify({"error": "Usuario no encontrado"}), 404
 
@@ -696,7 +701,7 @@ def setup_routes_secretary_gets(app, mongo, cache, refresh_functions):
                 return jsonify({"error": "No hay tareas nuevas"})
 
             task = tasks[0]
-            due_date = parse_hubspot_date(task.get("due_date"))
+            due_date = convertir_fecha(task.get("due_date"))
 
             return jsonify({
                 "id": task["id"],

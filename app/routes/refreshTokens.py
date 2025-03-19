@@ -60,7 +60,7 @@ def setup_routes_refresh(app, mongo, cache):
         return refresh_tokens
 
     def save_access_token_to_db(user_email, integration_name, access_token):
-        """Actualiza el token en MongoDB y la caché en una sola operación."""
+        """Actualiza el token en MongoDB y la caché."""
         try:
             update_data = {
                 f"integrations.{integration_name}.token": access_token,
@@ -72,50 +72,15 @@ def setup_routes_refresh(app, mongo, cache):
                 upsert=False
             )
             if result.matched_count == 0:
-                raise ValueError("No se encontró el usuario para actualizar el token")
+                raise ValueError("No se encontró el usuario")
 
-            # Invalidar la caché del usuario para que se recargue con los nuevos datos
-            cache.delete(user_email)
-            print(f"[INFO] Token de {integration_name} actualizado para {user_email}. Modificados: {result.modified_count}")
+            updated_user = mongo.database.usuarios.find_one({"correo": user_email})
+            if updated_user:
+                cache.set(user_email, updated_user, timeout=1800)
+                print(f"[INFO] Token de {integration_name} actualizado y usuario cacheado para {user_email}")
             return True
         except Exception as e:
             print(f"[ERROR] Error al actualizar token en DB para {integration_name}: {e}")
-            raise
-
-    def refresh_token(service, refresh_token):
-        """Función genérica para refrescar tokens de cualquier servicio."""
-        config = SERVICE_CONFIG.get(service)
-        if not config:
-            raise ValueError(f"Servicio {service} no soportado para refresco")
-
-        cache_key = f"access_token_{service}_{refresh_token[:10]}"  # Usamos parte del refresh token como clave
-        cached_access_token = cache.get(cache_key)
-        if cached_access_token:
-            print(f"[INFO] Usando token de acceso cacheado para {service}")
-            return cached_access_token
-
-        data = {
-            "grant_type": "refresh_token",
-            "refresh_token": refresh_token,
-            "client_id": config["client_id"],
-            "client_secret": config["client_secret"]
-        }
-        headers = config.get("headers", {})
-        try:
-            response = requests.post(config["url"], data=data, headers=headers, timeout=10)
-            response.raise_for_status()
-            response_json = response.json()
-            access_token = response_json.get("access_token")
-            if not access_token:
-                raise ValueError(f"No se encontró 'access_token' en la respuesta: {response_json}")
-            cache.set(cache_key, access_token, timeout=3600)  # Cache por 1 hora
-            print(f"[INFO] Token refrescado para {service}: {response.status_code}")
-            return access_token
-        except requests.exceptions.RequestException as e:
-            print(f"[ERROR] Error en solicitud para {service}: {e}")
-            raise
-        except ValueError as ve:
-            print(f"[ERROR] Error procesando respuesta de {service}: {ve}")
             raise
 
     def refresh_tokens(integrations, user_email, integration_name=None):

@@ -13,6 +13,57 @@ def setup_routes_secretary_gets(app, mongo, cache, refresh_functions):
     # Extraer las funciones de refresco
     get_refresh_tokens_from_db = refresh_functions["get_refresh_tokens_from_db"]
     refresh_tokens_func = refresh_functions["refresh_tokens"]
+    def get_user_with_refreshed_tokens(email):
+        """Obtiene el usuario y refresca tokens solo si es necesario."""
+        try:
+            user = cache.get(email)
+            if not user:
+                print(f"[INFO] Usuario {email} no está en caché, consultando DB")
+                user = get_user_from_db(email, cache, mongo)  # Sin refresco aquí
+                if not user:
+                    print(f"[ERROR] Usuario {email} no encontrado en DB")
+                    return None
+                cache.set(email, user, timeout=1800)
+
+            if not should_refresh_tokens(email):
+                print(f"[INFO] Tokens de {email} aún vigentes")
+                return user
+
+            refresh_tokens_dict = get_refresh_tokens_from_db(email)
+            if not refresh_tokens_dict:
+                print(f"[INFO] No hay refresh tokens para {email}")
+                cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
+                return user
+
+            tokens_to_refresh = {
+                service: refresh_tokens_dict[service]
+                for service in user.get("integrations", {})
+                if service in refresh_tokens_dict and user["integrations"][service].get("refresh_token") not in (None, "n/a")
+            }
+
+            if tokens_to_refresh:
+                print(f"[INFO] Refrescando tokens para {email}: {list(tokens_to_refresh.keys())}")
+                refreshed_tokens, errors = refresh_tokens_func(tokens_to_refresh, email)
+                if refreshed_tokens:
+                    # La caché ya se actualizó en save_access_token_to_db
+                    user = cache.get(email) or get_user_from_db(email, cache, mongo)
+                    if not user:
+                        print(f"[ERROR] No se pudo recargar usuario {email} tras refresco")
+                        return None
+                    cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
+                    return user
+                if errors:
+                    print(f"[WARNING] Errores al refrescar tokens: {errors}")
+                    # Seguimos devolviendo el usuario actual para no bloquear
+                    cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
+            else:
+                print(f"[INFO] No hay tokens para refrescar para {email}")
+                cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
+
+            return user
+        except Exception as e:
+            print(f"[ERROR] Error en get_user_with_refreshed_tokens: {e}")
+            return None
 
     def should_refresh_tokens(email):
         """Determina si se deben refrescar los tokens basado en el tiempo desde el último refresco."""
@@ -25,82 +76,15 @@ def setup_routes_secretary_gets(app, mongo, cache, refresh_functions):
             return True
 
         last_refresh_time = datetime.fromtimestamp(last_refresh)
-        refresh_interval = timedelta(minutes=30)  # Mantengo 30 min como en el original
+        refresh_interval = timedelta(minutes=30)
         time_since_last_refresh = current_time - last_refresh_time
 
         if time_since_last_refresh >= refresh_interval:
-            print(f"[INFO] Han pasado {time_since_last_refresh} desde el último refresco para {email}, refrescando")
+            print(f"[INFO] Han pasado {time_since_last_refresh} desde el último refresco para {email}")
             return True
         
-        print(f"[INFO] Tokens de {email} aún vigentes, faltan {refresh_interval - time_since_last_refresh} para refrescar")
+        print(f"[INFO] Tokens de {email} vigentes, faltan {refresh_interval - time_since_last_refresh}")
         return False
-
-    def get_user_with_refreshed_tokens(email):
-        """Obtiene el usuario y refresca tokens solo si es necesario, aprovechando la caché optimizada."""
-        try:
-            # Intentamos obtener el usuario de la caché
-            user = cache.get(email)
-            if not user:
-                print(f"[INFO] Usuario {email} no está en caché, consultando DB")
-                user = get_user_from_db(email, cache, mongo)
-                if not user:
-                    print(f"[ERROR] Usuario {email} no encontrado en DB")
-                    return None
-                cache.set(email, user, timeout=1800)  # 30 min de caché
-
-            # Verificamos si necesitamos refrescar tokens
-            if not should_refresh_tokens(email):
-                print(f"[INFO] Tokens de {email} no necesitan refresco, devolviendo usuario cacheado")
-                return user
-
-            # Obtenemos los refresh tokens (cacheados o desde DB)
-            refresh_tokens_dict = get_refresh_tokens_from_db(email)
-            if not refresh_tokens_dict:
-                print(f"[INFO] No hay refresh tokens para {email}, marcando tiempo y devolviendo usuario")
-                cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
-                return user
-
-            # Filtramos los tokens que realmente necesitamos refrescar
-            integrations = user.get("integrations", {})
-            tokens_to_refresh = {
-                service: refresh_tokens_dict[service]
-                for service in integrations
-                if service in refresh_tokens_dict and integrations[service].get("refresh_token") not in (None, "n/a")
-            }
-
-            if not tokens_to_refresh:
-                print(f"[INFO] No hay tokens válidos para refrescar para {email}, marcando tiempo")
-                cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
-                return user
-
-            # Refrescamos los tokens
-            print(f"[INFO] Refrescando tokens para {email}: {list(tokens_to_refresh.keys())}")
-            refreshed_tokens, errors = refresh_tokens_func(tokens_to_refresh, email)
-
-            if refreshed_tokens:
-                # Como save_access_token_to_db invalida la caché, recargamos el usuario
-                print(f"[INFO] Tokens refrescados para {email}: {list(refreshed_tokens.keys())}")
-                user = get_user_from_db(email, cache, mongo)  # Recarga desde DB o caché actualizada
-                if not user:
-                    print(f"[ERROR] No se pudo recargar usuario {email} tras refresco")
-                    return None
-                cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
-                return user
-            
-            if errors:
-                print(f"[WARNING] Errores al refrescar tokens para {email}: {errors}")
-                # Devolvemos el usuario actual aunque haya errores, para no bloquear el flujo
-                cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
-                return user
-
-            # Si no hay tokens refrescados ni errores, marcamos el tiempo y devolvemos el usuario
-            print(f"[INFO] No se refrescaron tokens para {email}, marcando tiempo")
-            cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
-            return user
-
-        except Exception as e:
-            print(f"[ERROR] Error en get_user_with_refreshed_tokens para {email}: {e}")
-            return None
         
     def get_gmail_headers(token):
         return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
@@ -198,6 +182,61 @@ def setup_routes_secretary_gets(app, mongo, cache, refresh_functions):
                     {"role": "user", "content": prompt}]
         )
         return response.choices[0].message.content.strip().lower()
+    
+    @app.route("/ultima-notificacion/all", methods=["GET"])
+    def obtener_todas_las_notificaciones():
+        email = request.args.get("email")
+        if not email:
+            return jsonify({"error": "Se requiere email"}), 400
+
+        try:
+            user = get_user_with_refreshed_tokens(email)
+            if not user:
+                return jsonify({"error": "Usuario no encontrado"}), 404
+
+            integrations = user.get("integrations", {})
+            notifications = {}
+            errors = {}
+
+            # Lista de servicios soportados y sus funciones
+            services = {
+                "Gmail": obtener_ultimo_correo_gmail,
+                "Outlook": obtener_ultimo_correo_outlook,
+                "Notion": obtener_ultima_notificacion_notion,
+                "Slack": obtener_ultimo_mensaje_slack,
+                "OneDrive": obtener_ultimo_archivo_onedrive,
+                "Asana": obtener_ultima_notificacion_asana,
+                "Dropbox": obtener_ultimo_archivo_dropbox,
+                "HubSpot": get_last_notification_hubspot,
+                "ClickUp": obtener_ultima_notificacion_clickup,
+                "Drive": obtener_ultimo_archivo_drive
+            }
+
+            # Ejecutar todas las funciones en paralelo usando un enfoque simple
+            for service, func in services.items():
+                if service in integrations and integrations[service].get("token"):
+                    try:
+                        # Simulamos una solicitud para reutilizar las funciones existentes
+                        with app.test_request_context(f"/ultima-notificacion/{service.lower()}?email={email}"):
+                            result = func()
+                            if isinstance(result, tuple):  # Flask retorna (response, status)
+                                response, status = result
+                                if status == 200:
+                                    notifications[service] = response.get_json()
+                                else:
+                                    errors[service] = response.get_json().get("error")
+                            else:
+                                notifications[service] = result.get_json()
+                    except Exception as e:
+                        errors[service] = str(e)
+                        print(f"[ERROR] Fallo al obtener notificación de {service}: {e}")
+
+            return jsonify({
+                "notifications": notifications,
+                "errors": errors if errors else None
+            }), 200 if not errors else 207  # 207 si hay éxito parcial
+        except Exception as e:
+            return jsonify({"error": "Error al obtener notificaciones", "details": str(e)}), 500
 
     @app.route("/ultima-notificacion/gmail", methods=["GET"])
     def obtener_ultimo_correo_gmail():

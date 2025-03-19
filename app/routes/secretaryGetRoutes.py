@@ -1,60 +1,19 @@
-from flask import request, jsonify
+from flask import Flask, request, jsonify
 import requests
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from config import Config
-from datetime import datetime
 import openai
 from flask_caching import Cache
 from app.utils.utils import get_user_from_db
-openai.api_key=Config.CHAT_API_KEY
+
+openai.api_key = Config.CHAT_API_KEY
 
 def setup_routes_secretary_gets(app, mongo, cache, refresh_functions):
     # Extraer las funciones de refresco
     get_refresh_tokens_from_db = refresh_functions["get_refresh_tokens_from_db"]
     refresh_tokens_func = refresh_functions["refresh_tokens"]
-    def get_user_with_refreshed_tokens(email):
-        try:
-            user = cache.get(email)
-            if not user:
-                print(f"[INFO] Usuario {email} no está en caché, consultando DB")
-                user = get_user_from_db(email, cache, mongo)
-                if not user:
-                    print(f"[ERROR] Usuario {email} no encontrado en DB")
-                    return None
 
-            if not should_refresh_tokens(email):
-                print(f"[INFO] Tokens de {email} aún vigentes")
-                return user
-
-            refresh_tokens_dict = get_refresh_tokens_from_db(email)
-            if not refresh_tokens_dict:
-                print(f"[INFO] No hay refresh tokens para {email}")
-                cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
-                return user
-
-            tokens_to_refresh = {
-                service: refresh_tokens_dict[service]
-                for service in user.get("integrations", {})
-                if service in refresh_tokens_dict and user["integrations"][service].get("refresh_token") not in (None, "n/a")
-            }
-
-            if tokens_to_refresh:
-                print(f"[INFO] Refrescando tokens para {email}: {list(tokens_to_refresh.keys())}")
-                refreshed_tokens, errors = refresh_tokens_func(tokens_to_refresh, email)
-                if refreshed_tokens:
-                    user = get_user_from_db(email, cache, mongo)  # Forzar recarga
-                    print(f"[INFO] Usuario recargado tras refresco: {email}")
-                    cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
-                    return user
-                if errors:
-                    print(f"[WARNING] Errores al refrescar tokens: {errors}")
-                    return user  # Devolver usuario actual como fallback
-            return user
-        except Exception as e:
-            print(f"[ERROR] Error en get_user_with_refreshed_tokens: {e}")
-            return None
-    
     def should_refresh_tokens(email):
         """Determina si se deben refrescar los tokens basado en el tiempo desde el último refresco."""
         last_refresh_key = f"last_refresh_{email}"
@@ -62,23 +21,62 @@ def setup_routes_secretary_gets(app, mongo, cache, refresh_functions):
         current_time = datetime.utcnow()
 
         if last_refresh is None:
-            print(f"[INFO] No hay registro de último refresco para {email}, forzando refresco")
             return True
 
         last_refresh_time = datetime.fromtimestamp(last_refresh)
-        refresh_interval = timedelta(minutes=30)
+        refresh_interval = timedelta(minutes=15)
         time_since_last_refresh = current_time - last_refresh_time
 
         if time_since_last_refresh >= refresh_interval:
-            print(f"[INFO] Han pasado {time_since_last_refresh} desde el último refresco para {email}")
             return True
-        
-        print(f"[INFO] Tokens de {email} vigentes, faltan {refresh_interval - time_since_last_refresh}")
         return False
-        
-    def get_gmail_headers(token):
-        return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    
+
+    def get_user_with_refreshed_tokens(email):
+        """Obtiene el usuario y refresca tokens solo si es necesario."""
+        try:
+            user = cache.get(email)
+            if not user:
+                user = get_user_from_db(email, cache, mongo)
+                if not user:
+                    return None
+                cache.set(email, user, timeout=1800)
+
+            if not should_refresh_tokens(email):
+                return user
+
+            integrations = user.get("integrations", {})
+            refresh_tokens_dict = get_refresh_tokens_from_db(email)
+            if not refresh_tokens_dict:
+                cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
+                return user
+
+            tokens_to_refresh = {
+                service: refresh_tokens_dict[service]
+                for service, token_data in integrations.items()
+                if service in refresh_tokens_dict and token_data.get("refresh_token") and token_data["refresh_token"] != "n/a"
+            }
+
+            if tokens_to_refresh:
+                refreshed_tokens, errors = refresh_tokens_func(tokens_to_refresh, email)
+                if refreshed_tokens:
+                    updated_user = mongo.database.usuarios.find_one({"correo": email})
+                    if updated_user:
+                        cache.set(email, updated_user, timeout=1800)
+                        cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
+                        return updated_user
+                    else:
+                        print(f"[ERROR] No se pudo obtener usuario actualizado de la BD")
+                elif errors:
+                    print(f"[WARNING] Errores al refrescar tokens: {errors}")
+            else:
+                cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
+
+            return user
+        except Exception as e:
+            print(f"[ERROR] Error general en get_user_with_refreshed_tokens: {e}")
+            return None
+
+    # Funciones de headers
     def get_gmail_headers(token):
         return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
@@ -88,24 +86,14 @@ def setup_routes_secretary_gets(app, mongo, cache, refresh_functions):
     def get_slack_headers(token):
         return {"Authorization": f"Bearer {token}"}
 
-    def get_hubspot_headers(api_key):
-        return {
-            "Authorization": f"Bearer {api_key}",
-            "Accept": "application/json"
-        }
+    def get_hubspot_headers(token):
+        return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
     def get_notion_headers(token):
-        return {
-            "Authorization": f"Bearer {token}",
-            'Notion-Version': '2022-06-28',
-            'Content-Type': 'application/json'
-        }
+        return {"Authorization": f"Bearer {token}", "Notion-Version": "2022-06-28", "Content-Type": "application/json"}
 
     def get_clickup_headers(token):
-        return {
-            "Authorization": token,
-            "Content-Type": "application/json"
-        }
+        return {"Authorization": token, "Content-Type": "application/json"}
 
     def get_dropbox_headers(token):
         return {"Authorization": f"Bearer {token}"}
@@ -117,62 +105,347 @@ def setup_routes_secretary_gets(app, mongo, cache, refresh_functions):
         return {"Authorization": f"Bearer {token}"}
 
     def get_teams_headers(token):
-        return {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
+        return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
     def get_asana_headers(token):
+        return {"Authorization": f"Bearer {token}"}
+
+    # Funciones de notificaciones individuales (sin verificar usuario)
+    def fetch_gmail_notification(user):
+        token = user.get("integrations", {}).get("Gmail", {}).get("token")
+        if not token:
+            return None
+        headers = get_gmail_headers(token)
+        response = requests.get(
+            "https://www.googleapis.com/gmail/v1/users/me/messages",
+            headers=headers,
+            params={"maxResults": 1, "q": "in:inbox -from:me"}
+        )
+        if response.status_code != 200:
+            return None
+        messages = response.json().get("messages", [])
+        if not messages:
+            return None
+        message_id = messages[0]["id"]
+        response = requests.get(
+            f"https://www.googleapis.com/gmail/v1/users/me/messages/{message_id}?format=full",
+            headers=headers
+        )
+        message = response.json()
+        headers_list = message.get("payload", {}).get("headers", [])
+        subject = next((h["value"] for h in headers_list if h["name"] == "Subject"), "(Sin asunto)")
+        sender = next((h["value"] for h in headers_list if h["name"] == "From"), "(Desconocido)")
         return {
-            "Authorization": f"Bearer {token}",
+            "id": message_id,
+            "from": "Gmail",
+            "subject": f"Hola, te llegó un correo de {sender}",
+            "snippet": f"Es sobre: {subject}."
         }
 
+    def fetch_outlook_notification(user):
+        token = user.get("integrations", {}).get("Outlook", {}).get("token")
+        if not token:
+            return None
+        headers = get_outlook_headers(token)
+        response = requests.get(
+            "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages",
+            headers=headers,
+            params={"$top": 1, "$orderby": "receivedDateTime desc"}
+        )
+        if response.status_code != 200:
+            return None
+        messages = response.json().get("value", [])
+        if not messages:
+            return None
+        message = messages[0]
+        return {
+            "id": message["id"],
+            "from": "Outlook",
+            "subject": f"Hola, tienes un correo nuevo de {message['from']['emailAddress']['address']}",
+            "snippet": f"Es sobre: {message['subject']}."
+        }
 
-    def interpretar_accion_email(texto):
-        prompt = f"El usuario dijo: '{texto}'. Determina si quiere 'delete' (eliminar), 'reply' (responder) o 'spam' (mover a spam). Si no está claro, responde 'unknown'."
-        response = openai.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "system", "content": "Eres un asistente que analiza intenciones en correos electrónicos."},
-                    {"role": "user", "content": prompt}]
-        )
-        return response.choices[0].message.content.strip().lower()
+    def fetch_notion_notification(user):
+        token = user.get("integrations", {}).get("Notion", {}).get("token")
+        if not token:
+            return None
+        headers = get_notion_headers(token)
 
-    def interpretar_accion_productividad(texto):
-        prompt = f"El usuario dijo: '{texto}'. Determina si quiere 'mark_done' (marcar como completado), 'assign' (asignar a alguien más) o 'comment' (comentar en la tarea) o 'delete' (eliminar la tarea). Si no está claro, responde 'unknown'."
-        response = openai.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "system", "content": "Eres un asistente que analiza intenciones en plataformas de productividad."},
-                    {"role": "user", "content": prompt}]
-        )
-        return response.choices[0].message.content.strip().lower()
-    
-    def interpretar_accion_hubspot(texto):
-        prompt = f"El usuario dijo: '{texto}'. Determina si quiere 'follow_up' (hacer seguimiento a un cliente), 'close_deal' (cerrar un trato) o 'update_info' (actualizar la información de un cliente). Si no está claro, responde 'unknown'."
-        response = openai.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "system", "content": "Eres un asistente que analiza intenciones en un CRM de ventas."},
-                    {"role": "user", "content": prompt}]
-        )
-        return response.choices[0].message.content.strip().lower()
+        def get_title(properties):
+            for prop_name, prop_value in properties.items():
+                if prop_value.get("type") == "title" and prop_value.get("title"):
+                    return prop_value["title"][0].get("text", {}).get("content", "(Sin título)")
+            return "(Sin título)"
 
-    def interpretar_accion_archivos(texto):
-        prompt = f"El usuario dijo: '{texto}'. Determina si quiere 'download' (descargar archivo), 'share' (compartir con alguien más) o 'delete' (eliminar archivo). Si no está claro, responde 'unknown'."
-        response = openai.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "system", "content": "Eres un asistente que analiza intenciones en plataformas de almacenamiento en la nube."},
-                    {"role": "user", "content": prompt}]
+        pages_response = requests.post(
+            "https://api.notion.com/v1/search",
+            headers=headers,
+            json={"sort": {"direction": "descending", "timestamp": "last_edited_time"}, "page_size": 100, "filter": {"value": "page", "property": "object"}}
         )
-        return response.choices[0].message.content.strip().lower()
+        if pages_response.status_code != 200:
+            return None
+        pages = [
+            {"id": page["id"], "type": "Página", "title": get_title(page.get("properties", {})), "last_edited_time": page["last_edited_time"]}
+            for page in pages_response.json().get("results", []) if not page.get("archived", False)
+        ]
 
-    def interpretar_accion_mensajeria(texto):
-        prompt = f"El usuario dijo: '{texto}'. Determina si quiere 'reply' (responder un mensaje), 'react' (reaccionar con emoji) o 'mention' (mencionar a alguien). Si no está claro, responde 'unknown'."
-        response = openai.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "system", "content": "Eres un asistente que analiza intenciones en plataformas de mensajería."},
-                    {"role": "user", "content": prompt}]
+        databases_response = requests.post(
+            "https://api.notion.com/v1/search",
+            headers=headers,
+            json={"sort": {"direction": "descending", "timestamp": "last_edited_time"}, "page_size": 100, "filter": {"value": "database", "property": "object"}}
         )
-        return response.choices[0].message.content.strip().lower()
-    
+        if databases_response.status_code != 200:
+            return None
+        databases = databases_response.json().get("results", [])
+
+        all_items = pages
+        for db in databases:
+            db_id = db["id"]
+            query_response = requests.post(
+                f"https://api.notion.com/v1/databases/{db_id}/query",
+                headers=headers,
+                json={"sorts": [{"property": "last_edited_time", "direction": "descending"}], "page_size": 1}
+            )
+            if query_response.status_code == 200:
+                db_items = query_response.json().get("results", [])
+                for item in db_items:
+                    if not item.get("archived", False):
+                        all_items.append({
+                            "id": item["id"],
+                            "type": f"Fila en base de datos '{get_title(db.get('properties', {}))}'",
+                            "title": get_title(item.get("properties", {})),
+                            "last_edited_time": item["last_edited_time"]
+                        })
+
+        if not all_items:
+            return None
+        latest_item = max(all_items, key=lambda x: x["last_edited_time"])
+        return {
+            "id": latest_item["id"],
+            "from": "Notion",
+            "subject": f"Hola, hay algo nuevo en Notion",
+            "snippet": f"Es una {latest_item['type']} llamada '{latest_item['title']}'."
+        }
+
+    def fetch_slack_notification(user):
+        token = user.get("integrations", {}).get("Slack", {}).get("token")
+        if not token:
+            return None
+        headers = get_slack_headers(token)
+        response = requests.get("https://slack.com/api/conversations.list?types=im", headers=headers)
+        response_json = response.json()
+        if not response_json.get("ok"):
+            return None
+        dms = response_json.get("channels", [])
+        if not dms:
+            return None
+        dms.sort(key=lambda x: x.get("latest", {}).get("ts", "0"), reverse=True)
+        for dm in dms:
+            channel_id = dm["id"]
+            history_response = requests.get(f"https://slack.com/api/conversations.history?channel={channel_id}&limit=1", headers=headers)
+            history_json = history_response.json()
+            if history_json.get("ok") and history_json.get("messages"):
+                message = history_json["messages"][0]
+                return {
+                    "id": message["ts"],
+                    "from": "Slack",
+                    "subject": f"Oye, te escribió alguien en Slack",
+                    "snippet": f"Es este mensaje: '{message['text']}'."
+                }
+        return None
+
+    def fetch_onedrive_notification(user):
+        token = user.get("integrations", {}).get("OneDrive", {}).get("token")
+        if not token:
+            return None
+        headers = get_onedrive_headers(token)
+        url = "https://graph.microsoft.com/v1.0/me/drive/root/search(q='')"
+        params = {"$orderby": "lastModifiedDateTime desc", "$top": "5", "$select": "id,name,file,lastModifiedDateTime"}
+        response = requests.get(url, headers=headers, params=params)
+        if response.status_code != 200:
+            return None
+        items = response.json().get('value', [])
+        archivos = [item for item in items if "file" in item]
+        if not archivos:
+            return None
+        last_file = archivos[0]
+        return {
+            "from": "OneDrive",
+            "subject": f"Hola, vi un archivo actualizado en OneDrive",
+            "snippet": f"Es '{last_file['name']}'.",
+            "id": last_file["id"]
+        }
+
+    def fetch_asana_notification(user):
+        token = user.get("integrations", {}).get("Asana", {}).get("token")
+        if not token:
+            return None
+        headers = get_asana_headers(token)
+        workspaces_response = requests.get("https://app.asana.com/api/1.0/workspaces", headers=headers, timeout=10)
+        if workspaces_response.status_code != 200:
+            return None
+        workspace_id = workspaces_response.json().get("data", [])[0]["gid"]
+        user_response = requests.get("https://app.asana.com/api/1.0/users/me", headers=headers, timeout=10)
+        if user_response.status_code != 200:
+            return None
+        user_id = user_response.json().get("data", {}).get("gid")
+        response = requests.get(
+            f"https://app.asana.com/api/1.0/tasks?assignee={user_id}&workspace={workspace_id}&limit=50&opt_fields=name,gid,created_at,completed",
+            headers=headers,
+            timeout=10
+        )
+        if response.status_code != 200:
+            return None
+        tasks = response.json().get("data", [])
+        if not tasks:
+            return None
+        incomplete_tasks = [task for task in tasks if not task.get("completed", False)]
+        if not incomplete_tasks:
+            return None
+        incomplete_tasks.sort(key=lambda x: x["created_at"], reverse=True)
+        latest_task = incomplete_tasks[0]
+        return {
+            "from": "Asana",
+            "subject": f"Hola, tienes una tarea nueva en Asana",
+            "snippet": f"Es '{latest_task.get('name', '(Sin título)')}'.",
+            "id": latest_task["gid"]
+        }
+
+    def fetch_dropbox_notification(user):
+        token = user.get("integrations", {}).get("Dropbox", {}).get("token")
+        if not token:
+            return None
+        headers = get_dropbox_headers(token)
+        response = requests.post("https://api.dropboxapi.com/2/files/list_folder", headers=headers, json={"path": ""})
+        if response.status_code != 200:
+            return None
+        entries = response.json().get("entries", [])
+        if not entries:
+            return None
+        files = [entry for entry in entries if entry[".tag"] == "file"]
+        if not files:
+            return None
+        last_file = sorted(files, key=lambda x: x.get('client_modified', ''), reverse=True)[0]
+        return {
+            "from": "Dropbox",
+            "subject": f"Hola, hay un archivo actualizado en Dropbox",
+            "snippet": f"Es '{last_file['name']}'",
+            "id": last_file["id"]
+        }
+
+    def parse_hubspot_date(date_string, timezone="UTC", output_format="day_month_year_time"):
+        try:
+            dt = datetime.fromisoformat(date_string.replace("Z", "+00:00"))
+            tz = ZoneInfo(timezone)
+            dt = dt.astimezone(tz)
+            months = {1: "enero", 2: "febrero", 3: "marzo", 4: "abril", 5: "mayo", 6: "junio",
+                      7: "julio", 8: "agosto", 9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre"}
+            if output_format == "day_month_year_time":
+                return f"{dt.day} de {months[dt.month]} de {dt.year}, {dt.strftime('%H:%M')}"
+            elif output_format == "datetime":
+                return dt
+            return dt.isoformat()
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"No pude parsear la fecha '{date_string}': {str(e)}")
+
+    def fetch_hubspot_notification(user):
+        token = user.get("integrations", {}).get("HubSpot", {}).get("token")
+        if not token:
+            return None
+        headers = get_hubspot_headers(token)
+        endpoints = {
+            "contacto": "https://api.hubapi.com/crm/v3/objects/contacts/search",
+            "negocio": "https://api.hubapi.com/crm/v3/objects/deals/search",
+            "empresa": "https://api.hubapi.com/crm/v3/objects/companies/search"
+        }
+        search_data = {
+            "filterGroups": [{"filters": [{"propertyName": "hs_lastmodifieddate", "operator": "GT", "value": "0"}]}],
+            "properties": ["hs_lastmodifieddate", "dealname", "firstname", "lastname", "email", "name"],
+            "limit": 1,
+            "sorts": ["-hs_lastmodifieddate"]
+        }
+        latest_update = None
+        for entity, url in endpoints.items():
+            response = requests.post(url, headers=headers, json=search_data)
+            if response.status_code == 200 and response.json().get("results"):
+                result = response.json()["results"][0]
+                last_modified = parse_hubspot_date(result["properties"].get("hs_lastmodifieddate", "0"), output_format="datetime")
+                if not latest_update or last_modified > latest_update["timestamp"]:
+                    latest_update = {"type": entity, "data": result, "timestamp": last_modified}
+        if not latest_update:
+            return None
+        entity_type = latest_update["type"]
+        properties = latest_update["data"]["properties"]
+        subject = (
+            f"{properties.get('firstname', '')} {properties.get('lastname', '')}".strip() if entity_type == "contacto" else
+            properties.get("dealname", "(Sin nombre)") if entity_type == "negocio" else
+            properties.get("name", "(Sin nombre)")
+        )
+        return {
+            "from": "HubSpot",
+            "subject": f"Oye, hay algo nuevo en HubSpot",
+            "snippet": f"Es un {entity_type} llamado '{subject}'.",
+            "id": latest_update["data"]["id"]
+        }
+
+    def convertir_fecha(timestamp):
+        if timestamp:
+            return datetime.utcfromtimestamp(int(timestamp) / 1000).strftime('%Y-%m-%d %H:%M:%S')
+        return "No definida"
+
+    def fetch_clickup_notification(user):
+        token = user.get("integrations", {}).get("ClickUp", {}).get("token")
+        if not token:
+            return None
+        headers = get_clickup_headers(token)
+        response = requests.get("https://api.clickup.com/api/v2/team", headers=headers)
+        if response.status_code != 200:
+            return None
+        teams = response.json().get("teams", [])
+        if not teams:
+            return None
+        team_id = teams[0]["id"]
+        response = requests.get(f"https://api.clickup.com/api/v2/team/{team_id}/task", headers=headers)
+        if response.status_code != 200:
+            return None
+        tasks = response.json().get("tasks", [])
+        if not tasks:
+            return None
+        task = tasks[0]
+        due_date = convertir_fecha(task.get("due_date"))
+        return {
+            "id": task["id"],
+            "name": task["name"],
+            "status": task["status"]["status"],
+            "due_date": due_date,
+            "from": "ClickUp",
+            "subject": task["name"],
+            "snippet": f"Estado: {task['status']['status']}, Fecha límite: {due_date}"
+        }
+
+    def fetch_drive_notification(user):
+        token = user.get("integrations", {}).get("Drive", {}).get("token")
+        if not token:
+            return None
+        headers = get_google_drive_headers(token)
+        url = "https://www.googleapis.com/drive/v3/files"
+        params = {"pageSize": 10, "fields": "files(id, name, mimeType, modifiedTime)", "orderBy": "modifiedTime desc"}
+        response = requests.get(url, headers=headers, params=params)
+        if response.status_code != 200:
+            return None
+        files = response.json().get('files', [])
+        if not files:
+            return None
+        last_entry = files[0]
+        entry_type = "carpeta" if last_entry["mimeType"] == "application/vnd.google-apps.folder" else "archivo"
+        return {
+            "from": "Google Drive",
+            "subject": f"Hola, vi que hay un {entry_type} actualizado en Drive",
+            "snippet": f"Se llama '{last_entry['name']}'.",
+            "id": last_entry["id"]
+        }
+
+    # Nuevo método para obtener todas las notificaciones
     @app.route("/ultima-notificacion/all", methods=["GET"])
     def obtener_todas_las_notificaciones():
         email = request.args.get("email")
@@ -180,639 +453,144 @@ def setup_routes_secretary_gets(app, mongo, cache, refresh_functions):
             return jsonify({"error": "Se requiere email"}), 400
 
         try:
+            # Verificación del usuario directamente en MongoDB
+            user = mongo.database.usuarios.find_one({"correo": email})
+            if not user:
+                return jsonify({"error": "Usuario no encontrado en la base de datos"}), 404
+
+            # Refrescar tokens si es necesario
             user = get_user_with_refreshed_tokens(email)
             if not user:
-                return jsonify({"error": "Usuario no encontrado"}), 404
+                return jsonify({"error": "No se pudo obtener el usuario actualizado"}), 500
 
-            integrations = user.get("integrations", {})
+            # Diccionario de funciones de notificación
+            notification_functions = {
+                "Gmail": fetch_gmail_notification,
+                "Outlook": fetch_outlook_notification,
+                "Notion": fetch_notion_notification,
+                "Slack": fetch_slack_notification,
+                "OneDrive": fetch_onedrive_notification,
+                "Asana": fetch_asana_notification,
+                "Dropbox": fetch_dropbox_notification,
+                "HubSpot": fetch_hubspot_notification,
+                "ClickUp": fetch_clickup_notification,
+                "Drive": fetch_drive_notification
+            }
+
             notifications = {}
             errors = {}
 
-            # Lista de servicios soportados y sus funciones
-            services = {
-                "Gmail": obtener_ultimo_correo_gmail,
-                "Outlook": obtener_ultimo_correo_outlook,
-                "Notion": obtener_ultima_notificacion_notion,
-                "Slack": obtener_ultimo_mensaje_slack,
-                "OneDrive": obtener_ultimo_archivo_onedrive,
-                "Asana": obtener_ultima_notificacion_asana,
-                "Dropbox": obtener_ultimo_archivo_dropbox,
-                "HubSpot": get_last_notification_hubspot,
-                "ClickUp": obtener_ultima_notificacion_clickup,
-                "Drive": obtener_ultimo_archivo_drive
-            }
-
-            # Ejecutar todas las funciones en paralelo usando un enfoque simple
-            for service, func in services.items():
-                if service in integrations and integrations[service].get("token"):
-                    try:
-                        # Simulamos una solicitud para reutilizar las funciones existentes
-                        with app.test_request_context(f"/ultima-notificacion/{service.lower()}?email={email}"):
-                            result = func()
-                            if isinstance(result, tuple):  # Flask retorna (response, status)
-                                response, status = result
-                                if status == 200:
-                                    notifications[service] = response.get_json()
-                                else:
-                                    errors[service] = response.get_json().get("error")
-                            else:
-                                notifications[service] = result.get_json()
-                    except Exception as e:
-                        errors[service] = str(e)
-                        print(f"[ERROR] Fallo al obtener notificación de {service}: {e}")
+            # Obtener notificaciones para cada servicio
+            for service, fetch_func in notification_functions.items():
+                try:
+                    if service in user.get("integrations", {}):
+                        result = fetch_func(user)
+                        if result:
+                            notifications[service] = result
+                        else:
+                            errors[service] = f"No hay notificaciones recientes para {service}"
+                except Exception as e:
+                    errors[service] = f"Error al obtener notificación de {service}: {str(e)}"
+                    print(f"[ERROR] Fallo al obtener notificación de {service}: {e}")
 
             return jsonify({
                 "notifications": notifications,
                 "errors": errors if errors else None
-            }), 200 if not errors else 207  # 207 si hay éxito parcial
+            }), 200 if not errors else 207  # 207 para éxito parcial
         except Exception as e:
             return jsonify({"error": "Error al obtener notificaciones", "details": str(e)}), 500
 
+    # Mantengo las rutas individuales por si las necesitas, pero sin verificar usuario
     @app.route("/ultima-notificacion/gmail", methods=["GET"])
     def obtener_ultimo_correo_gmail():
         email = request.args.get("email")
-        try:
-            user = get_user_with_refreshed_tokens(email)
-            if not user:
-                return jsonify({"error": "Usuario no encontrado"}), 404
+        user = get_user_with_refreshed_tokens(email)
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+        result = fetch_gmail_notification(user)
+        return jsonify(result if result else {"error": "No hay correos nuevos"}), 200 if result else 404
 
-            token = user.get("integrations", {}).get("Gmail", {}).get("token")
-            if not token:
-                return jsonify({"error": "Token no disponible"}), 400
-
-            headers = get_gmail_headers(token)
-            # Filtrar solo correos en bandeja de entrada, excluyendo enviados por el usuario
-            response = requests.get(
-                "https://www.googleapis.com/gmail/v1/users/me/messages",
-                headers=headers,
-                params={
-                    "maxResults": 1,
-                    "q": "in:inbox -from:me"  # Solo recibidos en la bandeja de entrada
-                }
-            )
-
-            if response.status_code != 200:
-                return jsonify({"error": "Error al obtener correos"}), response.status_code
-
-            messages = response.json().get("messages", [])
-            if not messages:
-                return jsonify({"error": "No hay correos nuevos en tu bandeja de entrada, ¿reviso luego?"}), 404
-
-            message_id = messages[0]["id"]
-            response = requests.get(
-                f"https://www.googleapis.com/gmail/v1/users/me/messages/{message_id}?format=full",
-                headers=headers
-            )
-            message = response.json()
-            headers_list = message.get("payload", {}).get("headers", [])
-
-            subject = next((h["value"] for h in headers_list if h["name"] == "Subject"), "(Sin asunto)")
-            sender = next((h["value"] for h in headers_list if h["name"] == "From"), "(Desconocido)")
-
-            return jsonify({
-                "id": message_id,
-                "from": "Gmail",
-                "subject": f"Hola, te llegó un correo de {sender}",
-                "snippet": f"Es sobre: {subject}."
-            })
-        except Exception as e:
-            return jsonify({"error": "Uy, algo salió mal al revisar tu Gmail, ¿lo intento de nuevo?", "details": str(e)}), 500
-                
     @app.route("/ultima-notificacion/outlook", methods=["GET"])
     def obtener_ultimo_correo_outlook():
         email = request.args.get("email")
-        try:
-            user = get_user_with_refreshed_tokens(email)
-            if not user:
-                return jsonify({"error": "Usuario no encontrado"}), 404
+        user = get_user_with_refreshed_tokens(email)
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+        result = fetch_outlook_notification(user)
+        return jsonify(result if result else {"error": "No hay correos nuevos"}), 200 if result else 404
 
-            token = user.get("integrations", {}).get("Outlook", {}).get("token")
-            if not token:
-                return jsonify({"error": "Token no disponible"}), 400
-
-            headers = get_outlook_headers(token)
-            # Usar 'inbox' directamente en lugar de buscar el ID
-            response = requests.get(
-                "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages",
-                headers=headers,
-                params={
-                    "$top": 1,
-                    "$orderby": "receivedDateTime desc"  # Último recibido
-                }
-            )
-
-            if response.status_code != 200:
-                return jsonify({"error": "Error al obtener correos"}), response.status_code
-
-            messages = response.json().get("value", [])
-            if not messages:
-                return jsonify({"error": "No hay correos nuevos en tu bandeja de entrada, ¿te aviso si llega algo?"}), 404
-
-            message = messages[0]
-            return jsonify({
-                "id": message["id"],
-                "from": "Outlook",
-                "subject": f"Hola, tienes un correo nuevo de {message['from']['emailAddress']['address']}",
-                "snippet": f"Es sobre: {message['subject']}."
-            })
-        except Exception as e:
-            return jsonify({"error": "Ups, algo falló con Outlook, ¿lo reviso otra vez?", "details": str(e)}), 500
-            
     @app.route("/ultima-notificacion/notion", methods=["GET"])
     def obtener_ultima_notificacion_notion():
         email = request.args.get("email")
-        try:
-            user = get_user_with_refreshed_tokens(email)
-            if not user:
-                return jsonify({"error": "Usuario no encontrado"}), 404
+        user = get_user_with_refreshed_tokens(email)
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+        result = fetch_notion_notification(user)
+        return jsonify(result if result else {"error": "No hay notificaciones nuevas"}), 200 if result else 404
 
-            notion_token = user.get('integrations', {}).get('Notion', {}).get('token')
-            if not notion_token:
-                return jsonify({"error": "Token de Notion no disponible"}), 400
-
-            headers = get_notion_headers(notion_token)
-
-            # Función auxiliar para obtener el título de un objeto
-            def get_title(properties):
-                for prop_name, prop_value in properties.items():
-                    if prop_value.get("type") == "title" and prop_value.get("title"):
-                        return prop_value["title"][0].get("text", {}).get("content", "(Sin título)")
-                return "(Sin título)"
-
-            # 1. Obtener todas las páginas accesibles
-            pages_response = requests.post(
-                "https://api.notion.com/v1/search",
-                headers=headers,
-                json={
-                    "sort": {"direction": "descending", "timestamp": "last_edited_time"},
-                    "page_size": 100,  # Máximo permitido por Notion
-                    "filter": {"value": "page", "property": "object"}
-                }
-            )
-            if pages_response.status_code != 200:
-                return jsonify({"error": "Error al obtener páginas de Notion"}), pages_response.status_code
-
-            pages = [
-                {
-                    "id": page["id"],
-                    "type": "Página",
-                    "title": get_title(page.get("properties", {})),
-                    "last_edited_time": page["last_edited_time"]
-                }
-                for page in pages_response.json().get("results", [])
-                if not page.get("archived", False)
-            ]
-
-            # 2. Obtener todas las bases de datos accesibles
-            databases_response = requests.post(
-                "https://api.notion.com/v1/search",
-                headers=headers,
-                json={
-                    "sort": {"direction": "descending", "timestamp": "last_edited_time"},
-                    "page_size": 100,
-                    "filter": {"value": "database", "property": "object"}
-                }
-            )
-            if databases_response.status_code != 200:
-                return jsonify({"error": "Error al obtener bases de datos de Notion"}), databases_response.status_code
-
-            databases = databases_response.json().get("results", [])
-
-            # 3. Consultar las filas (items) de cada base de datos
-            all_items = pages  # Combinaremos páginas y filas aquí
-            for db in databases:
-                db_id = db["id"]
-                query_response = requests.post(
-                    f"https://api.notion.com/v1/databases/{db_id}/query",
-                    headers=headers,
-                    json={
-                        "sorts": [{"property": "last_edited_time", "direction": "descending"}],
-                        "page_size": 1  # Solo queremos el más reciente por base de datos
-                    }
-                )
-                if query_response.status_code == 200:
-                    db_items = query_response.json().get("results", [])
-                    for item in db_items:
-                        if not item.get("archived", False):
-                            all_items.append({
-                                "id": item["id"],
-                                "type": f"Fila en base de datos '{get_title(db.get('properties', {}))}'",
-                                "title": get_title(item.get("properties", {})),
-                                "last_edited_time": item["last_edited_time"]
-                            })
-
-            # 4. Si no hay elementos, devolver mensaje
-            if not all_items:
-                return jsonify({"error": "No hay páginas ni filas recientes en Notion, ¿reviso después?"}), 404
-
-            # 5. Ordenar todos los elementos por last_edited_time y tomar el más reciente
-            latest_item = max(all_items, key=lambda x: x["last_edited_time"])
-
-            # 6. Formatear la respuesta
-            return jsonify({
-                "id": latest_item["id"],
-                "from": "Notion",
-                "subject": f"Hola, hay algo nuevo en Notion",
-                "snippet": f"Es una {latest_item['type']} llamada '{latest_item['title']}'."
-            })
-
-        except Exception as e:
-            return jsonify({"error": "Uy, algo salió mal revisando Notion, ¿lo intento de nuevo?", "details": str(e)}), 500
-                
     @app.route("/ultima-notificacion/slack", methods=["GET"])
     def obtener_ultimo_mensaje_slack():
         email = request.args.get("email")
-        try:
-            user = get_user_with_refreshed_tokens(email)
-            if not user:
-                return jsonify({"error": "Usuario no encontrado"}), 404
-
-            token = user.get("integrations", {}).get("Slack", {}).get("token")
-            if not token:
-                return jsonify({"error": "Token no disponible"}), 400
-
-            headers = get_slack_headers(token)
-            response = requests.get("https://slack.com/api/conversations.list?types=im", headers=headers)
-            response_json = response.json()
-
-            if not response_json.get("ok"):
-                return jsonify({"error": "Error al obtener conversaciones", "details": response_json}), 400
-
-            dms = response_json.get("channels", [])
-            if not dms:
-                return jsonify({"error": "No tienes mensajes directos recientes en Slack, ¿todo bien por ahí?"}), 404
-
-            dms.sort(key=lambda x: x.get("latest", {}).get("ts", "0"), reverse=True)
-
-            for dm in dms:
-                channel_id = dm["id"]
-                history_response = requests.get(f"https://slack.com/api/conversations.history?channel={channel_id}&limit=1", headers=headers)
-                history_json = history_response.json()
-
-                if history_json.get("ok") and history_json.get("messages"):
-                    message = history_json["messages"][0]
-                    return jsonify({
-                        "id": message["ts"],
-                        "from": "Slack",
-                        "subject": f"Oye, te escribió alguien en Slack",
-                        "snippet": f"Es este mensaje: '{message['text']}'."
-                    })
-
-            return jsonify({"error": "No hay mensajes nuevos en Slack por ahora, ¿reviso después?"}), 404
-
-        except Exception as e:
-            return jsonify({"error": "Ups, algo falló con Slack, ¿quieres que lo revise otra vez?", "details": str(e)}), 500
+        user = get_user_with_refreshed_tokens(email)
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+        result = fetch_slack_notification(user)
+        return jsonify(result if result else {"error": "No hay mensajes nuevos"}), 200 if result else 404
 
     @app.route("/ultima-notificacion/onedrive", methods=["GET"])
     def obtener_ultimo_archivo_onedrive():
         email = request.args.get("email")
-        try:
-            user = get_user_with_refreshed_tokens(email)
-            if not user:
-                return jsonify({"error": "Usuario no encontrado"}), 404
-
-            token = user.get("integrations", {}).get("OneDrive", {}).get("token")
-            if not token:
-                return jsonify({"error": "Token no disponible"}), 400
-
-            headers = get_onedrive_headers(token)
-            url = "https://graph.microsoft.com/v1.0/me/drive/root/search(q='')"
-            params = {"$orderby": "lastModifiedDateTime desc", "$top": "5", "$select": "id,name,file,lastModifiedDateTime"}
-            response = requests.get(url, headers=headers, params=params)
-
-            if response.status_code != 200:
-                return jsonify({"error": "Error al obtener archivos de OneDrive"}), response.status_code
-
-            items = response.json().get('value', [])
-            archivos = [item for item in items if "file" in item]
-            if not archivos:
-                return jsonify({"error": "No hay archivos recientes en OneDrive, ¿te aviso si cambia algo?"}), 404
-
-            last_file = archivos[0]
-            return jsonify({
-                "from": "OneDrive",
-                "subject": f"Hola, vi un archivo actualizado en OneDrive",
-                "snippet": f"Es '{last_file['name']}'.",
-                "id": last_file["id"]
-            })
-        except Exception as e:
-            return jsonify({"error": "Algo salió mal con OneDrive, ¿lo intento de nuevo?", "details": str(e)}), 500
+        user = get_user_with_refreshed_tokens(email)
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+        result = fetch_onedrive_notification(user)
+        return jsonify(result if result else {"error": "No hay archivos nuevos"}), 200 if result else 404
 
     @app.route("/ultima-notificacion/asana", methods=["GET"])
     def obtener_ultima_notificacion_asana():
         email = request.args.get("email")
-        if not email:
-            return jsonify({"error": "Se debe proporcionar un email"}), 400
+        user = get_user_with_refreshed_tokens(email)
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+        result = fetch_asana_notification(user)
+        return jsonify(result if result else {"error": "No hay tareas nuevas"}), 200 if result else 404
 
-        try:
-            # Obtener usuario de la base de datos
-            user = get_user_with_refreshed_tokens(email)
-            if not user:
-                return jsonify({"error": "Usuario no encontrado"}), 404
-
-            # Obtener token de Asana
-            token = user.get("integrations", {}).get("Asana", {}).get("token")
-            if not token:
-                return jsonify({"error": "Token no disponible"}), 400
-
-            headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-            print(f"Obteniendo notificaciones para email: {email}, token disponible: {bool(token)}")
-
-            # Obtener el workspace
-            workspaces_response = requests.get("https://app.asana.com/api/1.0/workspaces", headers=headers, timeout=10)
-            if workspaces_response.status_code != 200:
-                return jsonify({"error": "No se pudo obtener el workspace", "details": workspaces_response.text}), workspaces_response.status_code
-
-            workspace_id = workspaces_response.json().get("data", [])[0]["gid"]
-
-            # Obtener el ID del usuario
-            user_response = requests.get("https://app.asana.com/api/1.0/users/me", headers=headers, timeout=10)
-            if user_response.status_code != 200:
-                return jsonify({"error": "No se pudo obtener el usuario", "details": user_response.text}), user_response.status_code
-
-            user_id = user_response.json().get("data", {}).get("gid")
-
-            # Obtener las tareas asignadas al usuario, incluyendo created_at y completed
-            response = requests.get(
-                f"https://app.asana.com/api/1.0/tasks?assignee={user_id}&workspace={workspace_id}&limit=50&opt_fields=name,gid,created_at,completed",
-                headers=headers,
-                timeout=10
-            )
-            if response.status_code != 200:
-                return jsonify({"error": "Error al obtener tareas", "details": response.text}), response.status_code
-
-            tasks = response.json().get("data", [])
-            if not tasks:
-                return jsonify({"error": "No hay tareas asignadas en Asana, ¿reviso después?"}), 404
-
-            # Filtrar tareas no completadas
-            incomplete_tasks = [task for task in tasks if not task.get("completed", False)]
-            if not incomplete_tasks:
-                return jsonify({"error": "No hay tareas no completadas en Asana, ¿reviso después?"}), 404
-
-            # Ordenar tareas no completadas por created_at (más reciente primero)
-            incomplete_tasks.sort(key=lambda x: x["created_at"], reverse=True)
-            latest_task = incomplete_tasks[0]  # La tarea no completada más reciente
-
-            # Actualizar la caché después de obtener las tareas
-            updated_user = mongo.database.usuarios.find_one({"correo": email})
-            if updated_user:
-                cache.set(email, updated_user, timeout=1800)
-                print(f"Cache updated for user {email} after fetching tasks")
-
-            return jsonify({
-                "from": "Asana",
-                "subject": f"Hola, tienes una tarea nueva en Asana",
-                "snippet": f"Es '{latest_task.get('name', '(Sin título)')}'.",
-                "id": latest_task["gid"]
-            })
-
-        except requests.exceptions.RequestException as e:
-            print(f"Error en la solicitud a Asana: {str(e)}")
-            return jsonify({"error": "Ups, algo falló con Asana, ¿lo intento de nuevo?", "details": str(e)}), 500
-        except Exception as e:
-            print(f"Error inesperado: {str(e)}")
-            return jsonify({"error": "Ups, algo falló, ¿lo intento de nuevo?", "details": str(e)}), 500
-        
     @app.route("/ultima-notificacion/dropbox", methods=["GET"])
     def obtener_ultimo_archivo_dropbox():
         email = request.args.get("email")
-        try:
-            user = get_user_with_refreshed_tokens(email)
-            if not user:
-                return jsonify({"error": "Usuario no encontrado"}), 404
+        user = get_user_with_refreshed_tokens(email)
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+        result = fetch_dropbox_notification(user)
+        return jsonify(result if result else {"error": "No hay archivos nuevos"}), 200 if result else 404
 
-            token = user.get("integrations", {}).get("Dropbox", {}).get("token")
-            if not token:
-                return jsonify({"error": "Token no disponible"}), 400
-
-            headers = get_dropbox_headers(token)
-            response = requests.post("https://api.dropboxapi.com/2/files/list_folder", headers=headers, json={"path": ""})
-            if response.status_code != 200:
-                return jsonify({"error": "Error al obtener archivos"}), response.status_code
-
-            entries = response.json().get("entries", [])
-            if not entries:
-                return jsonify({"error": "No hay nada nuevo en Dropbox, ¿te aviso después?"}), 404
-
-            files = [entry for entry in entries if entry[".tag"] == "file"]
-            if not files:
-                return jsonify({"error": "No hay archivos recientes en Dropbox, ¿reviso luego?"}), 404
-
-            last_file = sorted(files, key=lambda x: x.get('client_modified', ''), reverse=True)[0]
-            return jsonify({
-                "from": "Dropbox",
-                "subject": f"Hola, hay un archivo actualizado en Dropbox",
-                "snippet": f"Es '{last_file['name']}'",
-                "id": last_file["id"]
-            })
-        except Exception as e:
-            return jsonify({"error": "Algo salió mal con Dropbox, ¿lo intento de nuevo?", "details": str(e)}), 500
-        
-    def parse_hubspot_date(date_string, timezone="UTC", output_format="day_month_year_time"):
-        """
-        Parsea una fecha de HubSpot en formato ISO 8601 y la convierte a un formato legible.
-
-        Args:
-            date_string (str): Fecha en formato ISO 8601 (ej: "2025-03-16T12:34:56Z").
-            timezone (str): Zona horaria para ajustar la fecha (default: "UTC").
-            output_format (str): Formato de salida. Opciones:
-                - "day_month_year_time" (default): "16 de marzo de 2025, 12:34"
-                - "iso": "2025-03-16T12:34:56Z" (sin cambios)
-                - "datetime": Devuelve objeto datetime sin formatear
-
-        Returns:
-            str o datetime: Fecha formateada o objeto datetime según output_format.
-
-        Raises:
-            ValueError: Si la fecha no es válida.
-        """
-        try:
-            # Parsear la fecha ISO 8601
-            dt = datetime.fromisoformat(date_string.replace("Z", "+00:00"))
-
-            # Convertir a la zona horaria especificada
-            tz = ZoneInfo(timezone)
-            dt = dt.astimezone(tz)
-
-            # Mapa de meses para formato legible en español
-            months = {
-                1: "enero", 2: "febrero", 3: "marzo", 4: "abril", 5: "mayo", 6: "junio",
-                7: "julio", 8: "agosto", 9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre"
-            }
-
-            # Devolver según el formato solicitado
-            if output_format == "day_month_year_time":
-                day = dt.day
-                month = months[dt.month]
-                year = dt.year
-                time = dt.strftime("%H:%M")
-                return f"{day} de {month} de {year}, {time}"
-            elif output_format == "iso":
-                return dt.isoformat()
-            elif output_format == "datetime":
-                return dt
-            else:
-                raise ValueError("Formato de salida no soportado. Usa 'day_month_year_time', 'iso' o 'datetime'.")
-
-        except (ValueError, TypeError) as e:
-            raise ValueError(f"No pude parsear la fecha '{date_string}': {str(e)}")
-    
-    @app.route('/ultima-notificacion/hubspot', methods=['GET'])
+    @app.route("/ultima-notificacion/hubspot", methods=["GET"])
     def get_last_notification_hubspot():
         email = request.args.get("email")
-        try:
-            user = get_user_with_refreshed_tokens(email)
-            if not user:
-                return jsonify({"error": "Usuario no encontrado"}), 404
-
-            token = user.get('integrations', {}).get('HubSpot', {}).get('token')
-            if not token:
-                return jsonify({"error": "Token de HubSpot no disponible"}), 400
-
-            headers = get_hubspot_headers(token)
-            endpoints = {
-                "contacto": "https://api.hubapi.com/crm/v3/objects/contacts/search",
-                "negocio": "https://api.hubapi.com/crm/v3/objects/deals/search",
-                "empresa": "https://api.hubapi.com/crm/v3/objects/companies/search"
-            }
-            search_data = {
-                "filterGroups": [{"filters": [{"propertyName": "hs_lastmodifieddate", "operator": "GT", "value": "0"}]}],
-                "properties": ["hs_lastmodifieddate", "dealname", "firstname", "lastname", "email", "name"],
-                "limit": 1,
-                "sorts": ["-hs_lastmodifieddate"]
-            }
-
-            latest_update = None
-            for entity, url in endpoints.items():
-                response = requests.post(url, headers=headers, json=search_data)
-                if response.status_code == 200 and response.json().get("results"):
-                    result = response.json()["results"][0]
-                    last_modified = parse_hubspot_date(result["properties"].get("hs_lastmodifieddate", "0"))
-                    if not latest_update or last_modified > latest_update["timestamp"]:
-                        latest_update = {"type": entity, "data": result, "timestamp": last_modified}
-
-            if not latest_update:
-                return jsonify({"error": "No hay cambios recientes en HubSpot, ¿te aviso luego?"}), 404
-
-            entity_type = latest_update["type"]
-            properties = latest_update["data"]["properties"]
-            subject = (
-                f"{properties.get('firstname', '')} {properties.get('lastname', '')}".strip() if entity_type == "contacto" else
-                properties.get("dealname", "(Sin nombre)") if entity_type == "negocio" else
-                properties.get("name", "(Sin nombre)")
-            )
-
-            return jsonify({
-                "from": "HubSpot",
-                "subject": f"Oye, hay algo nuevo en HubSpot",
-                "snippet": f"Es un {entity_type} llamado '{subject}'.",
-                "id": latest_update["data"]["id"]
-            })
-        except Exception as e:
-            return jsonify({"error": "Ups, algo falló con HubSpot, ¿lo intento de nuevo?", "details": str(e)}), 500
-    
-    def convertir_fecha(timestamp):
-        if timestamp:
-            return datetime.utcfromtimestamp(int(timestamp) / 1000).strftime('%Y-%m-%d %H:%M:%S')
-        return "No definida"
-
-    def convertir_fecha(timestamp):
-        if timestamp:
-            return datetime.utcfromtimestamp(int(timestamp) / 1000).strftime('%Y-%m-%d %H:%M:%S')
-        return "No definida"
+        user = get_user_with_refreshed_tokens(email)
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+        result = fetch_hubspot_notification(user)
+        return jsonify(result if result else {"error": "No hay notificaciones nuevas"}), 200 if result else 404
 
     @app.route("/ultima-notificacion/clickup", methods=["GET"])
     def obtener_ultima_notificacion_clickup():
         email = request.args.get("email")
-
-        try:
-            user = get_user_from_db(email, cache, mongo)
-            if not user:
-                return jsonify({"error": "Usuario no encontrado"}), 404
-
-            token = user.get("integrations", {}).get("ClickUp", {}).get("token")
-            if not token:
-                return jsonify({"error": "Token no disponible"}), 400
-
-            headers = get_clickup_headers(token)
-            response = requests.get("https://api.clickup.com/api/v2/team", headers=headers)
-
-            if response.status_code != 200:
-                return jsonify({"error": "Error al obtener notificaciones"}), response.status_code
-
-            teams = response.json().get("teams", [])
-
-            if not teams:
-                return jsonify({"error": "No hay equipos en ClickUp"})
-
-            team_id = teams[0]["id"]
-            response = requests.get(f"https://api.clickup.com/api/v2/team/{team_id}/task", headers=headers)
-
-            if response.status_code != 200:
-                return jsonify({"error": "Error al obtener tareas"}), response.status_code
-
-            tasks = response.json().get("tasks", [])
-
-            if not tasks:
-                return jsonify({"error": "No hay tareas nuevas"})
-
-            task = tasks[0]
-            due_date = convertir_fecha(task.get("due_date"))
-
-            result = {
-                "id": task["id"],
-                "name": task["name"],
-                "status": task["status"]["status"],
-                "due_date": due_date,
-                "from": "ClickUp",  # ✅ Para que no falle en el frontend
-                "subject": task["name"],  # ✅ Adaptación para React
-                "snippet": f"Estado: {task['status']['status']}, Fecha límite: {due_date}"
-            }
-
-
-            return jsonify(result)
-        
-        except Exception as e:
-            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
-
+        user = get_user_with_refreshed_tokens(email)
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+        result = fetch_clickup_notification(user)
+        return jsonify(result if result else {"error": "No hay tareas nuevas"}), 200 if result else 404
 
     @app.route("/ultima-notificacion/drive", methods=["GET"])
     def obtener_ultimo_archivo_drive():
         email = request.args.get("email")
-        try:
-            user = get_user_with_refreshed_tokens(email)
-            if not user:
-                return jsonify({"error": "Usuario no encontrado"}), 404
+        user = get_user_with_refreshed_tokens(email)
+        if not user:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+        result = fetch_drive_notification(user)
+        return jsonify(result if result else {"error": "No hay archivos nuevos"}), 200 if result else 404
 
-            token = user.get("integrations", {}).get("Drive", {}).get("token")
-            if not token:
-                return jsonify({"error": "Token no disponible"}), 400
-
-            headers = get_google_drive_headers(token)
-            url = "https://www.googleapis.com/drive/v3/files"
-            params = {"pageSize": 10, "fields": "files(id, name, mimeType, modifiedTime)", "orderBy": "modifiedTime desc"}
-            response = requests.get(url, headers=headers, params=params)
-
-            if response.status_code != 200:
-                return jsonify({"error": "Error al obtener archivos de Google Drive"}), response.status_code
-
-            files = response.json().get('files', [])
-            if not files:
-                return jsonify({"error": "No hay nada nuevo en Drive, ¿te aviso si cambia algo?"}), 404
-
-            last_entry = files[0]
-            entry_type = "carpeta" if last_entry["mimeType"] == "application/vnd.google-apps.folder" else "archivo"
-
-            return jsonify({
-                "from": "Google Drive",
-                "subject": f"Hola, vi que hay un {entry_type} actualizado en Drive",
-                "snippet": f"Se llama '{last_entry['name']}'.",
-                "id": last_entry["id"]
-            })
-        except Exception as e:
-            return jsonify({"error": "Algo salió mal revisando Drive, ¿lo intento de nuevo?", "details": str(e)}), 500
-            
     return {
         "get_gmail_headers": get_gmail_headers,
         "get_outlook_headers": get_outlook_headers,
@@ -823,7 +601,6 @@ def setup_routes_secretary_gets(app, mongo, cache, refresh_functions):
         "get_google_drive_headers": get_google_drive_headers,
         "get_hubspot_headers": get_hubspot_headers,
         "get_asana_headers": get_asana_headers,
-        "get_dropbox_headers": get_dropbox_headers,  
-        "get_clickup_headers": get_clickup_headers,      
-        
+        "get_dropbox_headers": get_dropbox_headers,
+        "get_clickup_headers": get_clickup_headers,
     }

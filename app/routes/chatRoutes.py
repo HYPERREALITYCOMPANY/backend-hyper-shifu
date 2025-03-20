@@ -129,6 +129,19 @@ def setup_routes_chats(app, mongo, cache, refresh_functions):
         hubspot_results = "\n".join(hubspot_results) or "No se encontraron resultados relacionados en HubSpot."
 
         # ClickUp Results (extraer información relevante)
+        # Validar que 'search_results' tenga la estructura esperada
+        clickup_data = search_results.get('clickup', {})
+
+        # Si 'clickup_data' es una tupla en lugar de un diccionario, extraemos el segundo elemento (el código de estado)
+        if isinstance(clickup_data, tuple):
+            clickup_data = clickup_data[0] if isinstance(clickup_data[0], dict) else {}
+
+        # Extraer la lista de tareas si es válida
+        tasks = clickup_data.get('clickup', [])
+        if not isinstance(tasks, list):
+            tasks = []
+
+        # Generar los resultados de ClickUp
         clickup_results = "\n".join([
             f"Tarea: {task.get('task_name', 'Sin nombre')} | "
             f"Estado: {task.get('status', 'Sin estado')} | "
@@ -137,7 +150,7 @@ def setup_routes_chats(app, mongo, cache, refresh_functions):
             f"Fecha de vencimiento: {task.get('due_date', 'Sin fecha')} | "
             f"Lista: {task.get('list', 'Sin lista')} | "
             f"URL: {task.get('url', 'Sin URL')}"
-            for task in search_results.get('clickup', []) if isinstance(task, dict)
+            for task in tasks if isinstance(task, dict)
         ]) or "No se encontraron tareas relacionadas en ClickUp."
 
         # Dropbox Results
@@ -222,8 +235,13 @@ def setup_routes_chats(app, mongo, cache, refresh_functions):
     - Si existe información en algunas APIs y en otras no, responde únicamente con los datos disponibles.
     - En el caso de HubSpot, cuando se soliciten contactos de una compañía y el campo 'compañía' esté vacío, valida que el nombre de la empresa pueda obtenerse del dominio del correo electrónico (todo lo que sigue después de '@'). Por ejemplo, si el dominio es 'empresa.com', considera que la empresa es 'empresa'. No incluyas registros irrelevantes; muestra solo los contactos relacionados con el dominio o con el nombre de la compañía.
     - Recuerda utilizar la información de los bodys de correos, fechas y remitentes (De:) para filtrar y responder de manera precisa.
+    Si la query es sobre una tarea específica en ClickUp (por ejemplo, "mandame el status de la tarea shiffu en clickup"), responde únicamente con la información de esa tarea en el siguiente formato exacto:
+    ¡Hola! 🌟 La tarea "<nombre>" en ClickUp está <estado>. 🎉 Está en la lista <lista> y <tiene/no tiene> fecha de vencimiento<si tiene, agregar: " el <fecha>">. Si necesitas más detalles, avísame.
+    Ejemplo: ¡Hola! 🌟 La tarea "Shiffu" en ClickUp está completa. 🎉 Está en la lista Project 2 y no tiene fecha de vencimiento. Si necesitas más detalles, avísame.
+    Basate en la instruccion para la query sobre la tarea especifica de Clickup para Notion
 
     Necesito que tu respuesta sea concisa, siguiendo el estilo de "Suggested Answers" de Guru, e incluye emojis para hacer la interacción más amigable. No incluyas la palabra 'Respuesta:'; contesta de forma natural y sin enlaces.
+    Solo responde con la informacion que te llego es decir, no contestes en que api no encontro información.
     Analiza cuidadosamente la información proporcionada; si consideras que la query no puede responderse de manera amena o precisa, sugiere amablemente que el usuario mejore su prompt o especifique lo que desea encontrar.
     """
         print(prompt)

@@ -277,6 +277,7 @@ def setup_routes_searchs(app, mongo, cache, refresh_functions):
     @app.route('/search/notion', methods=['GET'])
     def search_notion(query):
         email = request.args.get('email')
+        simplified_results = []
         try:
             # Verificar usuario en la base de datos
             user = get_user_with_refreshed_tokens(email)
@@ -290,26 +291,16 @@ def setup_routes_searchs(app, mongo, cache, refresh_functions):
                 return jsonify({"error": "Token de Notion no disponible"}), 400
 
             # Limpiar el query
-            original_query = query
-            if "tarea" in query.lower():
-                query = query.lower().split("tarea", 1)[1].strip()
-            elif "proyecto" in query.lower():
-                query = query.lower().split("proyecto", 1)[1].strip()
-            elif "compañia" in query.lower():
-                query = query.lower().split("compañia", 1)[1].strip()
-            elif "empresa" in query.lower():
-                query = query.lower().split("empresa", 1)[1].strip()
-            elif "estado" in query.lower():
-                if "tarea" in query.lower():
-                    query = query.lower().split("tarea", 1)[1].strip()
-                elif "proyecto" in query.lower():
-                    query = query.lower().split("proyecto", 1)[1].strip()
-                else:
-                    query = "estado"
+            if "proyecto" in query:
+                query = query.split("proyecto", 1)[1].strip() 
+            if "compañia" in query:
+                query = query.split("compañia", 1)[1].strip()
+            if "empresa" in query:
+                query = query.split("empresa", 1)[1].strip()
 
             # Verificar término de búsqueda
             if not query:
-                return jsonify({"error": "No se proporcionó un término de búsqueda válido"}), 400
+                return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
 
             # Configuración de solicitud a Notion
             url = 'https://api.notion.com/v1/search'
@@ -318,100 +309,51 @@ def setup_routes_searchs(app, mongo, cache, refresh_functions):
                 'Notion-Version': '2022-06-28',
                 'Content-Type': 'application/json'
             }
-            
-            # Parámetros de búsqueda
-            search_params = {
-                "query": query,
-                "sort": {
-                    "direction": "descending",
-                    "timestamp": "last_edited_time"
-                },
-                "page_size": 10
-            }
+            data = {"query": query}
             
             # Realizar solicitud a Notion
-            response = requests.post(url, headers=headers, json=search_params)
+            response = requests.post(url, headers=headers, json=data)
             response.raise_for_status()
             notion_response = response.json()
 
             # Procesar resultados
             results = notion_response.get("results", [])
             if not results:
-                return jsonify({"notion": []})
+                return jsonify({"error": "No se encontraron resultados en Notion"}), 404
 
-            # Lista para almacenar resultados procesados
-            processed_results = []
-            
             for result in results:
-                # Extraer información básica
                 page_info = {
                     "id": result["id"],
-                    "url": result.get("url", "Sin URL"),
-                    "last_edited_time": result.get("last_edited_time", "Sin fecha de edición"),
+                    "url": result.get("url"),
                     "properties": {}
                 }
-                
-                # Extraer propiedades relevantes
+
                 properties = result.get("properties", {})
-                
-                # Inicializar valores por defecto
-                nombre = "Sin Nombre"
-                estado = "Sin Estado"
-                
-                # Buscar nombre/título
                 for property_name, property_value in properties.items():
-                    property_type = property_value.get("type")
-                    
-                    # Extraer nombre/título
-                    if property_type == "title" and property_value.get("title"):
-                        if property_value["title"] and len(property_value["title"]) > 0:
-                            nombre = property_value["title"][0]["plain_text"]
-                        page_info["properties"]["Nombre"] = nombre
-                    
-                    # Extraer estado
-                    elif property_type == "status" and property_value.get("status"):
-                        estado = property_value["status"].get("name", "Sin Estado")
-                        page_info["properties"]["Estado"] = estado
-                    
-                    # Buscar en otros campos
-                    elif property_name.lower() in ["nombre", "name", "título", "title"]:
-                        if property_type == "rich_text" and property_value.get("rich_text") and len(property_value["rich_text"]) > 0:
-                            nombre = property_value["rich_text"][0]["plain_text"]
-                        page_info["properties"]["Nombre"] = nombre
-                    
-                    elif property_name.lower() in ["estado", "status"]:
-                        if property_type == "select" and property_value.get("select"):
-                            estado = property_value["select"].get("name", "Sin Estado")
-                        page_info["properties"]["Estado"] = estado
-                
-                # Si no se encontró nombre en las propiedades, buscar en el título principal
-                if "Nombre" not in page_info["properties"]:
-                    if "title" in result and result["title"] and len(result["title"]) > 0:
-                        nombre = result["title"][0]["plain_text"]
-                    page_info["properties"]["Nombre"] = nombre
-                
-                # Si no se encontró estado, usar valor predeterminado
-                if "Estado" not in page_info["properties"]:
-                    page_info["properties"]["Estado"] = estado
-                    
-                # Formatear fecha
-                if page_info["last_edited_time"] != "Sin fecha de edición":
-                    try:
-                        date_obj = datetime.datetime.fromisoformat(page_info["last_edited_time"].replace("Z", "+00:00"))
-                        page_info["last_edited_time"] = date_obj.strftime("%d/%m/%Y %H:%M")
-                    except:
-                        pass
-                    
-                processed_results.append(page_info)
-            
-            # Retornar solo los resultados procesados
-            return jsonify({processed_results})
+                    # Procesar propiedades relevantes
+                    if property_value.get("type") == "status":
+                        page_info["properties"][property_name] = property_value["status"].get("name", None)
+                    elif property_name == "Nombre" and property_value.get("title"):
+                        page_info["properties"][property_name] = property_value["title"][0]["plain_text"]
+
+                # Filtrar resultados relevantes
+                if (
+                    'Nombre' in page_info["properties"]
+                    and query.lower() in page_info["properties"]["Nombre"].lower()
+                ):
+                    simplified_results.append(page_info)
+
+            # Verificar si hay resultados simplificados
+            if not simplified_results:
+                return jsonify({"error": "No se encontraron resultados relevantes en Notion"}), 404
+
+            return jsonify(simplified_results)
 
         except requests.RequestException as e:
-            return jsonify({"error": f"Error al realizar la solicitud a Notion: {str(e)}"}), 500
+            return jsonify({"error": "Error al realizar la solicitud a Notion", "details": str(e)}), 500
         except Exception as e:
-            return jsonify({"error": f"Error inesperado: {str(e)}"}), 500
-
+            return jsonify({"error": "Error inesperado", "details": str(e)}), 500
+    
     @app.route('/search/slack', methods=['GET'])
     def search_slack(query):
         email = request.args.get('email')
@@ -710,7 +652,8 @@ def setup_routes_searchs(app, mongo, cache, refresh_functions):
     @app.route('/search/clickup', methods=["GET"])
     def search_clickup(query):
         email = request.args.get('email')
-        
+        if query == "n/a":
+            return jsonify({"message": "No hay resultados en Clickup"}), 200
         try:
             # Verificar usuario en la base de datos
             user = get_user_with_refreshed_tokens(email)
@@ -735,16 +678,7 @@ def setup_routes_searchs(app, mongo, cache, refresh_functions):
             elif "proyecto" in query.lower():
                 search_type = "proyecto"
                 query = query.lower().split("proyecto", 1)[1].strip()
-            elif "estado" in query.lower():
-                search_type = "estado"
-                if "tarea" in query.lower():
-                    query = query.lower().split("tarea", 1)[1].strip()
-                elif "proyecto" in query.lower():
-                    query = query.lower().split("proyecto", 1)[1].strip()
-                else:
-                    # Si solo pregunta por "estado", buscaremos el estado general de las tareas
-                    query = ""  # Búsqueda más amplia para obtener el estado general
-                    
+            
             # Verificar término de búsqueda
             if not query and search_type == "general":
                 return jsonify({"clickup": [], "message": "No se proporcionó un término de búsqueda"}), 400
@@ -765,52 +699,80 @@ def setup_routes_searchs(app, mongo, cache, refresh_functions):
             
             results = []
             
-            # Estrategia de búsqueda basada en el tipo
-            if search_type in ["general", "tarea", "estado"]:
-                # Buscar tareas
-                task_url = f"https://api.clickup.com/api/v2/team/{team_id}/task"
-                params = {"query": query}
+            # Búsqueda de tareas
+            if search_type in ["general", "tarea"]:
+                # Paso 1: Obtener espacios
+                spaces_url = f"https://api.clickup.com/api/v2/team/{team_id}/space"
+                spaces_response = requests.get(spaces_url, headers=headers)
                 
-                # Si está buscando estados específicamente, podemos ampliar la búsqueda
-                if search_type == "estado" and not query:
-                    params = {"subtasks": True, "statuses": ["active", "closed"]}
-                    
-                task_response = requests.get(task_url, headers=headers, params=params)
+                if spaces_response.status_code != 200:
+                    return jsonify({"clickup": [], "error": "No se pudieron obtener los espacios", "details": spaces_response.text}), spaces_response.status_code
                 
-                if task_response.status_code == 200:
-                    tasks = task_response.json().get('tasks', [])
+                spaces = spaces_response.json().get('spaces', [])
+                
+                # Paso 2: Para cada espacio, obtener carpetas y listas
+                for space in spaces:
+                    space_id = space.get('id')
                     
-                    for task in tasks:
-                        # Formatear fecha si existe
-                        due_date = "Sin fecha"
-                        if task.get('due_date'):
-                            try:
-                                # Convertir timestamp a fecha legible
-                                due_timestamp = int(task.get('due_date')) / 1000  # ClickUp usa milisegundos
-                                due_date = datetime.datetime.fromtimestamp(due_timestamp).strftime("%d/%m/%Y %H:%M")
-                            except:
-                                due_date = task.get('due_date', 'Sin fecha')
+                    # Obtener carpetas en el espacio
+                    folders_url = f"https://api.clickup.com/api/v2/space/{space_id}/folder"
+                    folders_response = requests.get(folders_url, headers=headers)
+                    print(folders_response)
+                    if folders_response.status_code != 200:
+                        continue  # Si falla, pasamos al siguiente espacio
+                    
+                    folders = folders_response.json().get('folders', [])
+                    
+                    # Paso 3: Para cada carpeta, obtener listas
+                    for folder in folders:
+                        folder_id = folder.get('id')
+                        lists_url = f"https://api.clickup.com/api/v2/folder/{folder_id}/list"
+                        lists_response = requests.get(lists_url, headers=headers)
                         
-                        # Determinar si la tarea coincide con la búsqueda de estado
-                        status_match = True
-                        if search_type == "estado" and query:
-                            status_name = task.get('status', {}).get('status', '').lower()
-                            status_match = query.lower() in status_name
+                        if lists_response.status_code != 200:
+                            continue  # Si falla, pasamos a la siguiente carpeta
                         
-                        if search_type != "estado" or status_match or not query:
-                            task_info = {
-                                'id': task.get('id'),
-                                'task_name': task.get('name', 'Sin título'),
-                                'status': task.get('status', {}).get('status', 'Sin estado'),
-                                'priority': get_priority_name(task.get('priority')),
-                                'assignees': [assignee.get('username', 'Desconocido') for assignee in task.get('assignees', [])] or ['Sin asignar'],
-                                'due_date': due_date,
-                                'project': task.get('project', {}).get('name', 'Sin proyecto'),
-                                'list': task.get('list', {}).get('name', 'Sin lista'),
-                                'url': f"https://app.clickup.com/t/{task.get('id')}"
+                        lists = lists_response.json().get('lists', [])
+                        
+                        # Paso 4: Para cada lista, buscar tareas
+                        for lst in lists:
+                            list_id = lst.get('id')
+                            task_url = f"https://api.clickup.com/api/v2/list/{list_id}/task"
+                            params = {
+                                "search": query,  # Buscar por nombre
+                                "subtasks": True,
+                                "include_closed": True  # Incluir tareas completadas
                             }
-                            results.append(task_info)
+                            
+                            task_response = requests.get(task_url, headers=headers, params=params)
+                            
+                            if task_response.status_code == 200:
+                                tasks = task_response.json().get('tasks', [])
+                                for task in tasks:
+                                    # Formatear fecha si existe
+                                    due_date = "Sin fecha"
+                                    if task.get('due_date'):
+                                        try:
+                                            # Convertir timestamp a fecha legible
+                                            due_timestamp = int(task.get('due_date')) / 1000  # ClickUp usa milisegundos
+                                            due_date = datetime.fromtimestamp(due_timestamp).strftime("%d/%m/%Y %H:%M")
+                                        except:
+                                            due_date = task.get('due_date', 'Sin fecha')
+                                    
+                                    task_info = {
+                                        'id': task.get('id'),
+                                        'task_name': task.get('name', 'Sin título'),
+                                        'status': task.get('status', {}).get('status', 'Sin estado'),
+                                        'priority': get_priority_name(task.get('priority')),
+                                        'assignees': [assignee.get('username', 'Desconocido') for assignee in task.get('assignees', [])] or ['Sin asignar'],
+                                        'due_date': due_date,
+                                        'project': task.get('project', {}).get('name', 'Sin proyecto'),
+                                        'list': task.get('list', {}).get('name', 'Sin lista'),
+                                        'url': f"https://app.clickup.com/t/{task.get('id')}"
+                                    }
+                                    results.append(task_info)
             
+            # Búsqueda de proyectos
             if search_type in ["general", "proyecto"]:
                 # Buscar espacios y carpetas (proyectos)
                 spaces_url = f"https://api.clickup.com/api/v2/team/{team_id}/space"
@@ -865,7 +827,6 @@ def setup_routes_searchs(app, mongo, cache, refresh_functions):
             return jsonify({"clickup": [], "error": f"Error al realizar la solicitud a ClickUp: {str(e)}"}), 500
         except Exception as e:
             return jsonify({"clickup": [], "error": f"Error inesperado: {str(e)}"}), 500
-
     # Función auxiliar para convertir el valor numérico de prioridad a texto
     def get_priority_name(priority_value):
         if not priority_value:

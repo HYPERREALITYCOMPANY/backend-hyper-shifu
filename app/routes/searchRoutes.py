@@ -275,10 +275,8 @@ def setup_routes_searchs(app, mongo, cache, refresh_functions):
             return jsonify({"error": "Error inesperado", "details": str(e)}), 500
 
     @app.route('/search/notion', methods=['GET'])
-    def search_notion():
+    def search_notion(query):
         email = request.args.get('email')
-        query = request.args.get('query')
-        
         try:
             # Verificar usuario en la base de datos
             user = get_user_with_refreshed_tokens(email)
@@ -407,7 +405,7 @@ def setup_routes_searchs(app, mongo, cache, refresh_functions):
                 processed_results.append(page_info)
             
             # Retornar solo los resultados procesados
-            return jsonify({"notion": processed_results})
+            return jsonify({processed_results})
 
         except requests.RequestException as e:
             return jsonify({"error": f"Error al realizar la solicitud a Notion: {str(e)}"}), 500
@@ -710,9 +708,8 @@ def setup_routes_searchs(app, mongo, cache, refresh_functions):
         return soup.get_text()
     
     @app.route('/search/clickup', methods=["GET"])
-    def search_clickup():
+    def search_clickup(query):
         email = request.args.get('email')
-        query = request.args.get('query')
         
         try:
             # Verificar usuario en la base de datos

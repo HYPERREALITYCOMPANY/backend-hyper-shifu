@@ -885,43 +885,36 @@ def setup_routes_secretary_posts(app, mongo, cache, refresh_functions):
         action = interpretar_accion_archivos(user_text)
         print(f"Acción interpretada para '{user_text}': {action}")
 
-        # Si no se proporciona file_path, intentamos buscarlo por nombre
+        # Si no se proporciona file_path, buscamos por nombre
         if not file_path:
-            print("No se proporcionó file_path, intentando buscar por nombre...")
-            match_file = re.search(r'(eliminar\s*archivo|archivo|mover\s*archivo):\s*(.+?)(?:\s*a\s*carpeta:\s*(.+))?', user_text, re.IGNORECASE)
+            match_file = re.search(r'(eliminar\s*archivo|mover\s*archivo):\s*(.+?)(?:\s*a\s*carpeta:\s*(.+))?', user_text, re.IGNORECASE)
             if not match_file:
-                return jsonify({"error": "No entendí el nombre del archivo. Usa algo como 'eliminar archivo: nombre' o 'mover archivo: nombre a carpeta: destino'"}), 400
+                return jsonify({"error": "Usa algo como 'eliminar archivo: nombre' o 'mover archivo: nombre a carpeta: destino'"}), 400
 
             file_name = match_file.group(2).strip()
             if file_name == "n/a":
-                return jsonify({"error": "¡Ups! No se especificó el nombre del archivo. Por favor, indícalo e inténtalo de nuevo."}), 400
+                return jsonify({"error": "¡Ups! No especificaste el nombre del archivo."}), 400
 
             # Buscar el archivo en Dropbox
             url_search = "https://api.dropboxapi.com/2/files/search_v2"
-            params = {
-                "query": file_name,
-                "options": {
-                    "max_results": 10,
-                    "file_status": "active"
-                }
-            }
+            params = {"query": file_name, "options": {"max_results": 10, "file_status": "active"}}
             try:
                 response = requests.post(url_search, headers=headers, json=params, timeout=10)
                 print(f"Search response: {response.status_code} {response.text}")
                 response.raise_for_status()
-            except requests.exceptions.RequestException as e:
-                print(f"Error al buscar archivo: {str(e)}")
-                return jsonify({"error": "Error al buscar el archivo en Dropbox", "details": str(e)}), 500
+            except requests.RequestException as e:
+                return jsonify({"error": "Error al buscar el archivo", "details": str(e)}), 500
 
             results = response.json().get('matches', [])
             if not results:
-                return jsonify({"error": f"No encontré el archivo '{file_name}' en Dropbox. Revisa el nombre e intenta de nuevo."}), 404
+                return jsonify({"error": f"No encontré '{file_name}' en Dropbox."}), 404
 
-            if len(results) > 1:
-                file_list = [result['metadata']['metadata']['name'] for result in results]
-                return jsonify({"error": f"Encontré varios archivos con nombres similares. Por favor, elige uno:\n{', '.join(file_list)}"}), 400
+            # Filtrar por archivos (excluir carpetas) y tomar el primero que coincida exactamente
+            file_match = next((r for r in results if r['metadata']['metadata']['.tag'] == 'file' and r['metadata']['metadata']['name'].lower() == file_name.lower()), None)
+            if not file_match:
+                return jsonify({"error": f"No encontré un archivo exacto llamado '{file_name}'. ¿Revisas el nombre?"}), 404
 
-            file_path = results[0]['metadata']['metadata']['path_lower']
+            file_path = file_match['metadata']['metadata']['path_lower']
             print(f"Archivo encontrado: {file_path}")
 
         # Acción: Eliminar archivo
@@ -935,56 +928,57 @@ def setup_routes_secretary_posts(app, mongo, cache, refresh_functions):
                 )
                 print(f"Delete response: {response.status_code} {response.text}")
                 if response.status_code == 200:
-                    # Actualizar la caché después de eliminar
                     updated_user = mongo.database.usuarios.find_one({"correo": email})
                     if updated_user:
                         cache.set(email, updated_user, timeout=1800)
-                        print(f"Cache updated for user {email} after deleting file")
-                    return jsonify({"success": f"¡Listo! El archivo '{file_path.split('/')[-1]}' ha sido eliminado de Dropbox con éxito."})
-                else:
-                    return jsonify({"error": "No pude eliminar el archivo, ¿lo intentamos otra vez?", "details": response.text}), response.status_code
-            except requests.exceptions.RequestException as e:
-                print(f"Error al eliminar archivo: {str(e)}")
-                return jsonify({"error": "Error al intentar eliminar el archivo", "details": str(e)}), 500
+                    return jsonify({"success": f"¡Listo! '{file_path.split('/')[-1]}' eliminado de Dropbox."})
+                return jsonify({"error": "No pude eliminar el archivo", "details": response.text}), response.status_code
+            except requests.RequestException as e:
+                return jsonify({"error": "Error al eliminar", "details": str(e)}), 500
 
         # Acción: Mover archivo
         elif action == "move":
-            match_dest = re.search(r'(?:mover\s*archivo|mueve(?:\s*a)?):\s*.+?\s*(?:a\s*carpeta:|a):\s*(.+)', user_text, re.IGNORECASE)
+            match_dest = re.search(r'mover\s*archivo:\s*.+?\s*a\s*carpeta:\s*(.+)', user_text, re.IGNORECASE)
             if not match_dest:
                 return jsonify({"error": "Dime a qué carpeta moverlo (ej: 'mover archivo: nombre a carpeta: destino')"}), 400
             dest_folder = match_dest.group(1).strip()
             if not dest_folder.startswith('/'):
                 dest_folder = f"/{dest_folder}"
-            print(f"Carpeta de destino: {dest_folder}")
 
+            # Buscar la carpeta de destino
+            url_search = "https://api.dropboxapi.com/2/files/search_v2"
+            params = {"query": dest_folder.strip('/'), "options": {"max_results": 5, "file_status": "active"}}
+            try:
+                response = requests.post(url_search, headers=headers, json=params, timeout=10)
+                print(f"Folder search response: {response.status_code} {response.text}")
+                response.raise_for_status()
+            except requests.RequestException as e:
+                return jsonify({"error": "Error al buscar la carpeta", "details": str(e)}), 500
+
+            results = response.json().get('matches', [])
+            folder_match = next((r for r in results if r['metadata']['metadata']['.tag'] == 'folder' and r['metadata']['metadata']['name'].lower() == dest_folder.strip('/').lower()), None)
+            if not folder_match:
+                return jsonify({"error": f"No encontré la carpeta '{dest_folder}'"}), 404
+
+            dest_path = f"{folder_match['metadata']['metadata']['path_lower']}/{file_path.split('/')[-1]}"
             try:
                 response = requests.post(
                     "https://api.dropboxapi.com/2/files/move_v2",
                     headers=headers,
-                    json={
-                        "from_path": file_path,
-                        "to_path": f"{dest_folder}/{file_path.split('/')[-1]}",
-                        "autorename": True,
-                        "allow_shared_folder": True,
-                        "allow_ownership_transfer": False
-                    },
+                    json={"from_path": file_path, "to_path": dest_path, "autorename": True},
                     timeout=10
                 )
                 print(f"Move response: {response.status_code} {response.text}")
                 if response.status_code == 200:
-                    # Actualizar la caché después de mover
                     updated_user = mongo.database.usuarios.find_one({"correo": email})
                     if updated_user:
                         cache.set(email, updated_user, timeout=1800)
-                        print(f"Cache updated for user {email} after moving file")
-                    return jsonify({"success": f"¡Hecho! El archivo '{file_path.split('/')[-1]}' ha sido movido a '{dest_folder}' con éxito."})
-                else:
-                    return jsonify({"error": "No pude mover el archivo, ¿probamos de nuevo?", "details": response.text}), response.status_code
-            except requests.exceptions.RequestException as e:
-                print(f"Error al mover archivo: {str(e)}")
-                return jsonify({"error": "Error al intentar mover el archivo", "details": str(e)}), 500
+                    return jsonify({"success": f"¡Hecho! '{file_path.split('/')[-1]}' movido a '{dest_folder}'."})
+                return jsonify({"error": "No pude mover el archivo", "details": response.text}), response.status_code
+            except requests.RequestException as e:
+                return jsonify({"error": "Error al mover", "details": str(e)}), 500
 
-        return jsonify({"error": "No entendí, ¿quieres 'eliminar' o 'mover' el archivo?"}), 400
+        return jsonify({"error": "No entendí, ¿quieres 'eliminar' o 'mover'?"}), 400
 
     @app.route("/accion-onedrive", methods=["POST"])
     def ejecutar_accion_onedrive():
@@ -1008,41 +1002,31 @@ def setup_routes_secretary_posts(app, mongo, cache, refresh_functions):
         action = interpretar_accion_archivos(user_text)
         print(f"Acción interpretada para '{user_text}': {action}")
 
-        # Si no se proporciona file_id, intentamos buscarlo por nombre
+        # Si no se proporciona file_id, buscamos por nombre
         if not file_id:
-            print("No se proporcionó file_id, intentando buscar por nombre...")
             match_file = re.search(r'(eliminar\s*(archivo)?|mover\s*(archivo)?)[:\s]*([\w\.\-_]+)(?:\s*a\s*(carpeta)?:?\s*(.+))?', user_text, re.IGNORECASE)
             if not match_file:
-                return jsonify({"error": "No entendí el nombre del archivo. Usa algo como 'eliminar archivo: nombre' o 'mover archivo: nombre a carpeta: destino'"}), 400
+                return jsonify({"error": "Usa algo como 'eliminar archivo: nombre' o 'mover archivo: nombre a carpeta: destino'"}), 400
 
             file_name = match_file.group(4).strip()
-            print(f"Nombre del archivo a buscar: {file_name}")
+            print(f"Buscando archivo: {file_name}")
 
             # Buscar archivo en OneDrive
             search_url = f"https://graph.microsoft.com/v1.0/me/drive/root/search(q='{file_name}')"
             try:
                 response = requests.get(search_url, headers=headers, timeout=10)
                 print(f"Search response: {response.status_code} {response.text}")
-                if response.status_code == 401:
-                    return jsonify({"error": "No autorizado. Verifica el token de acceso."}), 401
                 response.raise_for_status()
-            except requests.exceptions.RequestException as e:
-                print(f"Error al buscar archivo: {str(e)}")
-                return jsonify({"error": "Error al buscar el archivo en OneDrive", "details": str(e)}), 500
+            except requests.RequestException as e:
+                return jsonify({"error": "Error al buscar el archivo", "details": str(e)}), 500
 
             results = response.json().get('value', [])
-            if not results:
-                return jsonify({"error": f"No encontré el archivo '{file_name}' en OneDrive. Revisa el nombre e intenta de nuevo."}), 404
+            file_match = next((r for r in results if r['name'].lower() == file_name.lower() and "folder" not in r), None)
+            if not file_match:
+                return jsonify({"error": f"No encontré '{file_name}' en OneDrive."}), 404
 
-            for result in results:
-                onedrive_file_name = result['name']
-                if onedrive_file_name.lower().startswith(file_name.lower()) and "folder" not in result:  # Asegurarnos de que no sea una carpeta
-                    file_id = result['id']
-                    break
-
-            if not file_id:
-                return jsonify({"error": f"No encontré el archivo '{file_name}' en OneDrive. Revisa el nombre e intenta de nuevo."}), 404
-            print(f"Archivo encontrado, file_id: {file_id}")
+            file_id = file_match['id']
+            print(f"Archivo encontrado: {file_id}")
 
         # Acción: Eliminar archivo
         if action == "delete":
@@ -1054,31 +1038,26 @@ def setup_routes_secretary_posts(app, mongo, cache, refresh_functions):
                 )
                 print(f"Delete response: {response.status_code} {response.text}")
                 if response.status_code == 204:
-                    # Actualizar la caché después de eliminar
                     updated_user = mongo.database.usuarios.find_one({"correo": email})
                     if updated_user:
                         cache.set(email, updated_user, timeout=1800)
-                        print(f"Cache updated for user {email} after deleting file")
-                    return jsonify({"success": f"¡Listo! El archivo ha sido eliminado de OneDrive con éxito."})
-                else:
-                    return jsonify({"error": "No pude eliminar el archivo, ¿lo intentamos otra vez?", "details": response.text}), response.status_code
-            except requests.exceptions.RequestException as e:
-                print(f"Error al eliminar archivo: {str(e)}")
-                return jsonify({"error": "Error al intentar eliminar el archivo", "details": str(e)}), 500
+                    return jsonify({"success": f"¡Listo! Archivo eliminado de OneDrive."})
+                return jsonify({"error": "No pude eliminar el archivo", "details": response.text}), response.status_code
+            except requests.RequestException as e:
+                return jsonify({"error": "Error al eliminar", "details": str(e)}), 500
 
         # Acción: Mover archivo
         elif action == "move":
-            match_dest = re.search(r'(?:mover\s*(archivo)?|mueve(?:\s*a)?)[:\s]*[\w\.\-_]+\s*(?:a\s*(carpeta)?:?\s*(.+))', user_text, re.IGNORECASE)
+            match_dest = re.search(r'mover\s*(archivo)?[:\s]*[\w\.\-_]+\s*a\s*(carpeta)?:?\s*(.+)', user_text, re.IGNORECASE)
             if not match_dest:
                 return jsonify({"error": "Dime a qué carpeta moverlo (ej: 'mover archivo: nombre a carpeta: destino')"}), 400
             dest_folder_name = match_dest.group(3).strip()
-            print(f"Carpeta de destino: {dest_folder_name}")
+            print(f"Buscando carpeta: {dest_folder_name}")
 
-            # Buscar el ID de la carpeta de destino
+            # Buscar carpeta en OneDrive
             dest_folder_id = get_file_id_by_name(dest_folder_name, is_folder=True, headers=headers)
             if not dest_folder_id:
-                return jsonify({"error": f"No encontré la carpeta '{dest_folder_name}' en OneDrive"}), 404
-            print(f"ID de la carpeta de destino: {dest_folder_id}")
+                return jsonify({"error": f"No encontré la carpeta '{dest_folder_name}'"}), 404
 
             try:
                 response = requests.patch(
@@ -1089,32 +1068,28 @@ def setup_routes_secretary_posts(app, mongo, cache, refresh_functions):
                 )
                 print(f"Move response: {response.status_code} {response.text}")
                 if response.status_code == 200:
-                    # Actualizar la caché después de mover
                     updated_user = mongo.database.usuarios.find_one({"correo": email})
                     if updated_user:
                         cache.set(email, updated_user, timeout=1800)
-                        print(f"Cache updated for user {email} after moving file")
-                    return jsonify({"success": f"¡Hecho! El archivo ha sido movido a '{dest_folder_name}' con éxito."})
-                else:
-                    return jsonify({"error": "No pude mover el archivo, ¿probamos de nuevo?", "details": response.text}), response.status_code
-            except requests.exceptions.RequestException as e:
-                print(f"Error al mover archivo: {str(e)}")
-                return jsonify({"error": "Error al intentar mover el archivo", "details": str(e)}), 500
+                    return jsonify({"success": f"¡Hecho! Archivo movido a '{dest_folder_name}'."})
+                return jsonify({"error": "No pude mover el archivo", "details": response.text}), response.status_code
+            except requests.RequestException as e:
+                return jsonify({"error": "Error al mover", "details": str(e)}), 500
 
-        return jsonify({"error": "No entendí, ¿quieres 'eliminar' o 'mover' el archivo?"}), 400
+        return jsonify({"error": "No entendí, ¿quieres 'eliminar' o 'mover'?"}), 400
 
     def get_file_id_by_name(file_name, is_folder=False, headers=None):
         """Busca el ID de un archivo o carpeta por nombre en OneDrive."""
         try:
             url = f"https://graph.microsoft.com/v1.0/me/drive/root/search(q='{file_name}')"
             response = requests.get(url, headers=headers, timeout=10)
-            print(f"Search folder response: {response.status_code} {response.text}")
+            print(f"Search response: {response.status_code} {response.text}")
             if response.status_code == 200:
                 items = response.json().get("value", [])
                 for item in items:
                     if item["name"].lower() == file_name.lower() and ("folder" in item) == is_folder:
                         return item["id"]
             return None
-        except requests.exceptions.RequestException as e:
+        except requests.RequestException as e:
             print(f"Error al buscar en OneDrive: {str(e)}")
             return None

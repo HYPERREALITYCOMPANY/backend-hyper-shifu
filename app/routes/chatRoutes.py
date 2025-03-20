@@ -250,13 +250,16 @@ def setup_routes_chats(app, mongo, cache, refresh_functions):
                 f"   - Si es un saludo, responde con 'Es un saludo'.\n"
                 f"   - Si es una solicitud GET, responde con 'Es una solicitud GET'.\n"
                 f"   - Si es una solicitud POST simple (acción única), responde con 'Es una solicitud POST'.\n"
+                f"   - Si es una solicitud INFO (pregunta genérica sobre capacidades, ej: 'Puedes...?', 'Sabes...?', 'Tienes...?'), responde con 'Es una solicitud INFO'. IMPORTANTE: Si la pregunta incluye detalles específicos como destinatario, asunto, cuerpo, nombre de tarea, etc. (ej: 'Puedes mandar un correo a Juan con asunto Reunión?', 'Puedes completar una tarea X en Notion?'), clasifícala como POST, NO como INFO.\n"
                 f"   - Si es una solicitud POST automatizada o quemada (para ejecutar siempre cuando ocurra algo), responde con 'Es una solicitud automatizada'.\n"
                 f"   - Si es una solicitud que menciona algo sobre una conversación o respuesta anterior (ejemplo: 'de lo que hablamos antes', 'en la conversación anterior', 'acerca del mensaje previo', 'respuesta anterior', 'de que trataba', etc), responde con 'Se refiere a la respuesta anterior'.\n\n"
                 
                 f"REGLAS CRÍTICAS PARA CLASIFICACIÓN DE SOLICITUDES:\n"
                 f"- SOLICITUDES GET: Cuando el usuario usa verbos como 'Mándame', 'Pásame', 'Envíame', 'Muéstrame', 'Busca', 'Encuentra', 'Dame', 'Dime', 'Quiero ver' dirigidos a SÍ MISMO.\n"
-                f"- SOLICITUDES POST SIMPLE: Verbos de acción hacia sistemas o terceros: 'Crear', 'Enviar (a otra persona)', 'Eliminar', 'Mover', 'Actualizar', 'Editar', 'Agregar'.\n"
+                f"- SOLICITUDES POST SIMPLE: Verbos de acción hacia sistemas o terceros: 'Crear', 'Enviar (a otra persona)', 'Eliminar', 'Mover', 'Actualizar', 'Editar', 'Agregar'. También incluye preguntas con 'Puedes...?' que especifiquen detalles (ej: 'Puedes mandar un correo a Juan con asunto Reunión?').\n"
+                f"- SOLICITUDES INFO: Preguntas GENÉRICAS sobre capacidades sin detalles específicos: 'Puedes...?', 'Sabes...?', 'Tienes...?'. NO ejecutar acciones, solo describir capacidades.\n"
                 f"- SOLICITUDES POST AUTOMATIZADAS: Frases que indican automatización: 'Cada vez que', 'Siempre que', 'Cuando ocurra', 'Automáticamente', contienen una condición Y una acción.\n\n"
+    
                 
                 f"ESPECIFICAMENTE SI Y SOLO SI LA SOLICITUD ES TIPO GET:\n"
                 f"En caso de ser una solicitud GET, desglosa las partes relevantes para cada API (Gmail, Notion, Slack, HubSpot, Outlook, ClickUp, Dropbox, Asana, Google Drive, OneDrive, Teams).\n"
@@ -456,6 +459,57 @@ def setup_routes_chats(app, mongo, cache, refresh_functions):
                 f"    }},\n"
                 f"    // ... (y así para todos los servicios aplicables)\n"
                 f"}}\n\n"
+                
+                f"ESPECIFICAMENTE SI Y SOLO SI LA SOLICITUD ES TIPO INFO:\n"
+                f"Responde con 'Es una solicitud INFO' seguido de un JSON que detalle las capacidades relevantes de Shiffu relacionadas con lo preguntado. NO ejecutes ninguna acción.\n"
+                f"Estructura del JSON para INFO:\n"
+                f"{{\n"
+                f"    \"capabilities\": {{\n"
+                f"        \"gmail\": \"<qué puede hacer en Gmail o 'N/A' si no aplica>\",\n"
+                f"        \"notion\": \"<qué puede hacer en Notion o 'N/A' si no aplica>\",\n"
+                f"        \"slack\": \"<qué puede hacer en Slack o 'N/A' si no aplica>\",\n"
+                f"        \"hubspot\": \"<qué puede hacer en HubSpot o 'N/A' si no aplica>\",\n"
+                f"        \"outlook\": \"<qué puede hacer en Outlook o 'N/A' si no aplica>\",\n"
+                f"        \"clickup\": \"<qué puede hacer en ClickUp o 'N/A' si no aplica>\",\n"
+                f"        \"dropbox\": \"<qué puede hacer en Dropbox o 'N/A' si no aplica>\",\n"
+                f"        \"asana\": \"<qué puede hacer en Asana o 'N/A' si no aplica>\",\n"
+                f"        \"googledrive\": \"<qué puede hacer en Google Drive o 'N/A' si no aplica>\",\n"
+                f"        \"onedrive\": \"<qué puede hacer en OneDrive o 'N/A' si no aplica>\",\n"
+                f"        \"teams\": \"<qué puede hacer en Teams o 'N/A' si no aplica>\"\n"
+                f"    }}\n"
+                f"}}\n"
+                f"Ejemplo: Si el usuario pregunta 'Puedes enviar un correo?', responde:\n"
+                f"'Es una solicitud INFO'\n"
+                f"{{\n"
+                f"    \"capabilities\": {{\n"
+                f"        \"gmail\": \"Puedo enviar correos con asunto y cuerpo a cualquier destinatario, y crear borradores.\",\n"
+                f"        \"outlook\": \"Puedo enviar correos con asunto y cuerpo a cualquier destinatario, y crear borradores.\",\n"
+                f"        \"teams\": \"Puedo enviar mensajes directos o a canales.\",\n"
+                f"        \"slack\": \"Puedo enviar mensajes directos o a canales.\",\n"
+                f"        \"notion\": \"N/A\",\n"
+                f"        \"hubspot\": \"N/A\",\n"
+                f"        \"clickup\": \"N/A\",\n"
+                f"        \"dropbox\": \"N/A\",\n"
+                f"        \"asana\": \"N/A\",\n"
+                f"        \"googledrive\": \"N/A\",\n"
+                f"        \"onedrive\": \"N/A\"\n"
+                f"    }}\n"
+                f"}}\n"
+                f"Ejemplo: Si el usuario pregunta 'Puedes mandar un correo a Juan con asunto Reunión?', responde:\n"
+                f"'Es una solicitud POST'\n"
+                f"{{\n"
+                f"    \"gmail\": \"enviar correo a Juan@gmail.com con asunto: Reunión y cuerpo: n/a\",\n"
+                f"    \"notion\": \"N/A\",\n"
+                f"    \"slack\": \"N/A\",\n"
+                f"    \"hubspot\": \"N/A\",\n"
+                f"    \"outlook\": \"enviar correo a Juan@gmail.com con asunto: Reunión y cuerpo: n/a\",\n"
+                f"    \"clickup\": \"N/A\",\n"
+                f"    \"dropbox\": \"N/A\",\n"
+                f"    \"asana\": \"N/A\",\n"
+                f"    \"googledrive\": \"N/A\",\n"
+                f"    \"onedrive\": \"N/A\",\n"
+                f"    \"teams\": \"N/A\"\n"
+                f"}}\n"
                 
                 f"CAPACIDADES ESPECÍFICAS POR API:\n"
                 f"- GMAIL: Buscar correos por asunto/remitente, eliminar correos, mover a spam, enviar correo, crear borrador.\n"
@@ -845,6 +899,42 @@ def setup_routes_chats(app, mongo, cache, refresh_functions):
 
                     except json.JSONDecodeError:
                         return jsonify({"error": "Formato JSON inválido"}), 400
+                elif 'info' in ia_interpretation:
+                    prompt_info = (
+                        f"Usuario: {last_message}\n"
+                        f"Responde de manera amigable y conversacional explicando si puedes realizar lo que el usuario pregunta sobre tus capacidades y cómo debe pedírtelo para que lo hagas. "
+                        f"Usa un tono natural, incluye emojis y evita sonar técnico. "
+                        f"Básate en estas capacidades específicas por API:\n"
+                        f"- GMAIL: Buscar correos por asunto/remitente, eliminar correos, mover a spam, enviar correo, crear borrador.\n"
+                        f"- NOTION: Status de tareas, información de bloques de página.\n"
+                        f"- CLICKUP: Status de tareas, marcar tareas como completadas.\n"
+                        f"- OUTLOOK: Obtener correos, mover a spam, eliminar correos.\n"
+                        f"- HUBSPOT: Mostrar información de contactos y negocios.\n"
+                        f"- ASANA: Mostrar tareas con los status.\n"
+                        f"- ONEDRIVE/GOOGLE DRIVE/DROPBOX: Mostrar archivos en carpetas, mover/eliminar archivos, crear carpetas.\n"
+                        f"- SLACK: Buscar mensajes en canales.\n"
+                        f"- TEAMS: Búsqueda de mensajes y conversaciones.\n"
+                        f"Si no puedes hacer lo que pregunta, dile amablemente que no está entre tus capacidades y sugiere algo relacionado que sí puedas hacer."
+                    )
+
+                    response_info = openai.chat.completions.create(
+                        model="gpt-3.5-turbo",
+                        messages=[{
+                            "role": "system",
+                            "content": (
+                                "Eres Shiffu, un asistente virtual amigable y útil. "
+                                "Cuando el usuario pregunta sobre tus capacidades (ej. 'Puedes enviar un correo?', 'Puedes completar una tarea en Notion?'), "
+                                "responde de forma natural y cercana diciendo si puedes hacerlo y cómo debe pedírtelo para que lo ejecutes. "
+                                "Usa emojis para un tono cálido y limita tu respuesta a lo preguntado, sin listar todas tus funciones."
+                            )
+                        }, {
+                            "role": "user",
+                            "content": prompt_info
+                        }],
+                        max_tokens=150
+                    )
+
+                    ia_response = response_info.choices[0].message.content.strip()
                 elif 'anterior' in ia_interpretation:
                     reference_prompt = f"El usuario dijo: '{last_message}'\n"
                     reference_prompt += f"La última respuesta de la IA fue: '{last_response}'.\n"

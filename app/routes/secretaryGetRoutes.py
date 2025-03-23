@@ -119,7 +119,7 @@ def setup_routes_secretary_gets(app, mongo, cache, refresh_functions):
         response = requests.get(
             "https://www.googleapis.com/gmail/v1/users/me/messages",
             headers=headers,
-            params={"maxResults": 1, "q": "in:inbox -from:me"}
+            params={"maxResults": 1, "q": "in:inbox"}
         )
         if response.status_code != 200:
             return None

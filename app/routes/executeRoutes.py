@@ -102,7 +102,7 @@ def setup_execute_routes(app,mongo, cache, refresh_functions):
         except Exception as e:
             print(f"[ERROR] Error en get_user_with_refreshed_tokens para {email}: {e}")
             return None
-        
+                
     @app.route('/execute/gmail', methods=['GET'])
     def execute_gmail_rules():
         email = request.args.get('email')
@@ -151,7 +151,7 @@ def setup_execute_routes(app,mongo, cache, refresh_functions):
                         if messages:
                             for message in messages:
                                 message_id = message['id']
-                                if action == "borrar":
+                                if action in ["borrar", "eliminar"]:
                                     delete_url = f"https://www.googleapis.com/gmail/v1/users/me/messages/{message_id}/trash"
                                     delete_response = requests.post(delete_url, headers=headers)
                                     if delete_response.status_code == 204:

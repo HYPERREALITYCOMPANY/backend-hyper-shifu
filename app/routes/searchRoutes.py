@@ -988,6 +988,11 @@ def setup_routes_searchs(app, mongo, cache, refresh_functions):
     @app.route('/search/asana', methods=["GET"])
     def search_asana(query):
         email = request.args.get('email')
+        if query == "n/a":
+            return jsonify({"message": "No hay resultados en Asana"}), 200
+        if not email:
+            return jsonify({"error": "Falta el parámetro 'email'"}), 400
+
         try:
             user = get_user_with_refreshed_tokens(email)
             if not user:
@@ -995,58 +1000,74 @@ def setup_routes_searchs(app, mongo, cache, refresh_functions):
 
             asana_integration = user.get('integrations', {}).get('Asana', None)
             asana_token = asana_integration.get('token') if asana_integration else None
-
             if not asana_token:
                 return jsonify({"error": "Token de Asana no disponible"}), 400
 
-            # ✅ 1. Obtener el Workspace ID
+            # 1. Obtener el Workspace ID
             workspace_url = "https://app.asana.com/api/1.0/workspaces"
             headers = {'Authorization': f"Bearer {asana_token}"}
             workspace_response = requests.get(workspace_url, headers=headers)
-
             if workspace_response.status_code != 200:
                 return jsonify({"error": "No se pudieron obtener los espacios de trabajo", "details": workspace_response.text}), workspace_response.status_code
 
             workspaces = workspace_response.json().get('data', [])
             if not workspaces:
                 return jsonify({"error": "El usuario no tiene espacios de trabajo en Asana"}), 400
+            workspace_id = workspaces[0].get('gid')
+            print(f"Usando workspace_id: {workspace_id}")
 
-            workspace_id = workspaces[0].get('gid')  # Tomamos el primer workspace disponible
+            # 2. Obtener el ID del usuario autenticado
+            user_url = "https://app.asana.com/api/1.0/users/me"
+            user_response = requests.get(user_url, headers=headers)
+            if user_response.status_code != 200:
+                return jsonify({"error": "No se pudo obtener el usuario autenticado", "details": user_response.text}), user_response.status_code
+            user_id = user_response.json().get('data', {}).get('gid')
+            print(f"Usando user_id: {user_id}")
 
-            # ✅ 2. Configurar la consulta según el tipo de búsqueda
+            # 3. Listar tareas asignadas al usuario en el workspace
+            tasks_url = "https://app.asana.com/api/1.0/tasks"
             params = {
-                "opt_fields": "name,gid,completed,assignee.name,due_on,projects.name"
+                "opt_fields": "name,gid,completed,assignee.name,due_on,projects.name",
+                "limit": 100,
+                "assignee": user_id,
+                "workspace": workspace_id
             }
+            print(f"Enviando solicitud a: {tasks_url} con params: {params}")
+            response = requests.get(tasks_url, headers=headers, params=params)
+            print(f"Respuesta de Asana: {response.status_code} {response.text}")
 
+            if response.status_code != 200:
+                return jsonify({"error": "Error al obtener tareas", "details": response.text}), response.status_code
+
+            tasks = response.json().get('data', [])
+            if not tasks:
+                return jsonify({"message": "No hay tareas asignadas al usuario en este workspace"}), 200
+
+            # 4. Filtrar tareas manualmente según la query
             from datetime import datetime, timedelta
-
             today = datetime.today().strftime('%Y-%m-%d')
             tomorrow = (datetime.today() + timedelta(days=1)).strftime('%Y-%m-%d')
+            query_lower = query.lower()
+            query_words = query_lower.split()  # Divide la query en palabras
 
-            if "hoy" in query:  # Buscar tareas con fecha de hoy
-                params["due_on"] = today
-            elif "mañana" in query:  # Buscar tareas con fecha de mañana
-                params["due_on"] = tomorrow
-            elif "pendientes" in query:  # Buscar solo tareas no completadas
-                params["completed"] = False
-            else:  # Búsqueda por texto (nombre o descripción)
-                params["text"] = query  
+            filtered_tasks = []
+            for task in tasks:
+                task_name = task.get('name', '').lower()
+                if "hoy" in query_lower and task.get('due_on') == today:
+                    filtered_tasks.append(task)
+                elif "mañana" in query_lower and task.get('due_on') == tomorrow:
+                    filtered_tasks.append(task)
+                elif "pendientes" in query_lower and not task.get('completed'):
+                    filtered_tasks.append(task)
+                elif any(word in task_name for word in query_words):  # Si alguna palabra coincide
+                    filtered_tasks.append(task)
 
-            # ✅ 3. Realizar la búsqueda
-            search_url = f"https://app.asana.com/api/1.0/workspaces/{workspace_id}/tasks/search"
-            response = requests.get(search_url, headers=headers, params=params)
+            if not filtered_tasks:
+                return jsonify({"message": f"No se encontraron resultados para la query: '{query}'"}), 200
 
-            if response.status_code == 404:
-                return jsonify({"error": "No se encontró la ruta en Asana. Verifica la URL y el workspace_id."}), 404
-
-            response.raise_for_status()
-            results = response.json().get('data', [])
-
-            if not results:
-                return jsonify({"message": "No se encontraron resultados en Asana"}), 200
-
+            # 5. Formatear resultados
             search_results = []
-            for task in results:
+            for task in filtered_tasks:
                 task_name = task.get('name', 'Sin título')
                 status = 'Completada' if task.get('completed') else 'Pendiente'
                 assignee = task.get('assignee', {}).get('name', 'Sin asignar')
@@ -1069,7 +1090,7 @@ def setup_routes_searchs(app, mongo, cache, refresh_functions):
             return jsonify({"error": "Error al realizar la solicitud a Asana", "details": str(e)}), 500
         except Exception as e:
             return jsonify({"error": "Error inesperado", "details": str(e)}), 500
-
+                            
     @app.route('/search/onedrive', methods=["GET"])
     def search_onedrive(query):        
         email = request.args.get('email')
@@ -1267,10 +1288,7 @@ def setup_routes_searchs(app, mongo, cache, refresh_functions):
             return None, None
      
     @app.route('/search/google_drive', methods=["GET"])
-    def search_google_drive():
-        print(query)
-        print(email)
-        query = request.args.get('query')
+    def search_google_drive(query):
         email = request.args.get('email')
 
         if not query:
@@ -1279,7 +1297,6 @@ def setup_routes_searchs(app, mongo, cache, refresh_functions):
         try:
             # 📌 Recuperar token de Google Drive
             user = get_user_with_refreshed_tokens(email)
-            print(user)
             if not user:
                 return jsonify({"error": "Usuario no encontrado."}), 404
 
@@ -1291,7 +1308,7 @@ def setup_routes_searchs(app, mongo, cache, refresh_functions):
                 "Authorization": f"Bearer {google_drive_token}",
                 "Accept": "application/json"
             }
-            
+
             # Determinar si la búsqueda es de archivo o carpeta
             search_name = ""
             search_mime = ""
@@ -1303,17 +1320,40 @@ def setup_routes_searchs(app, mongo, cache, refresh_functions):
             else:
                 return jsonify({"error": "Formato de consulta no válido. Use 'archivo:' o 'carpeta:'"}), 400
 
-            # Realizar la búsqueda en Google Drive con `trashed = false` para evitar archivos eliminados
-            params = {
-                "q": f"name contains \"{search_name}\" and trashed = false{search_mime}",
-                "spaces": "drive",
-                "fields": "files(id, name, mimeType, webViewLink, size, modifiedTime, owners(displayName, emailAddress))"
-            }
-            print("Parametros: ", params)
-            response = requests.get("https://www.googleapis.com/drive/v3/files", headers=headers, params=params)
-            print("Response: ", response)
-            data = response.json()
-            print("Data: ", data)
+            # Si es una carpeta, primero buscamos la carpeta por su nombre
+            if search_mime:  # Solo para carpetas
+                params = {
+                    "q": f"name contains \"{search_name}\" and trashed = false{search_mime}",
+                    "spaces": "drive",
+                    "fields": "files(id, name)"
+                }
+                response = requests.get("https://www.googleapis.com/drive/v3/files", headers=headers, params=params)
+                data = response.json()
+
+                if "files" not in data or not data["files"]:
+                    return jsonify([])  # No se encontraron carpetas
+
+                # Tomamos la primera carpeta encontrada (puedes ajustar esto si necesitas más)
+                folder_id = data["files"][0]["id"]
+
+                # Ahora buscamos los archivos dentro de esa carpeta
+                params = {
+                    "q": f"'{folder_id}' in parents and trashed = false",  # Busca archivos dentro de la carpeta
+                    "spaces": "drive",
+                    "fields": "files(id, name, mimeType, webViewLink, size, modifiedTime, owners(displayName, emailAddress))"
+                }
+                response = requests.get("https://www.googleapis.com/drive/v3/files", headers=headers, params=params)
+                data = response.json()
+
+            else:  # Si es un archivo, búsqueda directa
+                params = {
+                    "q": f"name contains \"{search_name}\" and trashed = false",
+                    "spaces": "drive",
+                    "fields": "files(id, name, mimeType, webViewLink, size, modifiedTime, owners(displayName, emailAddress))"
+                }
+                response = requests.get("https://www.googleapis.com/drive/v3/files", headers=headers, params=params)
+                data = response.json()
+
             if "files" not in data or not data["files"]:
                 return jsonify([])  # No se encontraron resultados
 
@@ -1328,14 +1368,14 @@ def setup_routes_searchs(app, mongo, cache, refresh_functions):
                     "owner": file.get("owners", [{}])[0].get("displayName", "Desconocido"),
                     "owner_email": file.get("owners", [{}])[0].get("emailAddress", "Desconocido")
                 })
-            
+
             return jsonify(search_results)
-        
+
         except requests.RequestException as e:
             return jsonify({"error": "Error en la solicitud a Google Drive", "details": str(e)}), 500
         except Exception as e:
             return jsonify({"error": "Error inesperado", "details": str(e)}), 500
-
+        
         
     return {
         "search_gmail": search_gmail,

@@ -176,16 +176,9 @@ def setup_routes_chats(app, mongo, cache, refresh_functions):
             for file in search_results.get('onedrive', []) if isinstance(file, dict)
         ]) or "No se encontraron archivos relacionados en OneDrive."
 
-        # Teams Results
-        teams_results = "\n".join([
-            f"Canal: {msg.get('channel', 'Desconocido')} | Usuario: {msg.get('user', 'Desconocido')} | Mensaje: {msg.get('text', 'Sin mensaje')} | Fecha: {msg.get('ts', 'Sin fecha')}"
-            for msg in search_results.get('teams', []) if isinstance(msg, dict)
-        ]) or "No se encontraron mensajes relacionados en Teams."
-
         # Google Drive Results
         google_drive_results = "\n".join([
             f"Archivo: {file.get('title', 'Sin nombre')} | "
-            f"Tamaño: {format_size(file.get('size'))} | "
             f"Modificado: {file.get('modified', 'Sin fecha')} | "
             f"Propietario: {file.get('owner', 'Desconocido')} ({file.get('owner_email', 'Sin correo')})"
             for file in search_results.get('googledrive', []) if isinstance(file, dict)
@@ -225,9 +218,6 @@ def setup_routes_chats(app, mongo, cache, refresh_functions):
 
     OneDrive:
     {onedrive_results}
-
-    Teams:
-    {teams_results}
 
     Responde de forma humana, concisa y en párrafo:
     Quiero que respondas a la query enviada por el usuario utilizando únicamente la información específica que se encuentra en cada API, descartando datos generales o irrelevantes. Es decir, si la query solicita detalles puntuales (por ejemplo, el estado de un proyecto con un nombre determinado, o información de un correo específico en Gmail), debes extraer y usar únicamente los registros que correspondan a esa solicitud y omitir el resto.

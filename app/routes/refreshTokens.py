@@ -56,14 +56,10 @@ def setup_routes_refresh(app, mongo, cache):
             "refresh_token": refresh_token,
             "grant_type": "refresh_token"
         }
-        try:
-            response = requests.post(url, data=data)
-            print(f"Gmail token refresh response: {response.status_code} {response.text}")
-            response.raise_for_status()
-            return response.json()["access_token"]
-        except requests.exceptions.RequestException as e:
-            print(f"Error completo de Gmail: {e.response.status_code} {e.response.text}")
-            raise
+        response = requests.post(url, data=data, timeout=10)
+        response.raise_for_status()
+        print(f"Gmail token refresh response: {response.status_code} {response.text}")
+        return response.json()["access_token"]
 
     def refresh_dropbox_token(refresh_token):
         url = "https://api.dropboxapi.com/oauth2/token"
@@ -73,7 +69,7 @@ def setup_routes_refresh(app, mongo, cache):
             "client_id": os.getenv("DROPBOX_CLIENT_ID"),
             "client_secret": os.getenv("DROPBOX_CLIENT_SECRET")
         }
-        response = requests.post(url, data=data)
+        response = requests.post(url, data=data, timeout=10)
         response.raise_for_status()
         print(f"Dropbox token refresh response: {response.status_code} {response.text}")
         return response.json()["access_token"]
@@ -89,7 +85,7 @@ def setup_routes_refresh(app, mongo, cache):
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
         
         try:
-            response = requests.post(url, data=data, headers=headers)
+            response = requests.post(url, data=data, headers=headers, timeout=10)
             print(f"Asana token refresh response: {response.status_code} {response.text}")
             response.raise_for_status()
             
@@ -113,7 +109,7 @@ def setup_routes_refresh(app, mongo, cache):
             "client_secret": os.getenv("HUBSPOT_CLIENT_SECRET"),
             "refresh_token": refresh_token
         }
-        response = requests.post(url, data=data)
+        response = requests.post(url, data=data, timeout=10)
         response.raise_for_status()
         print(f"HubSpot token refresh response: {response.status_code} {response.text}")
         return response.json()["access_token"]
@@ -126,7 +122,7 @@ def setup_routes_refresh(app, mongo, cache):
             "refresh_token": refresh_token,
             "grant_type": "refresh_token"
         }
-        response = requests.post(url, data=data)
+        response = requests.post(url, data=data, timeout=10)
         response.raise_for_status()
         print(f"Drive token refresh response: {response.status_code} {response.text}")
         return response.json()["access_token"]

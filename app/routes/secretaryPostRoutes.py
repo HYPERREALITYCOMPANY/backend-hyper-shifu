@@ -3,6 +3,7 @@ import requests
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import re
+import time
 import json
 import base64
 from config import Config
@@ -358,14 +359,17 @@ def setup_routes_secretary_posts(app, mongo, cache, refresh_functions):
             return jsonify({"success": f"¡Hecho! Mencioné a {mention_target}."}) if response.status_code == 200 and response.json().get("ok") else jsonify({"error": "No pude mencionarlo, ¿lo intentamos otra vez?"}), response.status_code
 
         return jsonify({"error": "No entendí, ¿quieres 'responde', 'reacciona' o 'menciona'?"}), 400
-
+    
     @app.route("/accion-drive", methods=["POST"])
     def ejecutar_accion_drive():
         data = request.json
         email = data.get("email")
         user_text = data.get("action_text")
-        file_id = data.get("file_id")
+        message_id = data.get("message_id")  # Es el file_id
+        print("user_text:", user_text)
+        print("message_id (file_id):", message_id)
 
+        # Validaciones iniciales
         if not email or not user_text:
             return jsonify({"error": "Me faltan datos: tu email y qué hacer, ¿me los das?"}), 400
 
@@ -374,48 +378,125 @@ def setup_routes_secretary_posts(app, mongo, cache, refresh_functions):
             return jsonify({"error": "No te encontré, ¿estás registrado?"}), 404
 
         token = user.get("integrations", {}).get("Drive", {}).get("token")
+        print("Token:", token)
         if not token:
             return jsonify({"error": "No tengo acceso a tu Drive, ¿revisamos?"}), 400
 
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         action = interpretar_accion_archivos(user_text)
+        print("action:", action)
 
-        # Si no hay file_id, buscar por nombre
-        if not file_id and action in ["delete", "move", "share"]:
-            match = re.search(r'(eliminar|mover|compartir)\s*archivo:\s*(.+)', user_text, re.IGNORECASE)
-            if not match:
-                return jsonify({"error": "Dime el nombre del archivo (ej: 'eliminar archivo: doc.txt')"}), 400
-            file_name = match.group(2).strip()
-            file_id = get_file_id_by_name(file_name, is_folder=False, headers=headers)
-            if not file_id:
-                return jsonify({"error": f"No encontré el archivo '{file_name}'"}), 404
+        if not action:
+            return jsonify({"error": "No entendí, ¿quieres 'eliminar', 'mover', 'crear carpeta' o 'compartir'?"}), 400
 
-        if action == "delete":
-            response = requests.patch(
-                f"https://www.googleapis.com/drive/v3/files/{file_id}",
+        if action in ["delete", "move"] and not message_id:
+            return jsonify({"error": "Necesito el ID del archivo para esta acción"}), 400
+
+        # Eliminar archivo
+        if "delete" in action:
+            metadata_response = requests.get(
+                f"https://www.googleapis.com/drive/v3/files/{message_id}",
                 headers=headers,
-                json={"trashed": True}
+                params={"fields": "name,permissions,ownedByMe,trashed"}
             )
-            return jsonify({"success": "¡Listo! El archivo está en la papelera."}) if response.status_code == 200 else jsonify({"error": "No pude eliminarlo", "details": response.text}), response.status_code
+            if metadata_response.status_code != 200:
+                print("Metadata error:", metadata_response.text)
+                return jsonify({"error": "No pude verificar el archivo", "details": metadata_response.text}), metadata_response.status_code
+            
+            file_data = metadata_response.json()
+            print("File data:", file_data)
+            file_name = file_data.get("name", "archivo")
+            owned_by_me = file_data.get("ownedByMe", False)
+            permissions = file_data.get("permissions", [])
+            is_trashed = file_data.get("trashed", False)
+            
+            if is_trashed:
+                return jsonify({"message": f"⚠️ El archivo '{file_name}' ya está en la papelera."})
+            
+            can_delete = owned_by_me or any(p.get("role") in ["owner", "writer"] for p in permissions)
+            if not can_delete:
+                return jsonify({"error": f"No tienes permiso para eliminar el archivo '{file_name}'"}), 403
 
-        elif action == "move":
-            match = re.search(r'mover\s*archivo:\s*.+?\s*a\s*carpeta:\s*(.+)', user_text, re.IGNORECASE)
-            if not match:
-                return jsonify({"error": "Dime a qué carpeta moverlo (ej: 'mover archivo: doc.txt a carpeta: Trabajo')"}), 400
-            folder_name = match.group(1).strip()
-            folder_id = get_file_id_by_name(folder_name, is_folder=True, headers=headers)
-            if not folder_id:
-                return jsonify({"error": f"No encontré la carpeta '{folder_name}'"}), 404
-            response = requests.patch(
-                f"https://www.googleapis.com/drive/v3/files/{file_id}",
-                headers=headers,
-                json={"addParents": folder_id}
-            )
+            trash_url = f"https://www.googleapis.com/drive/v3/files/{message_id}"
+            trash_data = {"trashed": True}
+            response = requests.patch(trash_url, headers=headers, json=trash_data)
             if response.status_code == 200:
-                return jsonify({"success": f"¡Hecho! Moví el archivo a '{folder_name}'."})
-            return jsonify({"error": "No pude moverlo", "details": response.text}), response.status_code
+                return jsonify({"success": f"🗑️ El archivo '{file_name}' ha sido movido a la papelera de Google Drive con éxito! 🚀"})
+            print("Delete error details:", response.text)
+            return jsonify({"error": "No pude eliminar el archivo", "details": response.text}), response.status_code
 
-        elif action == "create_folder":
+        # Mover archivo (corregido y adaptado de post_to_googledrive)
+        if "move" in action:
+            match = re.search(r'(?:carpeta\s+(.+))', user_text, re.IGNORECASE)
+            print("Match object:", match)
+            if not match:
+                return jsonify({"error": "Dime a qué carpeta moverlo (ej: 'mueve el archivo a la carpeta Trabajo')"}), 400
+            folder_name = match.group(1).strip()
+            print("Folder name to move to:", folder_name)
+
+            # Buscar la carpeta en Google Drive
+            search_url = "https://www.googleapis.com/drive/v3/files"
+            params = {
+                "q": f"name contains \"{folder_name}\" and mimeType = \"application/vnd.google-apps.folder\" and trashed=false",
+                "fields": "files(id, name)"
+            }
+            response = requests.get(search_url, headers=headers, params=params)
+            print("Search status code:", response.status_code)
+            print("Search response:", response.text)
+            
+            if response.status_code != 200 or not response.json().get('files'):
+                return jsonify({"message": f"⚠️ No se encontró una carpeta con el nombre '{folder_name}'. ¿Podrías verificar y especificar el nombre correcto?"})
+            
+            folders = response.json().get('files', [])
+            if len(folders) > 1:
+                options = "\n".join([f"{i + 1}. {folder['name']}" for i, folder in enumerate(folders)])
+                return jsonify({"message": f"⚠️ Se encontraron varias carpetas con el nombre '{folder_name}'. Por favor, elige una:\n{options}"})
+            
+            folder_id = folders[0]['id']
+            print("Folder ID:", folder_id)
+
+            # Obtener info del archivo antes de mover (para conocer los padres actuales)
+            file_info = requests.get(
+                f"https://www.googleapis.com/drive/v3/files/{message_id}",
+                headers=headers,
+                params={"fields": "parents,name"}
+            )
+            if file_info.status_code != 200:
+                return jsonify({"error": "No pude obtener info del archivo", "details": file_info.text}), 500
+            
+            file_data = file_info.json()
+            current_parents = file_data.get("parents", [])
+            file_name = file_data.get("name", "archivo")
+            print("Current parents (before):", current_parents)
+            print("File name:", file_name)
+
+            # Mover el archivo: agregar nuevo padre y eliminar los anteriores
+            file_url = f"https://www.googleapis.com/drive/v3/files/{message_id}"
+            move_data = {
+                "addParents": folder_id,
+                "removeParents": ",".join(current_parents) if current_parents else None
+            }
+            print("Move file data:", move_data)
+            
+            # Asegurarse de que el Content-Type esté correctamente configurado
+            headers_with_content = headers.copy()
+            headers_with_content["Content-Type"] = "application/json"
+            
+            move_response = requests.patch(
+                file_url,
+                headers=headers_with_content,
+                json=move_data,
+                params={"fields": "id,name,parents"}
+            )
+            print("Move status code:", move_response.status_code)
+            print("Move response:", move_response.text)
+
+            if move_response.status_code == 200:
+                return jsonify({"success": f"🎉 El archivo '{file_name}' ha sido movido a la carpeta '{folder_name}' en Google Drive con éxito! 🚀"})
+            return jsonify({"error": "No pude mover el archivo", "details": move_response.text}), move_response.status_code
+
+        # Crear carpeta
+        if action == "create_folder":
             match = re.search(r'crear\s*carpeta:\s*(.+)', user_text, re.IGNORECASE)
             if not match:
                 return jsonify({"error": "Dime el nombre de la carpeta (ej: 'crear carpeta: Nueva')"}), 400
@@ -426,36 +507,41 @@ def setup_routes_secretary_posts(app, mongo, cache, refresh_functions):
                 json={"name": folder_name, "mimeType": "application/vnd.google-apps.folder"}
             )
             if response.status_code == 200:
-                return jsonify({"success": f"¡Listo! Creada la carpeta '{folder_name}' en Google Drive."})
-            return jsonify({"error": "No pude crearla", "details": response.text}), response.status_code
+                return jsonify({"message": f"🎉 ¡La carpeta '{folder_name}' ha sido creada con éxito en Drive! 📂"})
+            return jsonify({"error": "No pude crear la carpeta", "details": response.text}), response.status_code
 
-        elif action == "share":
-            match = re.search(r'compartir\s*archivo:\s*.+?\s*con:\s*(.+)', user_text, re.IGNORECASE)
+        # Compartir archivo
+        if "share" in action:
+            if not message_id:
+                return jsonify({"error": "Necesito el ID del archivo para compartirlo"}), 400
+            match = re.search(r'compartir\s*(?:el\s*)?archivo\s*(?:con)?\s*[:\s]*(.+)', user_text, re.IGNORECASE)
             if not match:
-                return jsonify({"error": "Dime con quién compartirlo (ej: 'compartir archivo: doc.txt con: user@example.com')"}), 400
+                return jsonify({"error": "Dime con quién compartirlo (ej: 'compartir archivo con: user@example.com')"}), 400
             emails = [email.strip() for email in match.group(1).split(",")]
             for email in emails:
                 response = requests.post(
-                    f"https://www.googleapis.com/drive/v3/files/{file_id}/permissions",
+                    f"https://www.googleapis.com/drive/v3/files/{message_id}/permissions",
                     headers=headers,
-                    json={"type": "user", "role": "reader", "emailAddress": email}
+                    json={"type": "user", "role": "writer", "emailAddress": email}
                 )
                 if response.status_code != 200:
                     return jsonify({"error": f"No pude compartir con '{email}'", "details": response.text}), response.status_code
-            return jsonify({"success": f"¡Listo! Archivo compartido con {', '.join(emails)}."})
+            return jsonify({"success": f"🎉 ¡Archivo compartido con {', '.join(emails)} con éxito! 🤝"})
 
-        return jsonify({"error": "No entendí, ¿quieres 'eliminar', 'mover', 'crear carpeta' o 'compartir'?"}), 400
+        return jsonify({"error": "No entendí, ¿qué acción quieres realizar?"}), 400
 
     def get_file_id_by_name(name, is_folder=False, headers=None):
         url = "https://www.googleapis.com/drive/v3/files"
         mime_type = "application/vnd.google-apps.folder" if is_folder else None
-        params = {"q": f"name contains '{name}' trashed=false", "fields": "files(id)"}
+        params = {"q": f"'me' in owners name contains '{name}' trashed=false", "fields": "files(id)"}
         if mime_type:
             params["q"] += f" mimeType='{mime_type}'"
         response = requests.get(url, headers=headers, params=params)
+        if response.status_code != 200:
+            return None
         files = response.json().get("files", [])
         return files[0]["id"] if files else None
-
+    
     @app.route("/accion-asana", methods=["POST"])
     def ejecutar_accion_asana():
         data = request.json
@@ -890,11 +976,15 @@ def setup_routes_secretary_posts(app, mongo, cache, refresh_functions):
 
     @app.route("/accion-dropbox", methods=["POST"])
     def ejecutar_accion_dropbox():
+        print("Hola papu")
         data = request.json
         email = data.get("email")
         user_text = data.get("action_text")
-        file_path = data.get("file_path")
+        file_id = data.get("message_id") 
+        print("user_text:", user_text)
+        print("file_id:", file_id)
 
+        # Validaciones iniciales
         if not email or not user_text:
             return jsonify({"error": "Me faltan datos: tu email y qué hacer, ¿me los das?"}), 400
 
@@ -908,46 +998,74 @@ def setup_routes_secretary_posts(app, mongo, cache, refresh_functions):
 
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         action = interpretar_accion_archivos(user_text)
+        print(action)
+        # Si no se reconoce la acción, devolvemos error
+        if not action:
+            return jsonify({"error": "No entendí, ¿quieres 'eliminar', 'mover', 'crear carpeta' o 'restaurar'?"}), 400
 
-        # Si no hay file_path, buscar por nombre
-        if not file_path and action in ["delete", "move", "restore"]:
-            match = re.search(r'(eliminar|mover|restaurar)\s*archivo:\s*(.+)', user_text, re.IGNORECASE)
-            if not match:
-                return jsonify({"error": "Dime el nombre del archivo (ej: 'eliminar archivo: doc.txt')"}), 400
-            file_name = match.group(2).strip()
+        # Para acciones que requieren un archivo (delete, move, restore), usamos el ID
+        if action in ["delete", "move", "restore"] and not file_id:
+            return jsonify({"error": "Necesito el ID del archivo para esta acción"}), 400
+
+        # Obtener la ruta completa del archivo usando el ID
+        metadata_response = requests.post(
+            "https://api.dropboxapi.com/2/files/get_metadata",
+            headers=headers,
+            json={"path": file_id}
+        )
+        if metadata_response.status_code != 200:
+            return jsonify({
+                "error": "No pude obtener los metadatos del archivo", 
+                "details": metadata_response.text
+            }), 500
+        file_path = metadata_response.json().get("path_display")
+        print(file_path)
+        
+        if not file_path:
+            return jsonify({"error": "No encontré la ruta del archivo"}), 404
+
+        # Restaurar archivo
+        if "restore" in action:
+            # Buscar revisiones del archivo usando el path
             response = requests.post(
-                "https://api.dropboxapi.com/2/files/search_v2",
+                "https://api.dropboxapi.com/2/files/list_revisions",
                 headers=headers,
-                json={"query": file_name, "options": {"max_results": 10, "file_status": "active"}}
+                json={"path": file_path, "limit": 1}
             )
-            if response.status_code != 200:
-                return jsonify({"error": "Error al buscar el archivo", "details": response.text}), 500
-            results = response.json().get("matches", [])
-            if not results:
-                return jsonify({"error": f"No encontré '{file_name}' en Dropbox"}), 404
-            file_match = next((r for r in results if r['metadata']['metadata']['.tag'] == 'file' and r['metadata']['metadata']['name'].lower() == file_name.lower()), None)
-            if not file_match:
-                return jsonify({"error": f"No encontré un archivo exacto llamado '{file_name}'"}), 404
-            file_path = file_match['metadata']['metadata']['path_lower']
+            if response.status_code != 200 or not response.json().get("entries"):
+                return jsonify({"message": f"⚠️ No encontré revisiones para el archivo"}), 404
+            
+            rev = response.json()["entries"][0]["rev"]
+            restore_response = requests.post(
+                "https://api.dropboxapi.com/2/files/restore",
+                headers=headers,
+                json={"path": file_path, "rev": rev}
+            )
+            if restore_response.status_code == 200:
+                return jsonify({"message": f"🎉 ¡El archivo ha sido restaurado exitosamente! 🙌"})
+            return jsonify({"error": "No pude restaurar el archivo", "details": restore_response.text}), restore_response.status_code
 
-        if action == "delete":
+        # Eliminar archivo
+        if "delete" in action:
+            print("deletetetet")
             response = requests.post(
                 "https://api.dropboxapi.com/2/files/delete_v2",
                 headers=headers,
                 json={"path": file_path}
             )
             if response.status_code == 200:
-                updated_user = mongo.database.usuarios.find_one({"correo": email})
-                if updated_user:
-                    cache.set(email, updated_user, timeout=1800)
-                return jsonify({"success": f"¡Listo! '{file_path.split('/')[-1]}' eliminado de Dropbox."})
+                return jsonify({"success": f"🎉 El archivo ha sido eliminado con éxito! 🗑️"})
             return jsonify({"error": "No pude eliminar el archivo", "details": response.text}), response.status_code
-
-        elif action == "move":
-            match = re.search(r'mover\s*archivo:\s*.+?\s*a\s*carpeta:\s*(.+)', user_text, re.IGNORECASE)
+        
+        # Mover archivo
+        if "move" in action:
+            # Ajustar la regex para capturar el nombre de la carpeta de manera más flexible
+            match = re.search(r'(?:mueve|mover)\s*(?:el\s*)?archivo\s*(?:a\s*(?:la\s*)?carpeta)?\s*[:\s]*(.+)', user_text, re.IGNORECASE)
             if not match:
-                return jsonify({"error": "Dime a qué carpeta moverlo (ej: 'mover archivo: doc.txt a carpeta: Trabajo')"}), 400
+                return jsonify({"error": "Dime a qué carpeta moverlo (ej: 'mueve el archivo a la carpeta Trabajo')"}), 400
             folder_name = match.group(1).strip()
+
+            # Buscar la carpeta de destino por nombre
             folder_response = requests.post(
                 "https://api.dropboxapi.com/2/files/search_v2",
                 headers=headers,
@@ -955,24 +1073,27 @@ def setup_routes_secretary_posts(app, mongo, cache, refresh_functions):
             )
             if folder_response.status_code != 200:
                 return jsonify({"error": "Error al buscar la carpeta", "details": folder_response.text}), 500
-            folder_results = folder_response.json().get('matches', [])
+            folder_results = folder_response.json().get("matches", [])
             folder_match = next((r for r in folder_results if r['metadata']['metadata']['.tag'] == 'folder' and r['metadata']['metadata']['name'].lower() == folder_name.lower()), None)
             if not folder_match:
                 return jsonify({"error": f"No encontré la carpeta '{folder_name}'"}), 404
-            dest_path = f"{folder_match['metadata']['metadata']['path_lower']}/{file_path.split('/')[-1]}"
+            folder_path = folder_match['metadata']['metadata']['path_lower']
+
+            # Usar file_path (ruta completa) en lugar de file_id
+            file_name = file_path.split('/')[-1]  # Extraer el nombre del archivo de la ruta
+            dest_path = f"{folder_path}/{file_name}"
+
             response = requests.post(
                 "https://api.dropboxapi.com/2/files/move_v2",
                 headers=headers,
                 json={"from_path": file_path, "to_path": dest_path, "autorename": True}
             )
             if response.status_code == 200:
-                updated_user = mongo.database.usuarios.find_one({"correo": email})
-                if updated_user:
-                    cache.set(email, updated_user, timeout=1800)
-                return jsonify({"success": f"¡Hecho! '{file_path.split('/')[-1]}' movido a '{folder_name}'."})
+                return jsonify({"success": f"🎉 El archivo '{file_name}' ha sido movido a '{folder_name}' con éxito! 🚀"})
             return jsonify({"error": "No pude mover el archivo", "details": response.text}), response.status_code
 
-        elif action == "create_folder":
+        # Crear carpeta
+        if action == "create_folder":
             match = re.search(r'crear\s*carpeta:\s*(.+)', user_text, re.IGNORECASE)
             if not match:
                 return jsonify({"error": "Dime el nombre de la carpeta (ej: 'crear carpeta: Nueva')"}), 400
@@ -983,29 +1104,10 @@ def setup_routes_secretary_posts(app, mongo, cache, refresh_functions):
                 json={"path": f"/{folder_name}", "autorename": False}
             )
             if response.status_code == 200:
-                return jsonify({"success": f"¡Listo! Creada la carpeta '{folder_name}' en Dropbox."})
+                return jsonify({"message": f"🎉 ¡La carpeta '{folder_name}' ha sido creada con éxito en Dropbox! 📂"})
             return jsonify({"error": "No pude crear la carpeta", "details": response.text}), response.status_code
 
-        elif action == "restore":
-            # Buscar revisiones del archivo eliminado
-            response = requests.post(
-                "https://api.dropboxapi.com/2/files/list_revisions",
-                headers=headers,
-                json={"path": file_path, "limit": 1}
-            )
-            if response.status_code != 200 or not response.json().get("entries"):
-                return jsonify({"error": f"No encontré revisiones para '{file_path.split('/')[-1]}'"}), 404
-            rev = response.json()["entries"][0]["rev"]
-            restore_response = requests.post(
-                "https://api.dropboxapi.com/2/files/restore",
-                headers=headers,
-                json={"path": file_path, "rev": rev}
-            )
-            if restore_response.status_code == 200:
-                return jsonify({"success": f"¡Listo! '{file_path.split('/')[-1]}' restaurado con éxito."})
-            return jsonify({"error": "No pude restaurar el archivo", "details": restore_response.text}), restore_response.status_code
-
-        return jsonify({"error": "No entendí, ¿quieres 'eliminar', 'mover', 'crear carpeta' o 'restaurar'?"}), 400
+        return jsonify({"error": "No entendí, ¿qué acción quieres realizar?"}), 400
 
     @app.route("/accion-onedrive", methods=["POST"])
     def ejecutar_accion_onedrive():
@@ -1014,6 +1116,7 @@ def setup_routes_secretary_posts(app, mongo, cache, refresh_functions):
         user_text = data.get("action_text")
         file_id = data.get("file_id")
 
+        # Validaciones iniciales
         if not email or not user_text:
             return jsonify({"error": "Me faltan datos: tu email y qué hacer, ¿me los das?"}), 400
 
@@ -1027,26 +1130,24 @@ def setup_routes_secretary_posts(app, mongo, cache, refresh_functions):
 
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         action = interpretar_accion_archivos(user_text)
+        print(f"Action detected: {action}")
+        print(f"User text: {user_text}")
 
-        # Si no hay file_id, buscar por nombre
+        # Si no hay file_id y la acción lo requiere, buscar por nombre
         if not file_id and action in ["delete", "move"]:
-            match = re.search(r'(eliminar|mover)\s*archivo:\s*(.+)', user_text, re.IGNORECASE)
+            match = re.search(r'(eliminar|mover)\s*archivo[:\s]*(.+)', user_text, re.IGNORECASE)
             if not match:
                 return jsonify({"error": "Dime el nombre del archivo (ej: 'eliminar archivo: doc.txt')"}), 400
             file_name = match.group(2).strip()
-            response = requests.get(
-                f"https://graph.microsoft.com/v1.0/me/drive/root/search(q='{file_name}')",
-                headers=headers
-            )
-            if response.status_code != 200:
-                return jsonify({"error": "Error al buscar el archivo", "details": response.text}), response.status_code
-            results = response.json().get('value', [])
-            file_match = next((r for r in results if r['name'].lower() == file_name.lower() and "folder" not in r), None)
-            if not file_match:
-                return jsonify({"error": f"No encontré '{file_name}' en OneDrive"}), 404
-            file_id = file_match['id']
+            file_id = get_file_id_by_name(file_name, is_folder=False, headers=headers)
+            if not file_id:
+                return jsonify({"error": f"No encontré el archivo '{file_name}' en OneDrive"}), 404
+            print(f"File ID found: {file_id}")
 
+        # Acción: Eliminar archivo
         if action == "delete":
+            if not file_id:
+                return jsonify({"error": "Necesito el ID del archivo para eliminarlo"}), 400
             response = requests.delete(
                 f"https://graph.microsoft.com/v1.0/me/drive/items/{file_id}",
                 headers=headers
@@ -1055,17 +1156,23 @@ def setup_routes_secretary_posts(app, mongo, cache, refresh_functions):
                 updated_user = mongo.database.usuarios.find_one({"correo": email})
                 if updated_user:
                     cache.set(email, updated_user, timeout=1800)
-                return jsonify({"success": "¡Listo! Archivo eliminado de OneDrive."})
+                return jsonify({"success": f"🗑️ ¡Listo! El archivo ha sido eliminado de OneDrive con éxito."})
             return jsonify({"error": "No pude eliminar el archivo", "details": response.text}), response.status_code
 
+        # Acción: Mover archivo
         elif action == "move":
-            match = re.search(r'mover\s*archivo:\s*.+?\s*a\s*carpeta:\s*(.+)', user_text, re.IGNORECASE)
+            if not file_id:
+                return jsonify({"error": "Necesito el ID del archivo para moverlo"}), 400
+            match = re.search(r'mover\s*archivo[:\s]*.+?\s*a\s*carpeta[:\s]*(.+)', user_text, re.IGNORECASE)
             if not match:
                 return jsonify({"error": "Dime a qué carpeta moverlo (ej: 'mover archivo: doc.txt a carpeta: Trabajo')"}), 400
             folder_name = match.group(1).strip()
             folder_id = get_file_id_by_name(folder_name, is_folder=True, headers=headers)
             if not folder_id:
-                return jsonify({"error": f"No encontré la carpeta '{folder_name}'"}), 404
+                return jsonify({"error": f"No encontré la carpeta '{folder_name}' en OneDrive"}), 404
+            print(f"Folder ID found: {folder_id}")
+
+            # Mover el archivo a la nueva carpeta
             response = requests.patch(
                 f"https://graph.microsoft.com/v1.0/me/drive/items/{file_id}",
                 headers=headers,
@@ -1075,22 +1182,24 @@ def setup_routes_secretary_posts(app, mongo, cache, refresh_functions):
                 updated_user = mongo.database.usuarios.find_one({"correo": email})
                 if updated_user:
                     cache.set(email, updated_user, timeout=1800)
-                return jsonify({"success": f"¡Hecho! Archivo movido a '{folder_name}'."})
+                file_name = re.search(r'archivo[:\s]*(.+?)\s*a\s*carpeta', user_text, re.IGNORECASE).group(1).strip()
+                return jsonify({"success": f"🎉 ¡Hecho! El archivo '{file_name}' ha sido movido a la carpeta '{folder_name}' en OneDrive."})
             return jsonify({"error": "No pude mover el archivo", "details": response.text}), response.status_code
 
+        # Acción: Crear carpeta
         elif action == "create_folder":
-            match = re.search(r'crear\s*carpeta:\s*(.+)', user_text, re.IGNORECASE)
+            match = re.search(r'crear\s*carpeta[:\s]*(.+)', user_text, re.IGNORECASE)
             if not match:
                 return jsonify({"error": "Dime el nombre de la carpeta (ej: 'crear carpeta: Nueva')"}), 400
             folder_name = match.group(1).strip()
             response = requests.post(
                 "https://graph.microsoft.com/v1.0/me/drive/root/children",
                 headers=headers,
-                json={"name": folder_name, "folder": {}}
+                json={"name": folder_name, "folder": {}, "@microsoft.graph.conflictBehavior": "rename"}
             )
             if response.status_code == 201:
-                return jsonify({"success": f"¡Listo! Creada la carpeta '{folder_name}' en OneDrive."})
-            return jsonify({"error": "No pude crearla", "details": response.text}), response.status_code
+                return jsonify({"success": f"📂 ¡Listo! La carpeta '{folder_name}' ha sido creada en OneDrive con éxito."})
+            return jsonify({"error": "No pude crear la carpeta", "details": response.text}), response.status_code
 
         return jsonify({"error": "No entendí, ¿quieres 'eliminar', 'mover' o 'crear carpeta'?"}), 400
 
@@ -1100,11 +1209,13 @@ def setup_routes_secretary_posts(app, mongo, cache, refresh_functions):
             url = f"https://graph.microsoft.com/v1.0/me/drive/root/search(q='{file_name}')"
             response = requests.get(url, headers=headers, timeout=10)
             print(f"Search response: {response.status_code} {response.text}")
-            if response.status_code == 200:
-                items = response.json().get("value", [])
-                for item in items:
-                    if item["name"].lower() == file_name.lower() and ("folder" in item) == is_folder:
-                        return item["id"]
+            if response.status_code != 200:
+                return None
+            items = response.json().get("value", [])
+            for item in items:
+                is_folder_item = "folder" in item
+                if item["name"].lower() == file_name.lower() and is_folder_item == is_folder:
+                    return item["id"]
             return None
         except requests.RequestException as e:
             print(f"Error al buscar en OneDrive: {str(e)}")

@@ -316,7 +316,7 @@ def setup_routes_secretary_gets(app, mongo, cache, refresh_functions):
         if not token:
             return None
         headers = get_dropbox_headers(token)
-        response = requests.post("https://api.dropboxapi.com/2/files/list_folder", headers=headers, json={"path": ""})
+        response = requests.post("https://api.dropboxapi.com/2/files/list_folder", headers=headers, json={"path": "", "recursive": True})
         if response.status_code != 200:
             return None
         entries = response.json().get("entries", [])
@@ -427,24 +427,66 @@ def setup_routes_secretary_gets(app, mongo, cache, refresh_functions):
         token = user.get("integrations", {}).get("Drive", {}).get("token")
         if not token:
             return None
+        
         headers = get_google_drive_headers(token)
         url = "https://www.googleapis.com/drive/v3/files"
-        params = {"pageSize": 10, "fields": "files(id, name, mimeType, modifiedTime)", "orderBy": "modifiedTime desc"}
-        response = requests.get(url, headers=headers, params=params)
-        if response.status_code != 200:
+
+        # Primera solicitud: archivos ordenados por modifiedTime
+        params_modified = {
+            "pageSize": 10,
+            "fields": "files(id, name, mimeType, createdTime, modifiedTime)",
+            "orderBy": "modifiedTime desc"
+        }
+        response_modified = requests.get(url, headers=headers, params=params_modified)
+        if response_modified.status_code != 200:
+            print("Error en modifiedTime request:", response_modified.text)
             return None
-        files = response.json().get('files', [])
-        if not files:
+        
+        files_modified = response_modified.json().get('files', [])
+        if not files_modified:
+            print("No se encontraron archivos modificados")
             return None
-        last_entry = files[0]
+
+        # Segunda solicitud: archivos ordenados por createdTime
+        params_created = {
+            "pageSize": 10,
+            "fields": "files(id, name, mimeType, createdTime, modifiedTime)",
+            "orderBy": "createdTime desc"
+        }
+        response_created = requests.get(url, headers=headers, params=params_created)
+        if response_created.status_code != 200:
+            print("Error en createdTime request:", response_created.text)
+            return None
+        
+        files_created = response_created.json().get('files', [])
+        if not files_created:
+            print("No se encontraron archivos creados")
+            return None
+
+        # Tomar el archivo más reciente de cada solicitud
+        last_modified = files_modified[0]
+        last_created = files_created[0]
+
+        # Comparar las fechas más recientes
+        modified_time = datetime.strptime(last_modified["modifiedTime"], "%Y-%m-%dT%H:%M:%S.%fZ")
+        created_time = datetime.strptime(last_created["createdTime"], "%Y-%m-%dT%H:%M:%S.%fZ")
+
+        # Elegir el más reciente entre modifiedTime y createdTime
+        if modified_time > created_time:
+            last_entry = last_modified
+            action = "actualizado"
+        else:
+            last_entry = last_created
+            action = "nuevo"
+
         entry_type = "carpeta" if last_entry["mimeType"] == "application/vnd.google-apps.folder" else "archivo"
         return {
             "from": "Google Drive",
-            "subject": f"Hola, vi que hay un {entry_type} actualizado en Drive",
+            "subject": f"Hola, vi que hay un {entry_type} {action} en Drive",
             "snippet": f"Se llama '{last_entry['name']}'.",
             "id": last_entry["id"]
         }
-
+        
     # Nuevo método para obtener todas las notificaciones
     @app.route("/ultima-notificacion/all", methods=["GET"])
     def obtener_todas_las_notificaciones():

@@ -109,35 +109,27 @@ def setup_execute_routes(app,mongo, cache, refresh_functions):
         if not email:
             return jsonify({"error": "Se debe proporcionar un email"}), 400
 
-        # Buscar el usuario en la base de datos
         user = get_user_with_refreshed_tokens(email)
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
 
-        # Obtener el token actualizado
         gmail_token = user.get('integrations', {}).get('Gmail', {}).get('token')
         if not gmail_token:
             return jsonify({"error": "Token de Gmail no disponible"}), 400
 
-        # Obtener reglas activas para Gmail
         rules = [rule for rule in user.get('automatizaciones', []) if rule.get("service") == "Gmail" and rule.get("active")]
-
         executed_rules = []
+        results = []
+
         for rule in rules:
             condition = rule.get("condition", "").lower().strip()
             action = rule.get("action", "").lower().strip()
 
-            # Extraer el remitente de la condición
             condition_match = re.search(r"de\s+([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z0-9]{2,})", condition)
-            if condition_match:
-                expected_sender = condition_match.group(1).lower().strip()
-            else:
-                # Si no hay un correo, tomar el nombre después de "de"
+            expected_sender = condition_match.group(1).lower().strip() if condition_match else None
+            if not expected_sender:
                 company_match = re.search(r"de\s+(.+)", condition)
-                if company_match:
-                    expected_sender = company_match.group(1).lower().strip()
-                else:
-                    expected_sender = None
+                expected_sender = company_match.group(1).lower().strip() if company_match else None
 
             if expected_sender:
                 try:
@@ -155,27 +147,27 @@ def setup_execute_routes(app,mongo, cache, refresh_functions):
                                     delete_url = f"https://www.googleapis.com/gmail/v1/users/me/messages/{message_id}/trash"
                                     delete_response = requests.post(delete_url, headers=headers)
                                     if delete_response.status_code == 204:
-                                        return {message: "Gmail: Correo eliminado con éxito."}
+                                        results.append(f"Mensaje {message_id}: Eliminado con éxito")
                                     else:
-                                        return {message: "Gmail: Error al eliminar el correo: {delete_response.text}"}
+                                        results.append(f"Mensaje {message_id}: Error al eliminar - {delete_response.text}")
                                 elif action == "mover a spam":
                                     modify_url = f"https://www.googleapis.com/gmail/v1/users/me/messages/{message_id}/modify"
                                     modify_payload = {"addLabelIds": ["SPAM"]}
                                     modify_response = requests.post(modify_url, headers=headers, json=modify_payload)
                                     if modify_response.status_code == 200:
-                                        return {message: "Gmail: Correo movido a spam."}
+                                        results.append(f"Mensaje {message_id}: Movido a spam")
                                     else:
-                                        return{message: "Gmail: Error al mover a spam: {modify_response.text}"}
+                                        results.append(f"Mensaje {message_id}: Error al mover a spam - {modify_response.text}")
                                 elif action == "responder":
-                                    reply_url = "https://gmail.googleapis.com/gmail/v1/messages/send"
+                                    reply_url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
                                     reply_body = {
                                         "raw": create_message(expected_sender, "Gracias por tu correo, responderé pronto.")
                                     }
                                     reply_response = requests.post(reply_url, headers=headers, json=reply_body)
                                     if reply_response.status_code == 200:
-                                        return{message: "Gmail: Correo respondido con éxito."}
+                                        results.append(f"Mensaje {message_id}: Respondido con éxito")
                                     else:
-                                        return {message: "Gmail: Error al enviar respuesta: {reply_response.text}"}
+                                        results.append(f"Mensaje {message_id}: Error al responder - {reply_response.text}")
 
                             # Actualizar la última ejecución de la regla
                             mongo.database.usuarios.update_one(
@@ -184,18 +176,17 @@ def setup_execute_routes(app,mongo, cache, refresh_functions):
                             )
                             executed_rules.append(rule)
                         else:
-                            print(f"Gmail: No se encontraron correos de {expected_sender}.")
+                            results.append(f"No se encontraron correos de {expected_sender}")
                     else:
-                        print(f"Gmail: Error al obtener correos: {response.text}")
+                        results.append(f"Error al obtener correos: {response.text}")
 
                 except requests.exceptions.RequestException as error:
                     return jsonify({"error": f"Error en la petición a la API de Gmail: {str(error)}"}), 500
 
         if executed_rules:
-            return jsonify({"message": "Ejecución de reglas de Gmail completada.", "executed_rules": executed_rules})
-        else:
-            return jsonify({"message": "No se ejecutaron reglas de Gmail."}), 200
-    
+            return jsonify({"message": "Ejecución completada", "results": results, "executed_rules": executed_rules})
+        return jsonify({"message": "No se ejecutaron reglas", "results": results}), 200
+
     def create_message(to, body):
         """ Crea un mensaje MIME para enviar una respuesta en Gmail (en formato base64) """
         from email.mime.text import MIMEText

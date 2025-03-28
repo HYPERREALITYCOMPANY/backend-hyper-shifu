@@ -128,50 +128,57 @@ def setup_post_routes(app,mongo,cache, refresh_functions):
         # =============================================
         #   Crear evento en Google Calendar 📅
         # =============================================
-        if "create_event" in query:
+        if "create_event" in query or "agendar" in query.lower():
             try:
                 user_timezone = "America/Mexico_City"
                 parts = query.split("|")
-                
-                # Extraer parámetros específicos
-                summary = next((p.split(":", 1)[1] for p in parts if p.startswith("summary:")), "Reunión por defecto")
-                start_str = next((p.split(":", 1)[1] for p in parts if p.startswith("start:")), None)
-                end_str = next((p.split(":", 1)[1] for p in parts if p.startswith("end:")), None)
-                attendees_str = next((p.split(":", 1)[1] for p in parts if p.startswith("attendees:")), None)
-                meet = any(p.strip() == "meet:True" for p in parts)  # Opcional, pero no será necesario
+                print(f"Query parts: {parts}")
 
-                # Validar parámetro obligatorio de inicio
+                # Extraer parámetros específicos con valores por defecto
+                summary = next((p.split(":", 1)[1].strip() for p in parts if p.startswith("summary:")), "Reunión por defecto")
+                start_str = next((p.split(":", 1)[1].strip() for p in parts if p.startswith("start:")), None)
+                end_str = next((p.split(":", 1)[1].strip() for p in parts if p.startswith("end:")), None)
+                attendees_str = next((p.split(":", 1)[1].strip() for p in parts if p.startswith("attendees:") or p.startswith("con:")), None)
+
+                # Si no hay start_str, usar el momento actual + 1 hora como valor por defecto
                 if not start_str:
-                    return {"error": "Falta la fecha de inicio en la query"}
+                    start_dt = datetime.now(tz=ZoneInfo(user_timezone)) + timedelta(hours=1)
+                    start_str = start_dt.isoformat()
+                else:
+                    start_dt = None  # Será calculado por parse_datetime
 
                 # Función para normalizar la fecha/hora
                 def parse_datetime(dt_str):
-                    # Reemplazar "t" minúscula por "T" y "Z" por zona horaria UTC
-                    dt_str = dt_str.replace("t", "T")
-                    dt_str = dt_str.replace("Z", "+00:00")
-                    
+                    dt_str = dt_str.replace("t", "T").strip()
+                    if not any(c in dt_str for c in ["+", "-", "Z"]):  # Si no tiene zona horaria
+                        dt_str += f"-{user_timezone[-5:]}" if user_timezone[-5:].startswith("0") else f"+{user_timezone[-5:]}"
                     try:
                         dt = datetime.fromisoformat(dt_str)
+                        if dt.tzinfo is None:  # Si no tiene zona horaria asignada
+                            dt = dt.replace(tzinfo=ZoneInfo(user_timezone))
+                        return dt
                     except ValueError:
-                        # Si el formato es incompleto, completamos hasta segundos
+                        # Si el formato es incompleto, completar con valores por defecto
                         if "T" in dt_str:
                             time_part = dt_str.split("T")[1]
-                            if len(time_part) == 2:  # Solo hora (ej. 10)
+                            if len(time_part) == 2:  # Solo hora (ej. "10")
                                 dt_str += ":00:00"
-                            elif len(time_part) == 5:  # Hora y minutos (ej. 10:30)
+                            elif len(time_part) == 5:  # Hora y minutos (ej. "10:30")
                                 dt_str += ":00"
                         dt = datetime.fromisoformat(dt_str)
-                    return dt
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=ZoneInfo(user_timezone))
+                        return dt
 
                 # Normalizar fechas
                 start_dt = parse_datetime(start_str)
                 if not end_str:
-                    end_dt = start_dt + timedelta(hours=1)
+                    end_dt = start_dt + timedelta(hours=1)  # Por defecto, 1 hora después
                 else:
                     end_dt = parse_datetime(end_str)
                     if end_dt <= start_dt:
-                        end_dt = start_dt + timedelta(hours=1)
-                
+                        end_dt = start_dt + timedelta(hours=1)  # Asegurar que el fin sea después del inicio
+
                 # Construir el objeto del evento
                 event = {
                     "summary": summary,
@@ -183,7 +190,7 @@ def setup_post_routes(app,mongo,cache, refresh_functions):
                         "dateTime": end_dt.isoformat(),
                         "timeZone": user_timezone
                     },
-                    # Agregar Google Meet por defecto
+                    # Google Meet siempre activado
                     "conferenceData": {
                         "createRequest": {
                             "requestId": f"meet-{datetime.now().strftime('%Y%m%d%H%M%S')}",
@@ -192,7 +199,7 @@ def setup_post_routes(app,mongo,cache, refresh_functions):
                     }
                 }
 
-                # Agregar asistentes si se especifican
+                # Agregar asistentes si se especifican (aceptar "con:" o "attendees:")
                 if attendees_str:
                     attendees = [{"email": email.strip()} for email in attendees_str.split(",")]
                     event["attendees"] = attendees
@@ -203,10 +210,9 @@ def setup_post_routes(app,mongo,cache, refresh_functions):
                     "Authorization": f"Bearer {gmail_token}",
                     "Content-Type": "application/json"
                 }
-                # Configurar parámetros para notificaciones y Google Meet
                 params = {
-                    "sendNotifications": "true",
-                    "conferenceDataVersion": "1"  # Versión 2 para Google Meet
+                    "sendNotifications": True,  # Enviar notificaciones a los asistentes
+                    "conferenceDataVersion": 1  # Necesario para Google Meet
                 }
 
                 response = requests.post(url, json=event, headers=headers, params=params)
@@ -215,10 +221,8 @@ def setup_post_routes(app,mongo,cache, refresh_functions):
                     json_response = response.json()
 
                     # Obtener enlace de Google Meet
-                    hangout_link = None
-                    if "hangoutLink" in json_response:
-                        hangout_link = json_response["hangoutLink"]
-                    elif "conferenceData" in json_response and "entryPoints" in json_response["conferenceData"]:
+                    hangout_link = json_response.get("hangoutLink")
+                    if not hangout_link and "conferenceData" in json_response and "entryPoints" in json_response["conferenceData"]:
                         for entry in json_response["conferenceData"]["entryPoints"]:
                             if entry.get("entryPointType") == "video":
                                 hangout_link = entry.get("uri")
@@ -228,20 +232,22 @@ def setup_post_routes(app,mongo,cache, refresh_functions):
                     start_formatted = start_dt.strftime("%d/%m/%Y %H:%M")
                     end_formatted = end_dt.strftime("%d/%m/%Y %H:%M")
 
-                    meet_msg = f"\nEnlace de Google Meet: {hangout_link}" if hangout_link else "\n(No se encontró enlace de Meet en la respuesta)"
+                    meet_msg = f"\nEnlace de Google Meet: {hangout_link}" if hangout_link else "\n(No se generó enlace de Meet)"
+
+                    attendees_msg = f"\n👥 *Asistentes:* {attendees_str}" if attendees_str else ""
 
                     return {
                         "message": (
                             f"✅ ¡Evento creado con éxito! 🎉\n"
                             f"📅 *Título:* {summary}\n"
-                            f"🕒 *Fecha y hora:* {start_formatted} - {end_formatted}\n"
+                            f"🕒 *Fecha y hora:* {start_formatted} - {end_formatted}"
+                            f"{attendees_msg}"
+                            f"{meet_msg}\n"
                             f"✨ ¡Está todo listo en tu calendario! 📆"
                         )
                     }
                 else:
-                    return {
-                        "error": f"No se pudo crear el evento. Respuesta de Google: {response.text}"
-                    }
+                    return {"error": f"No se pudo crear el evento. Respuesta de Google: {response.text}"}
             except Exception as e:
                 return {"error": f"Error al procesar la query para crear evento: {e}"}
         # =============================================
@@ -639,69 +645,238 @@ def setup_post_routes(app,mongo,cache, refresh_functions):
 
 #####################################################################################################
     def post_to_clickup(query):
-        """Procesa la consulta y ejecuta la acción en la API de ClickUp."""
+        """Procesa la consulta y ejecuta la acción en la API de ClickUp con mucho cariño. 💖"""
+        print(f"DEBUG: Iniciando post_to_clickup con query: '{query}'")
+
+        # Obtener email
         email = request.args.get('email')
         if not email:
-            return jsonify({"error": "Se debe proporcionar un email"}), 400
+            print("DEBUG: Error - No se proporcionó email")
+            return jsonify({"error": "¡Ups! Parece que no proporcionaste un email. Por favor, dame uno para continuar. 📧"}), 400
+        print(f"DEBUG: Email obtenido: {email}")
 
+        # Verificar usuario
         user = get_user_with_refreshed_tokens(email)
         if not user:
-            return jsonify({"error": "Usuario no encontrado"}), 404
+            print("DEBUG: Error - Usuario no encontrado")
+            return jsonify({"error": "¡Oh no! No encontré al usuario. ¿Estás seguro de que el email es correcto? 🧐"}), 404
+        print("DEBUG: Usuario encontrado")
 
+        # Verificar token de ClickUp
         clickup_token = user.get('integrations', {}).get('ClickUp', {}).get('token')
         if not clickup_token:
-            return jsonify({"error": "Token de ClickUp no disponible"}), 400
+            print("DEBUG: Error - Token de ClickUp no disponible")
+            return jsonify({"error": "¡Vaya! No tengo el token de ClickUp. ¿Podrías configurarlo para que podamos trabajar juntos? 🔑"}), 400
+        print(f"DEBUG: Token de ClickUp obtenido: {clickup_token[:10]}... (truncado por seguridad)")
 
-        match = re.search(r'(marca como completada|cambia el estado a|elimina) la tarea (.+)', query, re.IGNORECASE)
+        # Normalizar la consulta
+        query = query.lower().strip()
+        print(f"DEBUG: Query normalizado: '{query}'")
+
+        # Determinar la acción basándonos en palabras clave
+        action = None
+        task_name = None
+        new_status = None
+
+        task_name_pattern = r"(?:tarea\s+['\"]?)([^\s'\"]+)(?:['\"]?\s*)"
+
+        # Extraer el nombre de la tarea
+        match = re.search(task_name_pattern, query, re.IGNORECASE)
+        print(match)
+        print(match.group(1))
         if match:
-            action = match.group(1).lower()
-            task_name = match.group(2)
-            
-            # Obtener el ID de la tarea
-            task_id = get_task_id_clickup(task_name, clickup_token)
-            if not task_id:
-                return jsonify({"error": f"No se encontró la tarea {task_name} en ClickUp"}), 404
+            # Tomar el grupo que no sea None (puede estar con o sin comillas, con o sin "tarea")
+            task_name = match.group(1) or match.group(2) or match.group(3) or match.group(4)
+            print(f"DEBUG: Nombre de la tarea extraído - task_name: '{task_name}'")
+        else:
+            print("DEBUG: Error - No se pudo extraer el nombre de la tarea")
+            return jsonify({"error": "¡Ups! No pude encontrar el nombre de la tarea en tu consulta. ¿Podrías decirme qué tarea quieres modificar? 🧩"}), 400
 
+        # Determinar la acción
+        if "completada" in query:
+            action = "marca como completada"
+            new_status = "complete"
+            print(f"DEBUG: Acción identificada - action: '{action}', new_status: '{new_status}'")
+        elif "eliminar" in query or "elimina" in query:
+            action = "elimina"
+            print(f"DEBUG: Acción identificada - action: '{action}'")
+        else:
+            # Si no es "completada" ni "eliminar", asumimos que es un cambio de estado
+            # Buscamos "a <estado>" para extraer el nuevo estado
+            status_pattern = r'\s*a\s*([^\s].*?)(?:\s|$)'
+            status_match = re.search(status_pattern, query, re.IGNORECASE)
+            if status_match:
+                action = "cambia el estado"
+                new_status = status_match.group(1).strip()
+                print(f"DEBUG: Acción identificada - action: '{action}', new_status: '{new_status}'")
+            else:
+                print("DEBUG: Error - No se pudo identificar la acción ni el estado")
+                return jsonify({"error": "¡Ay, ay! No entendí qué acción quieres hacer con la tarea. ¿Puedes decirme si quieres completarla, eliminarla o cambiar su estado? 🌟"}), 400
+
+        # Verificar si se identificó una acción válida
+        if not action or not task_name:
+            print("DEBUG: Error - No se encontró una tarea o acción válida en la consulta")
+            return jsonify({"error": "¡Ups! No entendí bien tu consulta. ¿Podrías decirme qué tarea y qué acción quieres hacer? 🧩"}), 400
+        print(f"DEBUG: Acción y tarea identificadas - action: '{action}', task_name: '{task_name}'")
+
+        # Buscar el task_id
+        try:
+            # Obtener el team_id
+            team_url = "https://api.clickup.com/api/v2/team"
+            headers = {'Authorization': f"Bearer {clickup_token}"}
+            print(f"DEBUG: Solicitando team_id desde {team_url}")
+            team_response = requests.get(team_url, headers=headers)
+
+            if team_response.status_code != 200:
+                print(f"DEBUG: Error - No se pudo obtener el team_id, status_code: {team_response.status_code}, response: {team_response.text}")
+                return jsonify({"error": "¡Oh no! No pude obtener el equipo en ClickUp. Algo salió mal. 😓", "details": team_response.text}), team_response.status_code
+
+            teams = team_response.json().get('teams', [])
+            if not teams:
+                print("DEBUG: Error - El usuario no pertenece a ningún equipo en ClickUp")
+                return jsonify({"error": "¡Vaya! Parece que no perteneces a ningún equipo en ClickUp. ¿Puedes verificarlo? 🧐"}), 400
+
+            team_id = teams[0].get('id')
+            print(f"DEBUG: Team ID obtenido: {team_id}")
+
+            # Obtener espacios
+            spaces_url = f"https://api.clickup.com/api/v2/team/{team_id}/space"
+            print(f"DEBUG: Solicitando espacios desde {spaces_url}")
+            spaces_response = requests.get(spaces_url, headers=headers)
+
+            if spaces_response.status_code != 200:
+                print(f"DEBUG: Error - No se pudieron obtener los espacios, status_code: {spaces_response.status_code}, response: {spaces_response.text}")
+                return jsonify({"error": "¡Ay, ay! No pude obtener los espacios en ClickUp. Algo no salió bien. 🥺", "details": spaces_response.text}), spaces_response.status_code
+
+            spaces = spaces_response.json().get('spaces', [])
+            print(f"DEBUG: Espacios obtenidos: {len(spaces)} espacios")
+            task_id = None
+
+            # Para cada espacio, obtener carpetas y listas
+            for space in spaces:
+                space_id = space.get('id')
+                print(f"DEBUG: Procesando espacio - space_id: {space_id}, name: {space.get('name', 'Sin nombre')}")
+
+                # Obtener carpetas en el espacio
+                folders_url = f"https://api.clickup.com/api/v2/space/{space_id}/folder"
+                print(f"DEBUG: Solicitando carpetas desde {folders_url}")
+                folders_response = requests.get(folders_url, headers=headers)
+
+                if folders_response.status_code != 200:
+                    print(f"DEBUG: Error - No se pudieron obtener las carpetas para space_id {space_id}, status_code: {folders_response.status_code}, response: {folders_response.text}")
+                    continue
+
+                folders = folders_response.json().get('folders', [])
+                print(f"DEBUG: Carpetas obtenidas para space_id {space_id}: {len(folders)} carpetas")
+
+                # Para cada carpeta, obtener listas
+                for folder in folders:
+                    folder_id = folder.get('id')
+                    print(f"DEBUG: Procesando carpeta - folder_id: {folder_id}, name: {folder.get('name', 'Sin nombre')}")
+
+                    lists_url = f"https://api.clickup.com/api/v2/folder/{folder_id}/list"
+                    print(f"DEBUG: Solicitando listas desde {lists_url}")
+                    lists_response = requests.get(lists_url, headers=headers)
+
+                    if lists_response.status_code != 200:
+                        print(f"DEBUG: Error - No se pudieron obtener las listas para folder_id {folder_id}, status_code: {lists_response.status_code}, response: {lists_response.text}")
+                        continue
+
+                    lists = lists_response.json().get('lists', [])
+                    print(f"DEBUG: Listas obtenidas para folder_id {folder_id}: {len(lists)} listas")
+
+                    # Para cada lista, buscar tareas
+                    for lst in lists:
+                        list_id = lst.get('id')
+                        print(f"DEBUG: Procesando lista - list_id: {list_id}, name: {lst.get('name', 'Sin nombre')}")
+
+                        task_url = f"https://api.clickup.com/api/v2/list/{list_id}/task"
+                        params = {
+                            "search": task_name,  # Buscar por nombre
+                            "subtasks": True,
+                            "include_closed": True  # Incluir tareas completadas
+                        }
+                        print(f"DEBUG: Solicitando tareas desde {task_url} con params: {params}")
+                        task_response = requests.get(task_url, headers=headers, params=params)
+
+                        if task_response.status_code == 200:
+                            tasks = task_response.json().get('tasks', [])
+                            print(f"DEBUG: Tareas obtenidas para list_id {list_id}: {len(tasks)} tareas")
+                            for task in tasks:
+                                task_name_found = task.get('name', '').lower()
+                                print(f"DEBUG: Tarea encontrada - name: '{task_name_found}', id: {task.get('id')}")
+                                if task_name_found == task_name.lower():  # Coincidencia exacta
+                                    task_id = task.get('id')
+                                    print(f"DEBUG: ¡Tarea encontrada! task_id: {task_id}")
+                                    break
+                        else:
+                            print(f"DEBUG: Error - No se pudieron obtener las tareas para list_id {list_id}, status_code: {task_response.status_code}, response: {task_response.text}")
+                        if task_id:
+                            break
+                    if task_id:
+                        break
+                if task_id:
+                    break
+
+            # Verificar si se encontró la tarea
+            if not task_id:
+                print(f"DEBUG: Error - No se encontró la tarea '{task_name}' después de buscar en todos los espacios, carpetas y listas")
+                return jsonify({"error": f"¡Oh no! No encontré la tarea '{task_name}' en ClickUp. ¿Estás seguro de que existe? 🔍"}), 404
+
+            # Configurar la solicitud a la API de ClickUp para modificar la tarea
             url = f"https://api.clickup.com/api/v2/task/{task_id}"
             headers = {
                 "Authorization": f"Bearer {clickup_token}",
                 "Content-Type": "application/json"
             }
+            print(f"DEBUG: Preparando acción para task_id: {task_id}, action: {action}")
 
-            # Acción según la consulta
-            if "completada" in action:
-                data = {"status": "complete"}  # Asume que "complete" es el estado para tarea completada
+            # Ejecutar la acción según la consulta
+            if any(word in action for word in ["completa", "completada", "completo"]):
+                data = {"status": "complete"}
+                print(f"DEBUG: Ejecutando acción 'completada' - PUT {url} con data: {data}")
                 response = requests.put(url, headers=headers, json=data)
                 if response.status_code == 200:
-                    return jsonify({"message": f"Tarea {task_name} completada correctamente"})
+                    print("DEBUG: Acción 'completada' ejecutada con éxito")
+                    return ({"message": f"¡Yay! La tarea '{task_name}' ha sido completada con éxito. 🎉 ¡Gran trabajo!"})
                 else:
-                    return jsonify({"error": "No se pudo completar la tarea"}), 400
-            
+                    print(f"DEBUG: Error - No se pudo completar la tarea, status_code: {response.status_code}, response: {response.text}")
+                    return jsonify({"error": f"¡Ay, qué pena! No pude completar la tarea '{task_name}'. Algo salió mal. 😓", "details": response.text}), 400
+
             elif "cambia el estado" in action:
-                # Extraer el nuevo estado del query
-                new_status_match = re.search(r'cambia el estado a (.+)', query, re.IGNORECASE)
-                if new_status_match:
-                    new_status = new_status_match.group(1)
-                    data = {"status": new_status}
-                    response = requests.put(url, headers=headers, json=data)
-                    if response.status_code == 200:
-                        return jsonify({"message": f"Estado de la tarea {task_name} cambiado a {new_status}"})
-                    else:
-                        return jsonify({"error": "No se pudo cambiar el estado de la tarea"}), 400
+                if not new_status:
+                    print("DEBUG: Error - No se proporcionó un nuevo estado para 'cambia el estado'")
+                    return jsonify({"error": "¡Ups! No me diste un nuevo estado para la tarea. ¿A qué estado quieres cambiarla? 🌟"}), 400
+                data = {"status": new_status}
+                print(f"DEBUG: Ejecutando acción 'cambia el estado' - PUT {url} con data: {data}")
+                response = requests.put(url, headers=headers, json=data)
+                if response.status_code == 200:
+                    print("DEBUG: Acción 'cambia el estado' ejecutada con éxito")
+                    return ({"message": f"¡Listo! El estado de la tarea '{task_name}' ha sido cambiado a '{new_status}'. 🚀 ¡Sigue así!"})
                 else:
-                    return jsonify({"error": "No se proporcionó un nuevo estado"}), 400
+                    print(f"DEBUG: Error - No se pudo cambiar el estado, status_code: {response.status_code}, response: {response.text}")
+                    return jsonify({"error": f"¡Oh no! No pude cambiar el estado de la tarea '{task_name}'. Algo no salió bien. 🥺", "details": response.text}), 400
 
             elif "elimina" in action:
-                # Eliminar la tarea
-                response = requests.delete(f"https://api.clickup.com/api/v2/task/{task_id}", headers=headers)
-                if response.status_code == 204:  # El código 204 indica que la tarea se eliminó exitosamente
-                    return jsonify({"message": f"Tarea {task_name} eliminada correctamente"})
+                print(f"DEBUG: Ejecutando acción 'elimina' - DELETE {url}")
+                response = requests.delete(url, headers=headers)
+                if response.status_code == 204:
+                    print("DEBUG: Acción 'elimina' ejecutada con éxito")
+                    return ({"message": f"¡Hecho! La tarea '{task_name}' ha sido eliminada correctamente. 🗑️ ¡Todo limpio!"})
                 else:
-                    return jsonify({"error": "No se pudo eliminar la tarea"}), 400
+                    print(f"DEBUG: Error - No se pudo eliminar la tarea, status_code: {response.status_code}, response: {response.text}")
+                    return jsonify({"error": f"¡Ay, ay! No pude eliminar la tarea '{task_name}'. Algo falló. 😢", "details": response.text}), 400
 
-            return jsonify({"error": "Acción no reconocida para ClickUp"}), 400
+            print("DEBUG: Error - Acción no reconocida")
+            return jsonify({"error": "¡Vaya! No reconocí la acción que me pediste para ClickUp. ¿Podrías intentarlo de nuevo? 💡"}), 400
 
-        return jsonify({"error": "No se encontró una tarea válida en la consulta"}), 400
+        except requests.RequestException as e:
+            print(f"DEBUG: Error - Excepción de red: {str(e)}")
+            return jsonify({"error": f"¡Ay, qué pena! Hubo un error al buscar la tarea en ClickUp. 😓", "details": str(e)}), 500
+        except Exception as e:
+            print(f"DEBUG: Error - Excepción inesperada: {str(e)}")
+            return jsonify({"error": f"¡Oh no! Ocurrió un error inesperado. 🥺", "details": str(e)}), 500
+
 
 #############################################################################################################
     def post_to_asana(query):

@@ -278,6 +278,7 @@ def setup_routes_searchs(app, mongo, cache, refresh_functions):
     def search_notion(query):
         email = request.args.get('email')
         simplified_results = []
+        
         try:
             # Verificar usuario en la base de datos
             user = get_user_with_refreshed_tokens(email)
@@ -291,8 +292,9 @@ def setup_routes_searchs(app, mongo, cache, refresh_functions):
                 return jsonify({"error": "Token de Notion no disponible"}), 400
 
             # Limpiar el query
+            query = query.lower()  # Convertir a minúsculas para comparación
             if "proyecto" in query:
-                query = query.split("proyecto", 1)[1].strip() 
+                query = query.split("proyecto", 1)[1].strip()
             if "compañia" in query:
                 query = query.split("compañia", 1)[1].strip()
             if "empresa" in query:
@@ -302,7 +304,7 @@ def setup_routes_searchs(app, mongo, cache, refresh_functions):
             if not query:
                 return jsonify({"error": "No se proporcionó un término de búsqueda"}), 400
 
-            # Configuración de solicitud a Notion
+            # Configuración de solicitud a Notion para buscar páginas
             url = 'https://api.notion.com/v1/search'
             headers = {
                 'Authorization': f'Bearer {notion_token}',
@@ -311,36 +313,89 @@ def setup_routes_searchs(app, mongo, cache, refresh_functions):
             }
             data = {"query": query}
             
-            # Realizar solicitud a Notion
+            # Realizar solicitud a Notion para buscar páginas
             response = requests.post(url, headers=headers, json=data)
             response.raise_for_status()
             notion_response = response.json()
 
-            # Procesar resultados
+            # Procesar resultados de la búsqueda inicial
             results = notion_response.get("results", [])
             if not results:
                 return jsonify({"error": "No se encontraron resultados en Notion"}), 404
 
+            # Iterar sobre los resultados (páginas o bases de datos)
             for result in results:
                 page_info = {
                     "id": result["id"],
                     "url": result.get("url"),
-                    "properties": {}
+                    "title": "",
+                    "properties": {},
+                    "content": []
                 }
 
+                # Obtener el título de la página
                 properties = result.get("properties", {})
                 for property_name, property_value in properties.items():
-                    # Procesar propiedades relevantes
-                    if property_value.get("type") == "status":
+                    if property_name == "title" and property_value.get("title"):
+                        page_info["title"] = property_value["title"][0]["plain_text"]
+                    elif property_value.get("type") == "status":
                         page_info["properties"][property_name] = property_value["status"].get("name", None)
                     elif property_name == "Nombre" and property_value.get("title"):
                         page_info["properties"][property_name] = property_value["title"][0]["plain_text"]
 
-                # Filtrar resultados relevantes
-                if (
-                    'Nombre' in page_info["properties"]
-                    and query.lower() in page_info["properties"]["Nombre"].lower()
-                ):
+                # Filtrar páginas relevantes por título
+                if page_info["title"].lower() == query.lower():  # Por ejemplo, "Semestre 3"
+                    # Obtener los bloques dentro de la página
+                    blocks_url = f'https://api.notion.com/v1/blocks/{result["id"]}/children'
+                    blocks_response = requests.get(blocks_url, headers=headers)
+                    blocks_response.raise_for_status()
+                    blocks = blocks_response.json().get("results", [])
+
+                    # Procesar los bloques para buscar contenido relevante
+                    for block in blocks:
+                        block_type = block.get("type")
+                        block_info = {"type": block_type}
+
+                        # Si el bloque es un encabezado (como "To do list", "Study Tracker", etc.)
+                        if block_type in ["heading_1", "heading_2", "heading_3"]:
+                            heading_text = block[block_type]["rich_text"][0]["plain_text"] if block[block_type]["rich_text"] else ""
+                            if heading_text.strip():  # Filtrar encabezados vacíos
+                                block_info["text"] = heading_text
+
+                        # Si el bloque es un párrafo
+                        elif block_type == "paragraph":
+                            paragraph_text = block[block_type]["rich_text"][0]["plain_text"] if block[block_type]["rich_text"] else ""
+                            if paragraph_text.strip() and paragraph_text != "\xa0":  # Filtrar párrafos vacíos o con solo espacios
+                                block_info["text"] = paragraph_text
+
+                        # Si el bloque es una subpágina
+                        elif block_type == "child_page":
+                            block_info["title"] = block["child_page"]["title"]
+
+                        # Si el bloque es una base de datos (como "To do list" o "Study Tracker")
+                        elif block_type == "child_database":
+                            block_info["title"] = block["child_database"]["title"]
+                            # Obtener el contenido de la base de datos
+                            database_id = block["id"]
+                            database_url = f'https://api.notion.com/v1/databases/{database_id}/query'
+                            database_response = requests.post(database_url, headers=headers, json={})
+                            database_response.raise_for_status()
+                            database_items = database_response.json().get("results", [])
+                            block_info["items"] = []
+                            for item in database_items:
+                                item_properties = item.get("properties", {})
+                                item_name = None
+                                for prop_name, prop_value in item_properties.items():
+                                    if prop_name == "Name" and prop_value.get("title"):
+                                        item_name = prop_value["title"][0]["plain_text"]
+                                        break
+                                if item_name:
+                                    block_info["items"].append({"name": item_name})
+
+                        # Agregar el bloque al contenido de la página si tiene información relevante
+                        if "text" in block_info or "title" in block_info:
+                            page_info["content"].append(block_info)
+
                     simplified_results.append(page_info)
 
             # Verificar si hay resultados simplificados
@@ -353,7 +408,7 @@ def setup_routes_searchs(app, mongo, cache, refresh_functions):
             return jsonify({"error": "Error al realizar la solicitud a Notion", "details": str(e)}), 500
         except Exception as e:
             return jsonify({"error": "Error inesperado", "details": str(e)}), 500
-    
+            
     @app.route('/search/slack', methods=['GET'])
     def search_slack(query):
         email = request.args.get('email')

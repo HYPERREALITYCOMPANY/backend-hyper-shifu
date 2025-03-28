@@ -82,15 +82,22 @@ def setup_routes_chats(app, mongo, cache, refresh_functions):
         ]) or "No se encontraron mensajes relacionados en Slack."
 
         # Notion Results (extraer información relevante)
-        notion_results = "\n".join([ 
+        notion_results = "\n".join([
             f"Página ID: {page.get('id', 'Sin ID')} | "
-            f"Nombre: {page.get('properties', {}).get('Nombre', 'Sin Nombre')} | "
+            f"Nombre: {page.get('properties', {}).get('Nombre', page.get('title', 'Sin Nombre'))} | "  # Usar 'title' si 'properties.Nombre' no existe
             f"Estado: {page.get('properties', {}).get('Estado', 'Sin Estado')} | "
             f"URL: {page.get('url', 'Sin URL')} | "
             f"Última edición: {page.get('last_edited_time', 'Sin edición')}"
+            + (  # Agregar información de los bloques de content
+                "".join([
+                    f"\n  Contenido: {block.get('type', 'Sin tipo')} - {block.get('title', 'Sin título')}: "
+                    f"{', '.join([item.get('name', 'Sin nombre') for item in block.get('items', []) if isinstance(item, dict)])}"
+                    for block in page.get('content', []) if isinstance(block, dict) and block.get('type') == 'child_database'
+                ])
+            )
             for page in search_results.get('notion', []) if isinstance(page, dict)
         ]) or "No se encontraron notas relacionadas en Notion."
-
+        
         # Outlook Results (extraer información relevante)
         outlook_results = "\n".join([
             f"De: {email.get('sender', 'Desconocido')} | Asunto: {email.get('subject', 'Sin asunto')} | Fecha: {email.get('receivedDateTime', 'Sin fecha')}"

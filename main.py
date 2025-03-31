@@ -11,7 +11,7 @@ from app.routes.integrationRoutes import setup_integrations_routes
 from app.routes.secretaryPostRoutes import setup_routes_secretary_posts
 from app.routes.secretaryGetRoutes import setup_routes_secretary_gets
 from app.routes.proxyRoutes import setup_proxy_routes
-from app.routes.chatRoutes import setup_routes_chats
+from app.routes.core.principal_ia import setup_routes_chats
 from app.routes.executeRoutes import setup_execute_routes
 from app.routes.refreshTokens import setup_routes_refresh
 from flask_caching import Cache  # Importar Flask-Caching

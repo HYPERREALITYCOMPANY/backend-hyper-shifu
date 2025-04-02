@@ -14,6 +14,12 @@ from app.routes.proxyRoutes import setup_proxy_routes
 from app.routes.core.principal_ia import setup_routes_chats
 from app.routes.executeRoutes import setup_execute_routes
 from app.routes.refreshTokens import setup_routes_refresh
+from app.routes.apis.gmail.interpreter_gmail import gmail_chat
+from app.routes.apis.outlook.interpreter_outlook import outlook_chat
+from app.routes.apis.asana.interpreter_asana import asana_chat
+from app.routes.apis.clickup.interpreter_clickup import clickup_chat
+from app.routes.apis.dropbox.interpreter_dropbox import dropbox_chat
+
 from flask_caching import Cache  # Importar Flask-Caching
 
 load_dotenv()
@@ -48,6 +54,16 @@ def create_app():
     setup_proxy_routes(app, mongo, cache)
     setup_routes_chats(app, mongo, cache, refresh_functions)
     setup_execute_routes(app, mongo, cache, refresh_functions)
+    gmail_chat(app, mongo, cache, refresh_functions)
+    outlook_chat(app, mongo, cache, refresh_functions)
+    # notion_chat(app, mongo, cache, refresh_functions)
+    clickup_chat(app, mongo, cache, refresh_functions)
+    # hubspot_chat(app, mongo, cache, refresh_functions)
+    asana_chat(app, mongo, cache, refresh_functions)
+    # onedrive_chat(app, mongo, cache, refresh_functions)
+    # drive_chat(app, mongo, cache, refresh_functions)
+    # slack_chat(app, mongo, cache, refresh_functions)
+    dropbox_chat(app, mongo, cache, refresh_functions)
     
     return app
 

@@ -1,9 +1,24 @@
-from flask import request, jsonify, session
-from werkzeug.security import generate_password_hash, check_password_hash
+import string
+import random
+from datetime import datetime
 from flask_pymongo import ObjectId
+from flask import request, jsonify, session
 from app.utils.utils import get_user_from_db
+from werkzeug.security import generate_password_hash, check_password_hash
+
 
 def setup_auth_routes(app, mongo, cache):
+    # Función para generar un código único de 6 dígitos
+    def generate_unique_referral_code():
+        while True:
+            # Generar código alfanumérico de 6 caracteres
+            code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+            
+            # Verificar que no exista ya en la base de datos
+            existing = mongo.database.usuarios.find_one({"code_referrals_uniq": code})
+            if not existing:
+                return code
+
     @app.route('/register', methods=['POST'])
     def register_user():
         request_data = request.get_json() 
@@ -19,20 +34,34 @@ def setup_auth_routes(app, mongo, cache):
             return jsonify({"error": "El correo ya está registrado"}), 400
 
         hashed_password = generate_password_hash(data['password'])
+        
+        # Generar código único de referido para el nuevo usuario
+        unique_referral_code = generate_unique_referral_code()
+        
         usuario = {
             "img": data.get("img", ""),  
             "nombre": data["nombre"],
             "apellido": data["apellido"],
             "correo": data["correo"],
             "password": hashed_password,
-            "integrations": {}
+            "integrations": {},
+            "code_referrals_uniq": unique_referral_code,
+            "count_referrals": 0,
+            "date_registered": datetime.now()
         }
 
         if 'usuarios' not in mongo.database.list_collection_names():
             mongo.database.create_collection('usuarios')
 
         result = mongo.database.usuarios.insert_one(usuario)
-        return jsonify({"message": "Usuario registrado exitosamente", "id": str(result.inserted_id)}), 201
+        return jsonify({
+            "message": "Usuario registrado exitosamente", 
+            "id": str(result.inserted_id),
+            "nombre": data["nombre"],
+            "apellido": data["apellido"],
+            "code_referrals_uniq": unique_referral_code,
+            "date_registered": datetime.now()
+        }), 201
 
     @app.route('/login', methods=['POST'])
     def login_user():
@@ -60,7 +89,9 @@ def setup_auth_routes(app, mongo, cache):
             "message": "Inicio de sesión exitoso",
             "user_id": session['user_id'],
             "user_name": name,
-            "user_img": img 
+            "user_img": img,
+            "code_referrals_uniq": usuario.get("code_referrals_uniq", ""),  # Incluimos el código de referido
+            "count_referrals": usuario.get("count_referrals", 0)  # Incluimos el contador de referidos
         }), 200
     
     @app.route("/get_user", methods=["GET"])
@@ -87,7 +118,6 @@ def setup_auth_routes(app, mongo, cache):
             "correo": request.json.get('correo'),
             "img": request.json.get('img')
         }
-
         if not user_id or not ObjectId.is_valid(user_id):
             return jsonify({"error": "ID de usuario inválido"}), 400
 

@@ -30,12 +30,12 @@
 #     search_google_drive = functions["search_google_drive"]
 #     post_to_gmail = functionsPost["post_to_gmail"]
 #     post_to_notion = functionsPost["post_to_notion"]
-#     post_to_outlook = functionsPost["post_to_outlook"]
-#     post_to_clickup = functionsPost["post_to_clickup"]
-#     post_to_asana = functionsPost["post_to_asana"]
-#     post_to_dropbox = functionsPost["post_to_dropbox"]
-#     post_to_googledrive = functionsPost["post_to_googledrive"]
-#     post_to_onedrive = functionsPost["post_to_onedrive"]
+    # post_to_outlook = functionsPost["post_to_outlook"]
+    # post_to_clickup = functionsPost["post_to_clickup"]
+    # post_to_asana = functionsPost["post_to_asana"]
+    # post_to_dropbox = functionsPost["post_to_dropbox"]
+    # post_to_googledrive = functionsPost["post_to_googledrive"]
+    # post_to_onedrive = functionsPost["post_to_onedrive"]
 
 #     functionsAuto = {
 #         "post_auto_gmail": functions2["post_auto_gmail"],

@@ -8,6 +8,12 @@ from .system_prompt import system_prompt
 openai.api_key = Config.CHAT_API_KEY
 from app.utils.utils import get_user_from_db
 from flask_caching import Cache
+from app.routes.apis.gmail.interpreter_gmail import gmail_chat
+from app.routes.apis.outlook.interpreter_outlook import outlook_chat
+from app.routes.apis.asana.interpreter_asana import asana_chat
+from app.routes.apis.clickup.interpreter_clickup import clickup_chat
+from app.routes.apis.dropbox.interpreter_dropbox import dropbox_chat
+from app.routes.core.multitask.interpreter_multitask import setup_routes_multitasks
 
 def setup_routes_chats(app, mongo, cache, refresh_functions):
     cache = Cache(app)
@@ -110,8 +116,6 @@ def setup_routes_chats(app, mongo, cache, refresh_functions):
         if not user:
             return jsonify({"error": "Usuario no encontrado"}), 404
         
-        print(f"[DEBUG] Usuario cargado inicialmente: {user}")
-
         # Aseguramos que el usuario tenga un campo 'chats' con "Principal"
         if "chats" not in user or not any(chat["name"] == "Principal" for chat in user.get("chats", [])):
             print(f"[INFO] El usuario {email} no tiene chat 'Principal', inicializando")
@@ -122,8 +126,6 @@ def setup_routes_chats(app, mongo, cache, refresh_functions):
             )
             print(f"[DEBUG] Inicialización de chats, matched: {result.matched_count}, modified: {result.modified_count}")
             # Recargamos el usuario desde la DB
-            user = mongo.database.usuarios.find_one({"correo": email})
-            print(f"[DEBUG] Usuario tras inicializar Principal: {user}")
 
         # Buscamos el chat "Principal" (ahora debería existir)
         principal_chat = next((chat for chat in user["chats"] if chat["name"] == "Principal"), None)
@@ -194,10 +196,19 @@ def setup_routes_chats(app, mongo, cache, refresh_functions):
                     {"$push": {"chats.$.messages": {"$each": [user_message, assistant_message]}}}
                 )
                 print(f"[INFO] Mensajes añadidos al chat Principal para {email}, matched: {result.matched_count}, modified: {result.modified_count}")
-
-                # Recargamos el usuario para confirmar
-                user = mongo.database.usuarios.find_one({"correo": email})
-                print(f"[DEBUG] Usuario tras actualizar mensajes: {user}")
+                
+                search_results_data = {
+                    'gmail': [],
+                    'slack': [],
+                    'notion': [],
+                    'outlook': [],
+                    'hubspot': [],
+                    'clickup': [],
+                    'dropbox': [],
+                    'asana': [],
+                    'onedrive': [],
+                    'googledrive': [],
+                }
 
                 # Manejo según el tipo de solicitud
                 if "saludo" in request_type.lower():
@@ -211,73 +222,86 @@ def setup_routes_chats(app, mongo, cache, refresh_functions):
 
                 elif "GET" in request_type:
                     print("Procesando solicitud GET")
+                    apis_responses = []
+                    
                     if interpretation_json.get("gmail") != "N/A":
-                        print("Gmail respondió:", interpretation_json["gmail"])
+                        # Obtenemos la ruta y la llamamos directamente
+                        print(interpretation_json["gmail"])
+                        gmail_router = gmail_chat(app, mongo, cache, refresh_functions, query=interpretation_json["gmail"])
+                        print(gmail_router)
+                        # Llamamos al método chatGmail de ese router
+                        gmail_response = gmail_router()  # Esto ejecuta el método chatGmail
+                        apis_responses.append({"api": "gmail", "response": gmail_response})
+                    
                     if interpretation_json.get("outlook") != "N/A":
-                        print("Outlook respondió:", interpretation_json["outlook"])
+                        print(f"[INFO] Enviando query a Outlook: {interpretation_json['outlook']}")
+                        outlook_router = outlook_chat(app, mongo, cache, refresh_functions, query=interpretation_json["outlook"])
+                        outlook_response = outlook_router()  # Esto ejecuta el método chatOutlook
+                        apis_responses.append({"api": "outlook", "response": outlook_response})
+                    
                     if interpretation_json.get("clickup") != "N/A":
-                        print("ClickUp respondió:", interpretation_json["clickup"])
+                        print(f"[INFO] Enviando query a ClickUp: {interpretation_json['clickup']}")
+                        clickup_router = clickup_chat(app, mongo, cache, refresh_functions, query=interpretation_json["clickup"])
+                        clickup_response = clickup_router()  # Esto ejecuta el método chatClickup
+                        apis_responses.append({"api": "clickup", "response": clickup_response})
+                    
                     if interpretation_json.get("asana") != "N/A":
-                        print("Asana respondió:", interpretation_json["asana"])
-                    if interpretation_json.get("notion") != "N/A":
-                        print("Notion respondió:", interpretation_json["notion"])
-                    if interpretation_json.get("hubspot") != "N/A":
-                        print("HubSpot respondió:", interpretation_json["hubspot"])
-                    if interpretation_json.get("slack") != "N/A":
-                        print("Slack respondió:", interpretation_json["slack"])
-                    if interpretation_json.get("teams") != "N/A":
-                        print("Teams respondió:", interpretation_json["teams"])
-                    if interpretation_json.get("googledrive") != "N/A":
-                        print("Google Drive respondió:", interpretation_json["googledrive"])
-                    if interpretation_json.get("onedrive") != "N/A":
-                        print("OneDrive respondió:", interpretation_json["onedrive"])
+                        print(f"[INFO] Enviando query a Asana: {interpretation_json['asana']}")
+                        asana_router = asana_chat(app, mongo, cache, refresh_functions, query=interpretation_json["asana"])
+                        asana_response = asana_router()  # Esto ejecuta el método chatAsana
+                        apis_responses.append({"api": "asana", "response": asana_response})
+                    
                     if interpretation_json.get("dropbox") != "N/A":
-                        print("Dropbox respondió:", interpretation_json["dropbox"])
-                    if interpretation_json.get("googlecalendar") != "N/A":
-                        print("Google Calendar respondió:", interpretation_json["googlecalendar"])
-                    ia_response = {"message": "Petición GET procesada", "apis": [
-                        {"api": api, "response": f"Obteniendo datos de {api}: {query}"}
-                        for api, query in interpretation_json.items() if query != "N/A"
-                    ]}
+                        print(f"[INFO] Enviando query a Dropbox: {interpretation_json['dropbox']}")
+                        dropbox_router = dropbox_chat(app, mongo, cache, refresh_functions, query=interpretation_json["dropbox"])
+                        dropbox_response = dropbox_router()  # Esto ejecuta el método chatDropbox
+                        apis_responses.append({"api": "dropbox", "response": dropbox_response})
+                    
+                    ia_response = {"message": "Petición GET procesada", "apis": apis_responses}
 
                 elif "POST" in request_type:
                     print("Procesando solicitud POST")
+                    apis_responses = []
+                    
                     if interpretation_json.get("gmail") != "N/A":
-                        print("Gmail respondió:", interpretation_json["gmail"])
+                        print(f"[INFO] Enviando acción a Gmail: {interpretation_json['gmail']}")
+                        gmail_router = gmail_chat(app, mongo, cache, refresh_functions, query=interpretation_json["gmail"])
+                        gmail_response = gmail_router()  # Esto ejecuta el método chatGmail
+                        apis_responses.append({"api": "gmail", "response": gmail_response})
+                    
                     if interpretation_json.get("outlook") != "N/A":
-                        print("Outlook respondió:", interpretation_json["outlook"])
+                        print(f"[INFO] Enviando acción a Outlook: {interpretation_json['outlook']}")
+                        outlook_router = outlook_chat(app, mongo, cache, refresh_functions, query=interpretation_json["outlook"])
+                        outlook_response = outlook_router()  # Esto ejecuta el método chatOutlook
+                        apis_responses.append({"api": "outlook", "response": outlook_response})
+                    
                     if interpretation_json.get("clickup") != "N/A":
-                        print("ClickUp respondió:", interpretation_json["clickup"])
+                        print(f"[INFO] Enviando acción a ClickUp: {interpretation_json['clickup']}")
+                        clickup_router = clickup_chat(app, mongo, cache, refresh_functions, query=interpretation_json["clickup"])
+                        clickup_response = clickup_router()  # Esto ejecuta el método chatClickup
+                        apis_responses.append({"api": "clickup", "response": clickup_response})
+                    
                     if interpretation_json.get("asana") != "N/A":
-                        print("Asana respondió:", interpretation_json["asana"])
-                    if interpretation_json.get("notion") != "N/A":
-                        print("Notion respondió:", interpretation_json["notion"])
-                    if interpretation_json.get("hubspot") != "N/A":
-                        print("HubSpot respondió:", interpretation_json["hubspot"])
-                    if interpretation_json.get("slack") != "N/A":
-                        print("Slack respondió:", interpretation_json["slack"])
-                    if interpretation_json.get("teams") != "N/A":
-                        print("Teams respondió:", interpretation_json["teams"])
-                    if interpretation_json.get("googledrive") != "N/A":
-                        print("Google Drive respondió:", interpretation_json["googledrive"])
-                    if interpretation_json.get("onedrive") != "N/A":
-                        print("OneDrive respondió:", interpretation_json["onedrive"])
+                        print(f"[INFO] Enviando acción a Asana: {interpretation_json['asana']}")
+                        asana_router = asana_chat(app, mongo, cache, refresh_functions, query=interpretation_json["asana"])
+                        asana_response = asana_router()  # Esto ejecuta el método chatAsana
+                        apis_responses.append({"api": "asana", "response": asana_response})
+                    
                     if interpretation_json.get("dropbox") != "N/A":
-                        print("Dropbox respondió:", interpretation_json["dropbox"])
-                    if interpretation_json.get("googlecalendar") != "N/A":
-                        print("Google Calendar respondió:", interpretation_json["googlecalendar"])
-                    ia_response = {"message": "Petición POST procesada", "apis": [
-                        {"api": api, "response": f"Ejecutando acción en {api}: {query}"}
-                        for api, query in interpretation_json.items() if query != "N/A"
-                    ]}
-
+                        print(f"[INFO] Enviando acción a Dropbox: {interpretation_json['dropbox']}")
+                        dropbox_router = dropbox_chat(app, mongo, cache, refresh_functions, query=interpretation_json["dropbox"])
+                        dropbox_response = dropbox_router()  # Esto ejecuta el método chatDropbox
+                        apis_responses.append({"api": "dropbox", "response": dropbox_response})
+                    
+                    ia_response = {"message": "Petición POST procesada", "apis": apis_responses}
+                    
                 elif request_type == "Es una solicitud INFO":
                     ia_response = {"message": "Información de capacidades", "capabilities": interpretation_json["capabilities"]}
 
                 elif request_type == "Es una solicitud automatizada":
                     ia_response = {"message": "Automatización procesada", "apis": [
                         {"api": api, "response": f"Procesando {api}: Si {details['condition']}, entonces {details['action']}"}
-                        for api, details in interpretation_json.items()
+                        for api, details in interpretation_json.items() if details != "N/A"
                     ]}
 
                 elif request_type == "Se refiere a la respuesta anterior":
@@ -287,12 +311,19 @@ def setup_routes_chats(app, mongo, cache, refresh_functions):
                     ]
                     ia_response = {"message": "Petición con contexto procesada", "apis": api_responses} if api_responses else "No hay suficiente contexto de la respuesta anterior para procesar esta petición."
 
+                elif request_type == "Es una solicitud múltiple":
+                    print(f"[INFO] Procesando solicitud múltiple: {interpretation_json}")
+                    ia_response = {"message": "Solicitud múltiple detectada", "apis": interpretation_json}
+
+                else:
+                    ia_response = {"message": "Tipo de solicitud no reconocido", "interpretation": ia_interpretation}
+
             except Exception as e:
                 ia_response = f"Error: {str(e)}"
         else:
             ia_response = "No se proporcionó ningún mensaje."
-
-        return jsonify(ia_response)
+        print(ia_response)
+        return jsonify({"message":ia_response})
 
     def extract_links_from_datas(datas):
         """Extrae los enlaces y los nombres (asunto/página/mensaje/nombre de archivo) de cada API según la estructura de datos recibida."""

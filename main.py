@@ -20,6 +20,12 @@ from app.routes.apis.outlook.interpreter_outlook import outlook_chat
 from app.routes.apis.asana.interpreter_asana import asana_chat
 from app.routes.apis.clickup.interpreter_clickup import clickup_chat
 from app.routes.apis.dropbox.interpreter_dropbox import dropbox_chat
+from app.routes.apis.drive.interpreter_drive import drive_chat
+from app.routes.apis.hubspot.interpreter_hubspot import hubspot_chat
+from app.routes.apis.notion.interpreter_notion import notion_chat
+from app.routes.apis.onedrive.interpreter_onedrive import onedrive_chat
+from app.routes.apis.slack.interpreter_slack import slack_chat
+from app.routes.core.multitask.interpreter_multitask import setup_routes_multitasks
 
 from flask_caching import Cache  # Importar Flask-Caching
 
@@ -55,17 +61,18 @@ def create_app():
     setup_routes_secretary_posts(app, mongo, cache, refresh_functions)
     setup_proxy_routes(app, mongo, cache)
     setup_routes_chats(app, mongo, cache, refresh_functions)
+    setup_routes_multitasks(app, mongo, cache, refresh_functions)
     setup_execute_routes(app, mongo, cache, refresh_functions)
     setup_referrals_routes(app, mongo, cache)
     gmail_chat(app, mongo, cache, refresh_functions)
     outlook_chat(app, mongo, cache, refresh_functions)
-    # notion_chat(app, mongo, cache, refresh_functions)
+    notion_chat(app, mongo, cache, refresh_functions)
     clickup_chat(app, mongo, cache, refresh_functions)
-    # hubspot_chat(app, mongo, cache, refresh_functions)
+    hubspot_chat(app, mongo, cache, refresh_functions)
     asana_chat(app, mongo, cache, refresh_functions)
-    # onedrive_chat(app, mongo, cache, refresh_functions)
-    # drive_chat(app, mongo, cache, refresh_functions)
-    # slack_chat(app, mongo, cache, refresh_functions)
+    onedrive_chat(app, mongo, cache, refresh_functions)
+    drive_chat(app, mongo, cache, refresh_functions)
+    slack_chat(app, mongo, cache, refresh_functions)
     dropbox_chat(app, mongo, cache, refresh_functions)
     
     return app

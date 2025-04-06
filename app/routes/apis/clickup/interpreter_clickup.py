@@ -1,88 +1,96 @@
-from datetime import datetime
-from flask import request, jsonify
 from datetime import datetime, timedelta
+from flask import request, jsonify
 from config import Config
 import json
-import openai
 import re
+import openai
+import requests
 openai.api_key = Config.CHAT_API_KEY
 from app.utils.utils import get_user_from_db
 from flask_caching import Cache
-def clickup_chat(app, mongo, cache, refresh_functions):
+
+def clickup_chat(app, mongo, cache, refresh_functions, query=None):
     hoy = datetime.today().strftime('%Y-%m-%d')
+
     clickup_system_info = f"""
-    Eres un intérprete de intenciones avanzado para la API de ClickUp. Tu tarea es analizar la query recibida, clasificarla según el tipo de solicitud y generar una respuesta procesada ejecutando el método correspondiente. Sigue estos pasos:
+    Eres un intérprete de intenciones avanzado para la API de ClickUp. Tu tarea es analizar el mensaje del usuario, clasificarlo en una categoría general y generar consultas generales. Para GET y POST simples, enfócate solo en ClickUp. Para solicitudes múltiples y automatizadas, incluye todas las intenciones detectadas (incluso de otras APIs) sin filtrarlas, dejando que un intérprete multitarea las procese. Si el mensaje es ambiguo o no se puede clasificar, solicita aclaración al usuario. Sigue estos pasos:
 
     1. **Clasificación del Tipo de Solicitud**:
-    - **GET**: Si la query pide información con términos como 'tareas', 'lista', o nombres (ej. 'tareas de Lista X', 'buscar tarea Y'), clasifica como: `"Es una solicitud GET"`.
-    - **POST**: Si la query pide una acción como 'crear tarea', 'actualizar', 'eliminar' (ej. 'crear tarea Revisión', 'actualizar tarea con nota'), clasifica como: `"Es una solicitud POST"`.
-    - **Automatizada**: Si la query es un dict con 'condition' y 'action' (ej. {{"condition": "nueva tarea en Lista X", "action": "asignar a juan"}}), clasifica como: `"Es una solicitud automatizada"`.
-    - **Contexto**: Si la query menciona una respuesta anterior (ej. 'más tareas de esa lista'), clasifica como: `"Se refiere a la respuesta anterior"`.
+       - **Saludo**: Si el mensaje es un saludo (ej. 'hola', '¿cómo estás?', 'buenos días'), responde con: `"Es un saludo"`.
+       - **Solicitud GET**: Si el usuario pide información con verbos como 'Mándame', 'Pásame', 'Envíame', 'Muéstrame', 'Busca', 'Dame', 'Dime', 'Quiero ver', 'Lista', 'Encuentra' (ej. 'Dame las tareas de Lista X'), responde con: `"Es una solicitud GET"`.
+       - **Solicitud POST**: Si el usuario pide una acción con verbos como 'Crear', 'Enviar', 'Eliminar', 'Actualizar', 'Agregar', 'Archivar' (ej. 'Crear tarea Revisión'), responde con: `"Es una solicitud POST"`.
+       - **Solicitud Automatizada**: Si el usuario pide algo repetitivo o condicional con frases como 'Cada vez que', 'Siempre que', 'Automáticamente', 'Si pasa X haz Y' (ej. 'Si creo una tarea, asigna a Juan'), responde con: `"Es una solicitud automatizada"`.
+       - **Solicitud Múltiple**: Si el mensaje combina varias acciones con conjunciones como 'y', 'luego', 'después', o verbos consecutivos (ej. 'Busca tareas y crea una nueva'), responde con: `"Es una solicitud múltiple"`.
+       - **No Clasificable**: Si el mensaje es demasiado vago o incompleto (ej. 'Haz algo', 'Tarea'), responde con: `"No puedo clasificar la solicitud, por favor aclara qué quieres hacer"`.
 
-    2. **Procesamiento de la Query**:
-    - **GET**: 
-        - Si contiene 'tareas', extrae el criterio y busca (ej. 'tareas de Lista X' → buscar tareas).
-        - Devuelve un JSON: `{{"results": [{{"url": "<url>", "task_name": "<nombre>"}}]}}`.
-    - **POST**:
-        - Si es 'crear tarea', extrae el nombre y crea la tarea.
-        - Si es 'actualizar', actualiza la tarea especificada.
-        - Si es 'eliminar', elimina la tarea.
-        - Devuelve un string: `"Tarea creada: <nombre>"`, `"Tarea actualizada"`, etc.
-    - **Automatizada**:
-        - Extrae la condición y la acción (ej. 'condition: nueva tarea en Lista X', 'action: asignar a juan').
-        - Devuelve un string: `"Automatización configurada: Si <condición>, entonces <acción>"`.
-    - **Contexto**:
-        - Usa la query y el contexto previo para buscar más información.
+    2. **Reglas Críticas para Clasificación**:
+       - **GET**: Solicitudes de lectura solo para ClickUp (obtener tareas, listas, espacios).
+       - **POST**: Acciones de escritura solo para ClickUp (crear tareas, actualizar tareas, eliminar tareas).
+       - **Automatizadas**: Acciones con condiciones, detectando intenciones para ClickUp y otras APIs mencionadas por el usuario.
+       - **Múltiple**: Detecta conjunciones ('y', 'luego'), verbos consecutivos, o intenciones separadas, incluyendo acciones de cualquier API mencionada.
+       - **Ambigüedad**: Si un verbo podría ser GET o POST (ej. 'Manda'), usa el contexto; si no hay suficiente, clasifica como "No Clasificable".
+       - **Errores del Usuario**: Si falta información clave (ej. 'Busca tareas' sin especificar de dónde), clasifica como "No Clasificable".
 
-    3. **Reglas Específicas**:
-    - Si falta información clave (ej. nombre en 'crear tarea'), devuelve: `"Falta información clave"`.
-    - Usa la fecha actual ({hoy}) para inferir fechas incompletas.
+    3. **Detección y Generación de Consultas**:
+       - Para **GET y POST simples**, genera intenciones solo para ClickUp:
+         - **ClickUp**: Buscar tareas, obtener listas, crear tareas, actualizar tareas, eliminar tareas, asignar tareas.
+       - Para **Automatizadas y Múltiples**, incluye todas las intenciones detectadas, incluso si involucran otras APIs (ej. Gmail, Slack), sin filtrarlas.
+       - Si una acción no encaja con ClickUp en GET o POST simples, usa 'N/A'.
 
     4. **Formato de Salida**:
-    - GET: `{{"results": [{{"url": "<url>", "task_name": "<nombre>"}}]}}`
-    - POST: String (ej. `"Tarea creada: Revisión"`)
-    - Automatizada: String
-    - Contexto: Similar a GET
+       - Devuelve un string con el tipo de solicitud seguido de un JSON con consultas generales bajo la clave "clickup".
+       - **GET y POST simples**: Usa 'N/A' si no aplica a ClickUp.
+       - **Automatizadas**: Lista condiciones y acciones, incluyendo otras APIs si se mencionan.
+       - **Múltiples**: Lista todas las intenciones detectadas como un array, sin filtrar por ClickUp.
+       - **No Clasificable**: `{{"message": "Por favor, aclara qué quieres hacer"}}`.
+
+    5. **Estructura del JSON**:
+       - **GET**: `{{"clickup": "<intención>"}}`
+       - **POST**: `{{"clickup": "<intención>"}}`
+       - **Automatizada**: `{{"clickup": [{{"condition": "<condición>", "action": "<acción>"}}, ...]}}`
+       - **Múltiple**: `{{"clickup": ["<intención 1>", "<intención 2>", ...]}}`
+       - **No Clasificable**: `{{"message": "Por favor, aclara qué quieres hacer"}}`
+
+    6. **Reglas para Consultas Generales**:
+       - **GET**: Describe qué obtener en ClickUp (ej. "obtener tareas de Lista X"). Si no aplica, "No Clasificable".
+       - **POST**: Describe la acción en ClickUp (ej. "crear tarea Revisión"). Si no aplica, "No Clasificable".
+       - **Automatizada**: Divide en condición y acción, incluyendo otras APIs (ej. "cuando cree una tarea" y "asignar a Juan").
+       - **Múltiple**: Separa cada intención en una frase clara, incluyendo acciones de otras APIs (ej. "enviar correo a Juan").
+       - Incluye nombres o datos clave del usuario (ej. "Lista X", "mañana") si se mencionan.
+
+    Ejemplos:
+    - "Dame las tareas de Lista X" → "Es una solicitud GET" {{"clickup": "obtener tareas de Lista X"}}
+    - "Crear tarea Revisión" → "Es una solicitud POST" {{"clickup": "crear tarea Revisión"}}
+    - "Si creo una tarea, asigna a Juan" → "Es una solicitud automatizada" {{"clickup": [{{"condition": "crear una tarea", "action": "asignar a Juan"}}]}}
+    - "Busca tareas y crea una nueva" → "Es una solicitud múltiple" {{"clickup": ["obtener tareas", "crear una nueva tarea"]}}
+    - "Hola" → "Es un saludo" {{"clickup": "N/A"}}
+    - "Sube un archivo a Drive" → "No puedo clasificar la solicitud, por favor aclara qué quieres hacer" {{"message": "Esto no es una acción para ClickUp, ¿qué quieres hacer con ClickUp?"}}
     """
 
     def should_refresh_tokens(email):
         last_refresh_key = f"last_refresh_{email}"
         last_refresh = cache.get(last_refresh_key)
         current_time = datetime.utcnow()
-
         if last_refresh is None:
-            print(f"[INFO] No hay registro de último refresco para {email}, forzando refresco")
             return True
-
         last_refresh_time = datetime.fromtimestamp(last_refresh)
         refresh_interval = timedelta(minutes=30)
-        time_since_last_refresh = current_time - last_refresh_time
-
-        if time_since_last_refresh >= refresh_interval:
-            print(f"[INFO] Han pasado {time_since_last_refresh} desde el último refresco para {email}, refrescando")
-            return True
-        
-        print(f"[INFO] Tokens de {email} aún vigentes, faltan {refresh_interval - time_since_last_refresh} para refrescar")
-        return False
+        return (current_time - last_refresh_time) >= refresh_interval
 
     def get_user_with_refreshed_tokens(email):
         try:
             user = cache.get(email)
             if not user:
-                print(f"[INFO] Usuario {email} no está en caché, consultando DB")
                 user = get_user_from_db(email, cache, mongo)
                 if not user:
-                    print(f"[ERROR] Usuario {email} no encontrado en DB")
                     return None
                 cache.set(email, user, timeout=1800)
 
             if not should_refresh_tokens(email):
-                print(f"[INFO] Tokens de {email} no necesitan refresco, devolviendo usuario cacheado")
                 return user
 
             refresh_tokens_dict = refresh_functions["get_refresh_tokens_from_db"](email)
             if not refresh_tokens_dict or "clickup" not in refresh_tokens_dict:
-                print(f"[INFO] No hay refresh tokens para ClickUp de {email}, marcando tiempo y devolviendo usuario")
                 cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
                 return user
 
@@ -92,166 +100,204 @@ def clickup_chat(app, mongo, cache, refresh_functions):
             } if "clickup" in integrations and integrations["clickup"].get("refresh_token") not in (None, "n/a") else {}
 
             if not tokens_to_refresh:
-                print(f"[INFO] No hay tokens válidos para refrescar ClickUp para {email}, marcando tiempo")
                 cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
                 return user
 
-            print(f"[INFO] Refrescando tokens de ClickUp para {email}")
             refreshed_tokens, errors = refresh_functions["refresh_tokens"](tokens_to_refresh, email)
-
-            if refreshed_tokens:
-                print(f"[INFO] Tokens de ClickUp refrescados para {email}")
+            if refreshed_tokens or errors:
                 user = get_user_from_db(email, cache, mongo)
-                if not user:
-                    print(f"[ERROR] No se pudo recargar usuario {email} tras refresco")
-                    return None
                 cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
-                return user
-            
-            if errors:
-                print(f"[WARNING] Errores al refrescar tokens de ClickUp para {email}: {errors}")
-                cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
-                return user
-
-            print(f"[INFO] No se refrescaron tokens de ClickUp para {email}, marcando tiempo")
-            cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
             return user
-
         except Exception as e:
             print(f"[ERROR] Error en get_user_with_refreshed_tokens para {email}: {e}")
             return None
-        
+
+    def handle_get_request(intencion, email):
+        user = get_user_with_refreshed_tokens(email)
+        if not user:
+            return {"solicitud": "GET", "result": {"error": "¡Órale! No te encontré, compa 😕"}}, 404
+
+        clickup_token = user.get('integrations', {}).get('clickup', {}).get('token')
+        if not clickup_token:
+            return {"solicitud": "GET", "result": {"error": "¡Ey! No tengo tu token de ClickUp, ¿me das permisos? 🔑"}}, 400
+
+        headers = {'Authorization': f"{clickup_token}", 'Content-Type': 'application/json'}
+        url = "https://api.clickup.com/api/v2/list/some_list_id/tasks"  # List ID debería ser dinámico
+
+        query = intencion["clickup"]
+        if not query or query == "N/A":
+            return {"solicitud": "GET", "result": {"error": "¡Falta algo, papu! ¿Qué quieres buscar en ClickUp? 🤔"}}, 400
+
+        try:
+            if "obtener tareas" in query.lower():
+                list_name = query.split("de")[-1].strip() if "de" in query else ""
+                # Simulación: en un entorno real, necesitarías el list_id correspondiente
+                response = requests.get(url, headers=headers, params={"search": list_name})
+                response.raise_for_status()
+                tasks = response.json().get('tasks', [])
+                results = [{"task_name": task["name"], "url": task["url"]} for task in tasks]
+                if not results:
+                    return {"solicitud": "GET", "result": {"message": "📭 No encontré tareas con eso, ¿probamos otra cosa?"}}, 200
+                return {"solicitud": "GET", "result": {"message": f"¡Órale! Encontré {len(results)} tareas 📋", "data": results}}, 200
+            else:
+                return {"solicitud": "GET", "result": {"error": "¡Uy! Solo puedo buscar tareas por ahora, ¿qué tal eso? 😅"}}, 400
+        except requests.RequestException as e:
+            return {"solicitud": "GET", "result": {"error": f"¡Ay, qué mala onda! Error con ClickUp: {str(e)}"}}, 500
+
+    def handle_post_request(intencion, email):
+        user = get_user_with_refreshed_tokens(email)
+        if not user:
+            return {"solicitud": "POST", "result": {"error": "¡Órale! No te encontré, compa 😕"}}, 404
+
+        clickup_token = user.get('integrations', {}).get('clickup', {}).get('token')
+        if not clickup_token:
+            return {"solicitud": "POST", "result": {"error": "¡Ey! No tengo tu token de ClickUp, ¿me das permisos? 🔑"}}, 400
+
+        headers = {'Authorization': f"{clickup_token}", 'Content-Type': 'application/json'}
+
+        query = intencion["clickup"]
+        if isinstance(query, list) and all(isinstance(item, str) for item in query):
+            return {"solicitud": "POST", "result": {"message": "Solicitud múltiple detectada, pasando al intérprete multitarea", "actions": query}}, 200
+        if isinstance(query, list) and all(isinstance(item, dict) and "condition" in item for item in query):
+            return {"solicitud": "POST", "result": {"message": "Solicitud automatizada detectada, pasando al intérprete multitarea", "actions": query}}, 200
+
+        try:
+            # Crear tarea
+            if "crear tarea" in query.lower():
+                match = re.search(r'crear\s*tarea\s*(.+)', query, re.IGNORECASE)
+                if not match:
+                    return {"solicitud": "POST", "result": {"error": "¡Ey! ¿Cómo se llama la tarea que quieres crear? 📝"}}, 400
+                task_name = match.group(1).strip()
+                url = "https://api.clickup.com/api/v2/list/some_list_id/task"  # List ID debería ser dinámico
+                payload = {"name": task_name, "description": "Creada desde API"}
+                response = requests.post(url, headers=headers, json=payload)
+                response.raise_for_status()
+                return {"solicitud": "POST", "result": {"message": f"📋 Tarea '{task_name}' creada con éxito 🚀"}}, 200
+
+            # Actualizar tarea
+            elif "actualizar tarea" in query.lower():
+                match = re.search(r'actualizar\s*tarea\s*"(.+?)"\s*con\s*(.+)', query, re.IGNORECASE)
+                if not match:
+                    return {"solicitud": "POST", "result": {"error": "¡Ey! ¿Qué tarea y qué cambio quieres hacer? 🤔"}}, 400
+                task_name = match.group(1).strip()
+                update_content = match.group(2).strip()
+                # Simulación: buscar tarea primero
+                search_url = "https://api.clickup.com/api/v2/list/some_list_id/tasks"
+                response = requests.get(search_url, headers=headers, params={"search": task_name})
+                response.raise_for_status()
+                tasks = response.json().get('tasks', [])
+                task_id = next((t["id"] for t in tasks if t["name"].lower() == task_name.lower()), None)
+                if not task_id:
+                    return {"solicitud": "POST", "result": {"message": f"📭 No encontré la tarea '{task_name}'"}}, 200
+                url = f"https://api.clickup.com/api/v2/task/{task_id}"
+                payload = {"name": f"{task_name} - {update_content}"}
+                response = requests.put(url, headers=headers, json=payload)
+                response.raise_for_status()
+                return {"solicitud": "POST", "result": {"message": f"✨ Tarea '{task_name}' actualizada con '{update_content}'"}}, 200
+
+            # Eliminar tarea
+            elif "eliminar tarea" in query.lower():
+                match = re.search(r'eliminar\s*tarea\s*"(.+?)"', query, re.IGNORECASE)
+                if not match:
+                    return {"solicitud": "POST", "result": {"error": "¡Ey! ¿Qué tarea quieres eliminar? 🗑️"}}, 400
+                task_name = match.group(1).strip()
+                search_url = "https://api.clickup.com/api/v2/list/some_list_id/tasks"
+                response = requests.get(search_url, headers=headers, params={"search": task_name})
+                response.raise_for_status()
+                tasks = response.json().get('tasks', [])
+                task_id = next((t["id"] for t in tasks if t["name"].lower() == task_name.lower()), None)
+                if not task_id:
+                    return {"solicitud": "POST", "result": {"message": f"📭 No encontré la tarea '{task_name}'"}}, 200
+                url = f"https://api.clickup.com/api/v2/task/{task_id}"
+                response = requests.delete(url, headers=headers)
+                response.raise_for_status()
+                return {"solicitud": "POST", "result": {"message": f"🗑️ Tarea '{task_name}' eliminada con éxito"}}, 200
+
+            return {"solicitud": "POST", "result": {"error": "¡Uy! Acción no soportada en ClickUp, ¿qué tal crear o actualizar una tarea? 😅"}}, 400
+
+        except requests.RequestException as e:
+            return {"solicitud": "POST", "result": {"error": f"¡Ay, qué mala onda! Error con ClickUp: {str(e)}"}}, 500
+        except Exception as e:
+            return {"solicitud": "POST", "result": {"error": f"¡Se puso feo! Error inesperado: {str(e)}"}}, 500
+
     @app.route("/api/chat/clickup", methods=["POST"])
     def chatClickUp():
+        email = request.args.get("email")
         data = request.get_json()
-        email = data.get("email")
+        user_query = data.get("messages", [{}])[-1].get("content") if data.get("messages") else None
         if not email:
-            email = request.args.get("email")
-        user_messages = data.get("messages", [])
-
-        if not email:
-            return jsonify({"error": "Email del usuario es requerido"}), 400
+            return jsonify({"error": "¡Órale! Necesito tu email, compa 😅"}), 400
+        if not user_query:
+            return jsonify({"error": "¡Ey! Dame algo pa’ trabajar, ¿qué quieres hacer con ClickUp? 🤔"}), 400
 
         user = get_user_with_refreshed_tokens(email)
         if not user:
-            return jsonify({"error": "Usuario no encontrado"}), 404
-        
-        print(f"[DEBUG] Usuario cargado inicialmente: {user}")
+            return jsonify({"error": "¡Uy! No te encontré en el sistema, ¿seguro que estás registrado? 😕"}), 404
 
         if "chats" not in user or not any(chat["name"] == "ClickUpChat" for chat in user.get("chats", [])):
-            print(f"[INFO] El usuario {email} no tiene chat 'ClickUpChat', inicializando")
-            result = mongo.database.usuarios.update_one(
+            mongo.database.usuarios.update_one(
                 {"correo": email},
                 {"$set": {"chats": [{"name": "ClickUpChat", "messages": []}]}} if "chats" not in user else {"$push": {"chats": {"name": "ClickUpChat", "messages": []}}},
                 upsert=True
             )
-            print(f"[DEBUG] Inicialización de chats, matched: {result.matched_count}, modified: {result.modified_count}")
-            user = mongo.database.usuarios.find_one({"correo": email})
-            print(f"[DEBUG] Usuario tras inicializar ClickUpChat: {user}")
+            user = get_user_with_refreshed_tokens(email)
 
         clickup_chat = next((chat for chat in user["chats"] if chat["name"] == "ClickUpChat"), None)
         if not clickup_chat:
-            print(f"[ERROR] No se encontró el chat 'ClickUpChat' después de inicializar para {email}")
-            return jsonify({"error": "Error interno al inicializar el chat"}), 500
-        print(f"[INFO] Mensajes previos en ClickUpChat: {len(clickup_chat['messages'])}")
+            return jsonify({"error": "¡Qué mala onda! Error al inicializar el chat 😓"}), 500
 
-        if user_messages:
-            last_message = user_messages[-1].get("content", "").lower()
-            timestamp = datetime.utcnow().isoformat()
-            user_message = {"role": "user", "content": last_message, "timestamp": timestamp}
+        timestamp = datetime.utcnow().isoformat()
+        user_message = {"role": "user", "content": user_query, "timestamp": timestamp}
 
-            try:
-                three_days_ago = datetime.utcnow() - timedelta(days=3)
-                filtered_messages = [
-                    msg for msg in clickup_chat["messages"]
-                    if datetime.fromisoformat(msg["timestamp"]) >= three_days_ago
-                ]
+        try:
+            prompt = f"""
+            Interpreta esta query para ClickUp: "{user_query}"
+            Si es un saludo (como "hola", "holaaaa"), responde: "Es un saludo" {{"clickup": "N/A"}}
+            Si es otra cosa, clasifica como GET, POST, etc., según las reglas del system prompt anterior.
+            Devuelve el resultado en formato: "TIPO" {{"clave": "valor"}}
+            """
+            response = openai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": clickup_system_info},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=500
+            )
+            ia_response = response.choices[0].message.content.strip()
 
-                context_keywords = ["semana", "hace días", "hace una semana", "mes", "año", "hace tiempo"]
-                use_full_history = any(keyword in last_message for keyword in context_keywords)
+            request_type_match = re.match(r'^"([^"]+)"\s*(\{.*\})', ia_response, re.DOTALL)
+            if not request_type_match:
+                result = {"message": "¡Uy! Algo salió mal, ¿puedes intentarlo otra vez? 😅"}
+            else:
+                request_type = request_type_match.group(1)
+                json_str = request_type_match.group(2)
+                parsed_response = json.loads(json_str)
 
-                if use_full_history:
-                    print(f"[INFO] Detectado contexto mayor a 3 días en '{last_message}', usando historial completo")
-                    filtered_messages = clickup_chat["messages"]
-
-                print(f"[INFO] Mensajes enviados al contexto: {len(filtered_messages)} de {len(clickup_chat['messages'])} totales")
-
-                prompt = f"Interpreta la query del usuario sobre ClickUp: {last_message}"
-                response = openai.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {"role": "system", "content": clickup_system_info},
-                        *filtered_messages,
-                        {"role": "user", "content": prompt}
-                    ],
-                    max_tokens=1000
-                )
-                ia_interpretation = response.choices[0].message.content.strip()
-                print("Interpretación:", ia_interpretation)
-
-                request_type_match = re.match(r'^"?([^"]+)"?\s*\{', ia_interpretation, re.DOTALL)
-                request_type = request_type_match.group(1).strip() if request_type_match else "Desconocido"
-                json_match = re.search(r'\{[^}]*\}', ia_interpretation, re.DOTALL | re.MULTILINE)
-                if json_match:
-                    json_str = json_match.group(0)
-                    interpretation_json = json.loads(json_str)
-                else:
-                    raise ValueError("No se encontró un JSON válido en la interpretación")
-
-                print("Tipo de solicitud:", request_type)
-                print("JSON extraído:", interpretation_json)
-
-                assistant_message = {
-                    "role": "assistant",
-                    "content": ia_interpretation,
-                    "timestamp": datetime.utcnow().isoformat()
-                }
-                result = mongo.database.usuarios.update_one(
-                    {"correo": email, "chats.name": "ClickUpChat"},
-                    {"$push": {"chats.$.messages": {"$each": [user_message, assistant_message]}}}
-                )
-                print(f"[INFO] Mensajes añadidos al chat ClickUpChat para {email}, matched: {result.matched_count}, modified: {result.modified_count}")
-
-                user = mongo.database.usuarios.find_one({"correo": email})
-                print(f"[DEBUG] Usuario tras actualizar mensajes: {user}")
-
-                if "saludo" in request_type.lower():
-                    prompt_greeting = f"Usuario: {last_message}\nResponde de manera cálida y amigable sobre ClickUp, con emojis."
-                    response_greeting = openai.chat.completions.create(
+                if request_type == "Es un saludo":
+                    greeting_prompt = f"El usuario dijo {user_query}. Responde de manera cálida y amigable con emojis a un saludo simple. Menciona que eres su asistente personalizado de ClickUp."
+                    greeting_response = openai.chat.completions.create(
                         model="gpt-3.5-turbo",
-                        messages=[{"role": "system", "content": "Eres un asistente amigable especializado en ClickUp."}, {"role": "user", "content": prompt_greeting}],
-                        max_tokens=150
+                        messages=[{"role": "system", "content": "Eres su asistente personal de ClickUp muy amigable."}, {"role": "user", "content": greeting_prompt}],
+                        max_tokens=200
                     )
-                    ia_response = response_greeting.choices[0].message.content.strip()
-
-                elif "GET" in request_type:
-                    print("Procesando solicitud GET para ClickUp")
-                    if interpretation_json.get("clickup") != "N/A":
-                        print("ClickUp respondió:", interpretation_json["clickup"])
-                        ia_response = {
-                            "message": "Petición GET procesada para ClickUp",
-                            "apis": [{"api": "clickup", "response": f"Obteniendo datos de ClickUp: {interpretation_json['clickup']}"}]
-                        }
-                    else:
-                        ia_response = {"message": "No se especificó una consulta válida para ClickUp"}
-
-                elif "POST" in request_type:
-                    print("Procesando solicitud POST para ClickUp")
-                    if interpretation_json.get("clickup") != "N/A":
-                        print("ClickUp respondió:", interpretation_json["clickup"])
-                        ia_response = {
-                            "message": "Petición POST procesada para ClickUp",
-                            "apis": [{"api": "clickup", "response": f"Ejecutando acción en ClickUp: {interpretation_json['clickup']}"}]
-                        }
-                    else:
-                        ia_response = {"message": "No se especificó una acción válida para ClickUp"}
-
+                    result = {"message": greeting_response.choices[0].message.content.strip()}
+                elif request_type == "Es una solicitud GET":
+                    result = handle_get_request(parsed_response, email)
+                elif request_type in ["Es una solicitud POST", "Es una solicitud automatizada", "Es una solicitud múltiple"]:
+                    result = handle_post_request(parsed_response, email)
                 else:
-                    ia_response = {"message": f"Tipo de solicitud '{request_type}' no soportado específicamente para ClickUp", "interpretation": ia_interpretation}
+                    result = {"solicitud": "ERROR", "result": {"error": parsed_response.get("message", "¡No entendí qué quieres hacer con ClickUp! 😕")}}
 
-            except Exception as e:
-                ia_response = f"Error: {str(e)}"
-        else:
-            ia_response = "No se proporcionó ningún mensaje."
+            assistant_message = {"role": "assistant", "content": json.dumps(result), "timestamp": datetime.utcnow().isoformat()}
+            mongo.database.usuarios.update_one(
+                {"correo": email, "chats.name": "ClickUpChat"},
+                {"$push": {"chats.$.messages": {"$each": [user_message, assistant_message]}}}
+            )
 
-        return jsonify(ia_response)
+            return jsonify(result)
+
+        except Exception as e:
+            return jsonify({"solicitud": "ERROR", "result": {"error": f"¡Se puso feo! Error inesperado: {str(e)} 😓"}}), 500
+
+    return chatClickUp

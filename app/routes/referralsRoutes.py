@@ -11,7 +11,7 @@ def setup_referrals_routes(app, mongo, cache):
     def generate_unique_referral_code():
         while True:
             # Generar código alfanumérico de 6 caracteres
-            code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+            code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
             
             # Verificar que no exista ya en la base de datos
             existing = mongo.database.usuarios.find_one({"code_referrals_uniq": code})

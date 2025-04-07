@@ -89,6 +89,7 @@ def setup_referrals_routes(app, mongo, cache):
         return jsonify({
             "message": "Usuario registrado exitosamente con referido", 
             "id": new_user_id,
+            "nombre": data["nombre"],
             "code_referrals_uniq": unique_referral_code
         }), 201
     

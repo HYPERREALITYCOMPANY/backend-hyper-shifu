@@ -44,6 +44,51 @@ def setup_auth_routes(app, mongo, cache):
             "apellido": data["apellido"],
             "correo": data["correo"],
             "password": hashed_password,
+            "rol": "user",
+            "integrations": {},
+            "code_referrals_uniq": unique_referral_code,
+            "count_referrals": 0,
+            "date_registered": datetime.now()
+        }
+
+        if 'usuarios' not in mongo.database.list_collection_names():
+            mongo.database.create_collection('usuarios')
+
+        result = mongo.database.usuarios.insert_one(usuario)
+        return jsonify({
+            "message": "Usuario registrado exitosamente", 
+            "id": str(result.inserted_id),
+            "nombre": data["nombre"],
+            "apellido": data["apellido"],
+            "code_referrals_uniq": unique_referral_code
+        }), 201
+
+    @app.route('/register-admin', methods=['POST'])
+    def register_admin():
+        request_data = request.get_json() 
+        
+        if not request_data or "registerAdmin" not in request_data:
+            return jsonify({"error": "El cuerpo de la solicitud es inválido"}), 400
+
+        data = request_data.get('registerAdmin')
+        if not data or not all(k in data for k in ("nombre", "apellido", "correo", "password")):
+            return jsonify({"error": "Faltan campos obligatorios"}), 400
+
+        if mongo.database.usuarios.find_one({"correo": data["correo"]}):
+            return jsonify({"error": "El correo ya está registrado"}), 400
+
+        hashed_password = generate_password_hash(data['password'])
+        
+        # Generar código único de referido para el nuevo usuario
+        unique_referral_code = generate_unique_referral_code()
+        
+        usuario = {
+            "img": data.get("img", ""),  
+            "nombre": data["nombre"],
+            "apellido": data["apellido"],
+            "correo": data["correo"],
+            "password": hashed_password,
+            "rol": "admin",
             "integrations": {},
             "code_referrals_uniq": unique_referral_code,
             "count_referrals": 0,

@@ -58,7 +58,7 @@ def create_app():
     setup_routes_chats(app, mongo, cache, refresh_functions)
     setup_execute_routes(app, mongo, cache, refresh_functions)
     setup_referrals_routes(app, mongo, cache)
-    setup_reward_routes(app, mongo)
+    setup_reward_routes(app, mongo, cache)
     gmail_chat(app, mongo, cache, refresh_functions)
     outlook_chat(app, mongo, cache, refresh_functions)
     # notion_chat(app, mongo, cache, refresh_functions)

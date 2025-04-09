@@ -1,5 +1,6 @@
 import string
 import random
+import base64
 from datetime import datetime
 from flask_pymongo import ObjectId
 from flask import request, jsonify, session
@@ -21,28 +22,32 @@ def setup_auth_routes(app, mongo, cache):
 
     @app.route('/register', methods=['POST'])
     def register_user():
-        request_data = request.get_json() 
-        
-        if not request_data or "registerUser" not in request_data:
-            return jsonify({"error": "El cuerpo de la solicitud es inválido"}), 400
+        # Usar request.form para obtener los campos de texto y request.files para la imagen
+        request_data = request.form.to_dict()
+        print("Datos de registro recibidos:", request_data)
 
-        data = request_data.get('registerUser')
-        if not data or not all(k in data for k in ("nombre", "apellido", "correo", "password")):
+        if not request_data or not all(k in request_data for k in ("nombre", "apellido", "correo", "password")):
             return jsonify({"error": "Faltan campos obligatorios"}), 400
 
-        if mongo.database.usuarios.find_one({"correo": data["correo"]}):
+        if mongo.database.usuarios.find_one({"correo": request_data["correo"]}):
             return jsonify({"error": "El correo ya está registrado"}), 400
 
-        hashed_password = generate_password_hash(data['password'])
-        
-        # Generar código único de referido para el nuevo usuario
+        hashed_password = generate_password_hash(request_data['password'])
+
+        # Procesar imagen si se envía como archivo
+        image_file = request.files.get("image")  # 'image' debe ser el nombre del campo en el formulario
+        if image_file:
+            image_base64 = base64.b64encode(image_file.read()).decode('utf-8')  # Convertir la imagen a base64
+        else:
+            image_base64 = ""  # Si no se envía imagen, dejar como vacío
+
         unique_referral_code = generate_unique_referral_code()
-        
+
         usuario = {
-            "img": data.get("img", ""),  
-            "nombre": data["nombre"],
-            "apellido": data["apellido"],
-            "correo": data["correo"],
+            "img": image_base64,
+            "nombre": request_data["nombre"],
+            "apellido": request_data["apellido"],
+            "correo": request_data["correo"],
             "password": hashed_password,
             "rol": "user",
             "integrations": {},
@@ -56,37 +61,42 @@ def setup_auth_routes(app, mongo, cache):
 
         result = mongo.database.usuarios.insert_one(usuario)
         return jsonify({
-            "message": "Usuario registrado exitosamente", 
+            "message": "Usuario registrado exitosamente",
             "id": str(result.inserted_id),
-            "nombre": data["nombre"],
-            "apellido": data["apellido"],
+            "nombre": request_data["nombre"],
+            "apellido": request_data["apellido"],
             "code_referrals_uniq": unique_referral_code
         }), 201
 
+
     @app.route('/register-admin', methods=['POST'])
     def register_admin():
-        request_data = request.get_json() 
-        
-        if not request_data or "registerAdmin" not in request_data:
-            return jsonify({"error": "El cuerpo de la solicitud es inválido"}), 400
+        # Usamos request.form para obtener los campos de texto y request.files para la imagen
+        request_data = request.form.to_dict()
+        print("Datos de registro recibidos:", request_data)
 
-        data = request_data.get('registerAdmin')
-        if not data or not all(k in data for k in ("nombre", "apellido", "correo", "password")):
+        if not request_data or not all(k in request_data for k in ("nombre", "apellido", "correo", "password")):
             return jsonify({"error": "Faltan campos obligatorios"}), 400
 
-        if mongo.database.usuarios.find_one({"correo": data["correo"]}):
+        if mongo.database.usuarios.find_one({"correo": request_data["correo"]}):
             return jsonify({"error": "El correo ya está registrado"}), 400
 
-        hashed_password = generate_password_hash(data['password'])
-        
-        # Generar código único de referido para el nuevo usuario
+        hashed_password = generate_password_hash(request_data['password'])
+
+        # Procesar imagen si se envía como archivo
+        image_file = request.files.get("image")  # 'image' debe ser el nombre del campo en el formulario
+        if image_file:
+            image_base64 = base64.b64encode(image_file.read()).decode('utf-8')  # Convertir la imagen a base64
+        else:
+            image_base64 = ""  # Si no se envía imagen, dejar como vacío
+
         unique_referral_code = generate_unique_referral_code()
-        
+
         usuario = {
-            "img": data.get("img", ""),  
-            "nombre": data["nombre"],
-            "apellido": data["apellido"],
-            "correo": data["correo"],
+            "img": image_base64,
+            "nombre": request_data["nombre"],
+            "apellido": request_data["apellido"],
+            "correo": request_data["correo"],
             "password": hashed_password,
             "rol": "admin",
             "integrations": {},
@@ -100,10 +110,10 @@ def setup_auth_routes(app, mongo, cache):
 
         result = mongo.database.usuarios.insert_one(usuario)
         return jsonify({
-            "message": "Usuario registrado exitosamente", 
+            "message": "Usuario registrado exitosamente",
             "id": str(result.inserted_id),
-            "nombre": data["nombre"],
-            "apellido": data["apellido"],
+            "nombre": request_data["nombre"],
+            "apellido": request_data["apellido"],
             "code_referrals_uniq": unique_referral_code,
             "date_registered": datetime.now()
         }), 201
@@ -123,20 +133,29 @@ def setup_auth_routes(app, mongo, cache):
             usuario = mongo.database.usuarios.find_one({'correo': data["correo"]})
             if not usuario or not check_password_hash(usuario["password"], data["password"]):
                 return jsonify({"error": "Credenciales incorrectas"}), 401
-            cache.set(data["correo"], usuario, timeout=1800)  # Guardamos en caché por 30 min
+                
+            # Convertir ObjectId a string antes de guardar en caché
+            usuario_cacheable = dict(usuario)
+            usuario_cacheable['_id'] = str(usuario['_id'])
+            cache.set(data["correo"], usuario_cacheable, timeout=1800)
             print(f"[INFO] Usuario {data['correo']} cargado desde MongoDB y cacheado")
+            usuario = usuario_cacheable
 
         session['user_id'] = str(usuario['_id'])
         name = usuario['nombre'] + " " + usuario['apellido']
-        img = usuario['img']
         
+        # Pasamos directamente la cadena base64 para ser usada en el frontend
+        img_base64 = ""
+        if usuario.get("img"):
+            img_base64 = usuario["img"]  # Enviamos directamente el string base64
+            
         return jsonify({
             "message": "Inicio de sesión exitoso",
             "user_id": session['user_id'],
             "user_name": name,
-            "user_img": img,
-            "code_referrals_uniq": usuario.get("code_referrals_uniq", ""),  # Incluimos el código de referido
-            "count_referrals": usuario.get("count_referrals", 0)  # Incluimos el contador de referidos
+            "user_img": img_base64,  # Enviamos la imagen en base64
+            "code_referrals_uniq": usuario.get("code_referrals_uniq", ""),
+            "count_referrals": usuario.get("count_referrals", 0)
         }), 200
     
     @app.route("/get_user", methods=["GET"])

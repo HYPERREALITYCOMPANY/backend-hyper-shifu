@@ -16,6 +16,7 @@ from app.routes.executeRoutes import setup_execute_routes
 from app.routes.refreshTokens import setup_routes_refresh
 from app.routes.referralsRoutes import setup_referrals_routes
 from app.routes.rewardRoutes import setup_reward_routes
+from app.routes.stripeRoutes import setup_stripe_routes
 from app.routes.apis.gmail.interpreter_gmail import gmail_chat
 from app.routes.apis.outlook.interpreter_outlook import outlook_chat
 from app.routes.apis.asana.interpreter_asana import asana_chat
@@ -59,6 +60,7 @@ def create_app():
     setup_execute_routes(app, mongo, cache, refresh_functions)
     setup_referrals_routes(app, mongo, cache)
     setup_reward_routes(app, mongo, cache)
+    setup_stripe_routes(app, mongo, cache)
     gmail_chat(app, mongo, cache, refresh_functions)
     outlook_chat(app, mongo, cache, refresh_functions)
     # notion_chat(app, mongo, cache, refresh_functions)

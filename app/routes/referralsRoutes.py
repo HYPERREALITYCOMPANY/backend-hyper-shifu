@@ -1,5 +1,6 @@
 import random
 import string
+import base64
 from datetime import datetime
 from flask import request, jsonify
 from flask_pymongo import ObjectId
@@ -21,34 +22,40 @@ def setup_referrals_routes(app, mongo, cache):
     # Ruta para registro con código de referido
     @app.route('/register_with_referral', methods=['POST'])
     def register_with_referral():
-        request_data = request.get_json()
+        # Usar request.form para obtener los campos de texto y request.files para la imagen
+        request_data = request.form.to_dict()
+        print("Datos de registro con referido recibidos:", request_data)
         
-        if not request_data or "registerUser" not in request_data:
-            return jsonify({"error": "El cuerpo de la solicitud es inválido"}), 400
-
-        data = request_data.get('registerUser')
-        if not data or not all(k in data for k in ("nombre", "apellido", "correo", "password", "referral_code")):
+        if not request_data or not all(k in request_data for k in ("nombre", "apellido", "correo", "password", "referral_code")):
             return jsonify({"error": "Faltan campos obligatorios incluyendo el código de referido"}), 400
 
-        if mongo.database.usuarios.find_one({"correo": data["correo"]}):
+        if mongo.database.usuarios.find_one({"correo": request_data["correo"]}):
             return jsonify({"error": "El correo ya está registrado"}), 400
             
         # Verificar que el código de referido existe
-        referrer = mongo.database.usuarios.find_one({"code_referrals_uniq": data["referral_code"]})
+        referrer = mongo.database.usuarios.find_one({"code_referrals_uniq": request_data["referral_code"]})
         if not referrer:
             return jsonify({"error": "Código de referido inválido"}), 400
             
-        hashed_password = generate_password_hash(data['password'])
+        hashed_password = generate_password_hash(request_data['password'])
+        
+        # Procesar imagen si se envía como archivo
+        image_file = request.files.get("image")  # 'image' debe ser el nombre del campo en el formulario
+        if image_file:
+            image_base64 = base64.b64encode(image_file.read()).decode('utf-8')  # Convertir la imagen a base64
+        else:
+            image_base64 = ""  # Si no se envía imagen, dejar como vacío
         
         # Generar código único de referido para el nuevo usuario
         unique_referral_code = generate_unique_referral_code()
         
         usuario = {
-            "img": data.get("img", ""),  
-            "nombre": data["nombre"],
-            "apellido": data["apellido"],
-            "correo": data["correo"],
+            "img": image_base64,
+            "nombre": request_data["nombre"],
+            "apellido": request_data["apellido"],
+            "correo": request_data["correo"],
             "password": hashed_password,
+            "rol": "user",
             "integrations": {},
             "code_referrals_uniq": unique_referral_code,
             "count_referrals": 0, 
@@ -64,32 +71,44 @@ def setup_referrals_routes(app, mongo, cache):
         # Crear registro en la colección de referidos
         if 'referrals' not in mongo.database.list_collection_names():
             mongo.database.create_collection('referrals')
-            
+        
+        # Asegurarnos de que tenemos el id del referente
+        referrer_id = str(referrer["_id"])
+        
+        # Crear y guardar el registro de referido
         referral_record = {
-            "referrer_id": str(referrer["_id"]),
+            "referrer_id": referrer_id,
             "referred_id": new_user_id,
-            "nombre": data["nombre"],
-            "apellido": data["apellido"],
-            "referral_code": data["referral_code"],
+            "nombre": request_data["nombre"],
+            "apellido": request_data["apellido"],
+            "referral_code": request_data["referral_code"],
             "date_registered": datetime.now()
         }
         
         mongo.database.referrals.insert_one(referral_record)
         
         # Incrementar el contador de referidos del usuario que refirió
+        # Usar ObjectId para actualizar correctamente
+        from bson.objectid import ObjectId
+        
         mongo.database.usuarios.update_one(
-            {"_id": referrer["_id"]},
+            {"_id": ObjectId(referrer_id)},
             {"$inc": {"count_referrals": 1}}
         )
         
         # Invalidar caché del referente
         if "correo" in referrer:
             cache.delete(referrer["correo"])
+        
+        # Añadir log para debugging
+        print(f"Referral record created: {referrer_id} referred {new_user_id}")
+        print(f"Updated referrer count_referrals for user: {referrer_id}")
             
         return jsonify({
             "message": "Usuario registrado exitosamente con referido", 
             "id": new_user_id,
-            "nombre": data["nombre"],
+            "nombre": request_data["nombre"],
+            "apellido": request_data["apellido"],
             "code_referrals_uniq": unique_referral_code
         }), 201
     

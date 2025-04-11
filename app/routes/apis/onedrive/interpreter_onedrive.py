@@ -8,63 +8,78 @@ import requests
 openai.api_key = Config.CHAT_API_KEY
 from app.utils.utils import get_user_from_db
 from flask_caching import Cache
+from .getFunctionOnedrive import handle_get_request
+from .postFunctionOnedrive import handle_post_request
+from app.routes.core.context.ContextHandler import ContextHandler
 
-def onedrive_chat(app, mongo, cache, refresh_functions, query=None):
+def process_onedrive_chat(email, user_query=None, mongo=None, cache=None, refresh_functions=None):
+    """Core logic for processing OneDrive chat requests."""
     hoy = datetime.today().strftime('%Y-%m-%d')
 
     onedrive_system_info = f"""
-    Eres un intérprete de intenciones avanzado para la API de Microsoft OneDrive. Tu tarea es analizar el mensaje del usuario, clasificarlo en una categoría general y generar consultas generales. Para GET y POST simples, enfócate solo en OneDrive. Para solicitudes múltiples y automatizadas, incluye todas las intenciones detectadas (incluso de otras APIs) sin filtrarlas, dejando que un intérprete multitarea las procese. Si el mensaje es ambiguo o no se puede clasificar, solicita aclaración al usuario. Sigue estos pasos:
+    Eres un intérprete de intenciones avanzado para la API de Microsoft Graph (OneDrive), pero también debes detectar acciones relacionadas con otras APIs cuando el usuario las mencione en solicitudes múltiples o automatizadas. Tu tarea es analizar el mensaje del usuario, clasificarlo en una categoría general y generar consultas generales. Para GET y POST simples, enfócate solo en OneDrive. Para solicitudes múltiples y automatizadas, incluye todas las intenciones detectadas (incluso de otras APIs) sin filtrarlas, dejando que un intérprete multitarea las procese. Si el mensaje es ambiguo o no se puede clasificar, solicita aclaración al usuario. Sigue estos pasos:
 
     1. **Clasificación del Tipo de Solicitud**:
-       - **Saludo**: Si el mensaje es un saludo (ej. 'hola', '¿cómo estás?', 'buenos días'), responde con: `"Es un saludo"`.
-       - **Solicitud GET**: Si el usuario pide información con verbos como 'Mándame', 'Pásame', 'Envíame', 'Muéstrame', 'Busca', 'Dame', 'Dime', 'Quiero ver', 'Lista', 'Encuentra' (ej. 'Dame los archivos de mi carpeta'), responde con: `"Es una solicitud GET"`.
-       - **Solicitud POST**: Si el usuario pide una acción con verbos como 'Crear', 'Subir', 'Eliminar', 'Actualizar', 'Agregar', 'Mover' (ej. 'Subir archivo Proyecto X'), responde con: `"Es una solicitud POST"`.
-       - **Solicitud Automatizada**: Si el usuario pide algo repetitivo o condicional con frases como 'Cada vez que', 'Siempre que', 'Automáticamente', 'Si pasa X haz Y' (ej. 'Si subo un archivo, notifica a Juan'), responde con: `"Es una solicitud automatizada"`.
-       - **Solicitud Múltiple**: Si el mensaje combina varias acciones con conjunciones como 'y', 'luego', 'después', o verbos consecutivos (ej. 'Busca archivos y sube uno nuevo'), responde con: `"Es una solicitud múltiple"`.
-       - **No Clasificable**: Si el mensaje es demasiado vago o incompleto (ej. 'Haz algo', 'Archivo'), responde con: `"No puedo clasificar la solicitud, por favor aclara qué quieres hacer"`.
+    - **Saludo**: Si el mensaje es un saludo o una interacción social (ej. 'hola', '¿cómo estás?', 'buenos días', 'hey'), clasifica como: `"Es un saludo"`.
+    - **Solicitud GET**: Si el usuario pide información con verbos como 'Mándame', 'Pásame', 'Envíame', 'Muéstrame', 'Busca', 'Dame', 'Dime', 'Quiero ver', 'Lista', 'Encuentra', '¿Qué hay?', '¿Cuáles son?' (ej. 'Dame los archivos en carpetaX', 'Busca archivos de Juan'), clasifica como: `"Es una solicitud GET"`.
+    - **Solicitud GET de Contexto (GET_CONTEXT)**: Si el usuario pide detalles sobre un archivo específico mencionado previamente (ej. 'De qué trata el archivo doc1.txt?', 'Qué contiene el archivo en carpetaX?', 'Dame el contenido del archivo de ayer'), usando frases como 'de qué trata', 'qué contiene', 'dame el contenido', 'detalle', 'muéstrame el contenido', clasifica como: `"Es una solicitud GET de contexto"`.
+    - **Solicitud POST**: Si el usuario pide una acción con verbos como 'Subir', 'Enviar', 'Eliminar', 'Actualizar', 'Escribe', 'Crear' (ej. 'Subir archivo doc1.txt a carpetaX', 'Eliminar archivo doc1.txt'), clasifica como: `"Es una solicitud POST"`.
+    - **Solicitud Automatizada**: Si el usuario pide algo repetitivo o condicional con frases como 'Cada vez que', 'Siempre que', 'Automáticamente', 'Si pasa X haz Y', 'Cuando ocurra X' (ej. 'Si subo un archivo a carpetaX, envía un correo'), clasifica como: `"Es una solicitud automatizada"`.
+    - **Solicitud Múltiple**: Si el mensaje combina varias acciones con conjunciones como 'y', 'luego', 'después', o verbos consecutivos (ej. 'Busca archivos en carpetaX y sube uno a Drive', 'Sube un archivo y envía un mensaje'), clasifica como: `"Es una solicitud múltiple"`.
+    - **No Clasificable**: Si el mensaje es demasiado vago, incompleto o no encaja en las categorías anteriores (ej. 'Haz algo', 'Archivo', 'Carpeta'), clasifica como: `"No puedo clasificar la solicitud, por favor aclara qué quieres hacer"`.
 
     2. **Reglas Críticas para Clasificación**:
-       - **GET**: Solicitudes de lectura solo para OneDrive (obtener archivos, carpetas, listar contenido).
-       - **POST**: Acciones de escritura solo para OneDrive (subir archivos, actualizar nombres, eliminar archivos).
-       - **Automatizadas**: Acciones con condiciones, detectando intenciones para OneDrive y otras APIs mencionadas por el usuario.
-       - **Múltiple**: Detecta conjunciones ('y', 'luego'), verbos consecutivos, o intenciones separadas, incluyendo acciones de cualquier API mencionada.
-       - **Ambigüedad**: Si un verbo podría ser GET o POST (ej. 'Manda'), usa el contexto; si no hay suficiente, clasifica como "No Clasificable".
-       - **Errores del Usuario**: Si falta información clave (ej. 'Busca archivos' sin especificar dónde), clasifica como "No Clasificable".
+    - **GET**: Solicitudes de lectura solo para OneDrive (obtener archivos, carpetas). Ejemplo: 'Dame los archivos en carpetaX' → GET.
+    - **GET_CONTEXT**: Solicitudes que buscan detalles de un archivo específico mencionado antes, generalmente usando el historial del chat. Ejemplo: 'De qué trata el archivo doc1.txt?' → GET_CONTEXT.
+    - **POST**: Acciones de escritura solo para OneDrive (subir archivos, actualizar archivos, eliminar archivos). Ejemplo: 'Subir archivo doc1.txt' → POST.
+    - **Automatizadas**: Acciones con condiciones, detectando intenciones para OneDrive y otras APIs mencionadas. Ejemplo: 'Si subo un archivo a carpetaX, envía un correo' → Automatizada.
+    - **Múltiple**: Detecta conjunciones ('y', 'luego'), verbos consecutivos, o intenciones separadas, incluyendo acciones de cualquier API. Ejemplo: 'Busca archivos en carpetaX y sube uno' → Múltiple.
+    - **Ambigüedad**: Si un verbo puede ser GET o POST (ej. 'Manda'), analiza el contexto:
+        - Si pide información (ej. 'Manda los archivos de carpetaX'), es GET.
+        - Si pide una acción (ej. 'Manda un archivo a carpetaX'), es POST.
+        - Si no hay suficiente contexto, clasifica como "No Clasificable".
+    - **Errores del Usuario**: Si falta información clave (ej. 'Busca archivos' sin especificar dónde), clasifica como "No Clasificable".
 
     3. **Detección y Generación de Consultas**:
-       - Para **GET y POST simples**, genera intenciones solo para OneDrive:
-         - **OneDrive**: Buscar archivos, obtener carpetas, subir archivos, actualizar archivos, eliminar archivos.
-       - Para **Automatizadas y Múltiples**, incluye todas las intenciones detectadas, incluso si involucran otras APIs (ej. Gmail, Slack), sin filtrarlas.
-       - Si una acción no encaja con OneDrive en GET o POST simples, usa 'N/A'.
+    - Para **GET y POST simples**, genera intenciones solo para OneDrive:
+        - **OneDrive**: Buscar archivos, obtener carpetas, subir archivos, actualizar archivos, eliminar archivos.
+    - Para **GET_CONTEXT**, genera una intención que describa qué detalle se pide del archivo (ej. "detalle del archivo doc1.txt").
+    - Para **Automatizadas y Múltiples**, incluye todas las intenciones detectadas, incluso si involucran otras APIs (ej. Slack, Gmail), sin filtrarlas.
+    - Si una acción no encaja con OneDrive en GET o POST simples, usa 'N/A'.
 
     4. **Formato de Salida**:
-       - Devuelve un string con el tipo de solicitud seguido de un JSON con consultas generales bajo la clave "onedrive".
-       - **GET y POST simples**: Usa 'N/A' si no aplica a OneDrive.
-       - **Automatizadas**: Lista condiciones y acciones, incluyendo otras APIs si se mencionan.
-       - **Múltiples**: Lista todas las intenciones detectadas como un array, sin filtrar por OneDrive.
-       - **No Clasificable**: `{{"message": "Por favor, aclara qué quieres hacer"}}`.
+    - Devuelve un string con el tipo de solicitud seguido de un JSON con consultas generales bajo la clave "onedrive".
+    - **GET**: `{{"onedrive": "<intención>"}}`
+    - **GET_CONTEXT**: `{{"onedrive": "<intención>"}}`
+    - **POST**: `{{"onedrive": "<intención>"}}`
+    - **Automatizada**: `{{"onedrive": [{{"condition": "<condición>", "action": "<acción>"}}, ...]}}`
+    - **Múltiple**: `{{"onedrive": ["<intención 1>", "<intención 2>", ...]}}`
+    - **No Clasificable**: `{{"message": "Por favor, aclara qué quieres hacer"}}`
+    - **Saludo**: `{{"onedrive": "N/A"}}`
 
-    5. **Estructura del JSON**:
-       - **GET**: `{{"onedrive": "<intención>"}}`
-       - **POST**: `{{"onedrive": "<intención>"}}`
-       - **Automatizada**: `{{"onedrive": [{{"condition": "<condición>", "action": "<acción>"}}, ...]}}`
-       - **Múltiple**: `{{"onedrive": ["<intención 1>", "<intención 2>", ...]}}`
-       - **No Clasificable**: `{{"message": "Por favor, aclara qué quieres hacer"}}`
+    5. **Reglas para Consultas Generales**:
+    - **GET**: Describe qué obtener en OneDrive (ej. "obtener archivos en carpetaX"). Si no aplica, clasifica como "No Clasificable".
+    - **GET_CONTEXT**: Describe qué detalle se pide (ej. "detalle del archivo doc1.txt", "contenido del archivo en carpetaX"). Si no se especifica un archivo, usa "detalle del último archivo mencionado".
+    - **POST**: Describe la acción en OneDrive (ej. "subir archivo doc1.txt a carpetaX"). Si no aplica, clasifica como "No Clasificable".
+    - **Automatizada**: Divide en condición y acción, incluyendo otras APIs (ej. "condición: subir un archivo a carpetaX", "acción: enviar un correo").
+    - **Múltiple**: Separa cada intención en una frase clara, incluyendo acciones de otras APIs (ej. "obtener archivos en carpetaX", "enviar un mensaje en Slack").
+    - Incluye nombres de archivos o carpetas clave del usuario (ej. "doc1.txt", "carpetaX") si se mencionan.
 
-    6. **Reglas para Consultas Generales**:
-       - **GET**: Describe qué obtener en OneDrive (ej. "obtener archivos de la carpeta Proyecto X"). Si no aplica, "No Clasificable".
-       - **POST**: Describe la acción en OneDrive (ej. "subir archivo Proyecto X"). Si no aplica, "No Clasificable".
-       - **Automatizada**: Divide en condición y acción, incluyendo otras APIs (ej. "cuando suba un archivo" y "notificar a Juan").
-       - **Múltiple**: Separa cada intención en una frase clara, incluyendo acciones de otras APIs (ej. "enviar correo a Juan").
-       - Incluye nombres o datos clave del usuario (ej. "Proyecto X", "mañana") si se mencionan.
+    6. **Manejo de Casos Especiales**:
+    - **Términos Temporales**: Si se mencionan términos como 'hoy', 'mañana', 'ayer', inclúyelos en la intención (ej. 'obtener archivos de ayer').
+    - **Archivos o Carpetas Específicos**: Si se pide un archivo o carpeta específica (ej. 'el archivo doc1.txt', 'archivos en carpetaX'), inclúyelo en la intención (ej. "obtener el archivo doc1.txt").
+    - **Contexto Implícito**: Si el usuario no especifica un archivo o carpeta en una solicitud GET_CONTEXT, asume que se refiere al último archivo o carpeta mencionada en el historial (ej. 'De qué trata el archivo?' → "detalle del último archivo mencionado").
 
     Ejemplos:
-    - "Dame los archivos de mi carpeta" → "Es una solicitud GET" {{"onedrive": "obtener archivos de mi carpeta"}}
-    - "Subir archivo Proyecto X" → "Es una solicitud POST" {{"onedrive": "subir archivo Proyecto X"}}
-    - "Si subo un archivo, notifica a Juan" → "Es una solicitud automatizada" {{"onedrive": [{{"condition": "subir un archivo", "action": "notificar a Juan"}}]}}
-    - "Busca archivos y sube uno nuevo" → "Es una solicitud múltiple" {{"onedrive": ["obtener archivos", "subir un archivo nuevo"]}}
+    - "Mandame los archivos en carpetaX" → "Es una solicitud GET" {{"onedrive": "obtener archivos en carpetaX"}}
+    - "Dame los archivos de Juan" → "Es una solicitud GET" {{"onedrive": "obtener archivos de Juan"}}
+    - "De qué trata el archivo doc1.txt?" → "Es una solicitud GET de contexto" {{"onedrive": "detalle del archivo doc1.txt"}}
+    - "Qué contiene el archivo en carpetaX?" → "Es una solicitud GET de contexto" {{"onedrive": "contenido del archivo en carpetaX"}}
+    - "Subir archivo doc1.txt a carpetaX" → "Es una solicitud POST" {{"onedrive": "subir archivo doc1.txt a carpetaX"}}
+    - "Si subo un archivo a carpetaX, envía un correo" → "Es una solicitud automatizada" {{"onedrive": [{{"condition": "subir un archivo a carpetaX", "action": "enviar un correo"}}]}}
+    - "Busca archivos en carpetaX y sube uno" → "Es una solicitud múltiple" {{"onedrive": ["obtener archivos en carpetaX", "subir un archivo"]}}
     - "Hola" → "Es un saludo" {{"onedrive": "N/A"}}
-    - "Crear tarea en Asana" → "No puedo clasificar la solicitud, por favor aclara qué quieres hacer" {{"message": "Esto no es una acción para OneDrive, ¿qué quieres hacer con OneDrive?"}}
+    - "Enviar mensaje a #general" → "No puedo clasificar la solicitud, por favor aclara qué quieres hacer" {{"message": "Esto no es una acción para OneDrive, ¿qué quieres hacer con OneDrive?"}}
     """
 
     def should_refresh_tokens(email):
@@ -112,191 +127,188 @@ def onedrive_chat(app, mongo, cache, refresh_functions, query=None):
             print(f"[ERROR] Error en get_user_with_refreshed_tokens para {email}: {e}")
             return None
 
-    def handle_get_request(intencion, email):
-        user = get_user_with_refreshed_tokens(email)
-        if not user:
-            return {"solicitud": "GET", "result": {"error": "¡Órale! No te encontré, compa 😕"}}, 404
+    def generate_prompt(get_result):
+        result = get_result.get("result", {})
+        message = result.get("message", "No se pudo procesar la solicitud, algo salió mal.")
+        data = result.get("data", None)
 
-        onedrive_token = user.get('integrations', {}).get('onedrive', {}).get('token')
-        if not onedrive_token:
-            return {"solicitud": "GET", "result": {"error": "¡Ey! No tengo tu token de OneDrive, ¿me das permisos? 🔑"}}, 400
-
-        headers = {'Authorization': f"Bearer {onedrive_token}", 'Content-Type': 'application/json'}
-        url = "https://graph.microsoft.com/v1.0/me/drive/root/children"
-
-        query = intencion["onedrive"]
-        if not query or query == "N/A":
-            return {"solicitud": "GET", "result": {"error": "¡Falta algo, papu! ¿Qué quieres buscar en OneDrive? 🤔"}}, 400
-
-        try:
-            if "obtener archivos" in query.lower():
-                folder_name = query.split("de")[-1].strip() if "de" in query else ""
-                params = {"$filter": f"startswith(name, '{folder_name}')" if folder_name else ""}
-                response = requests.get(url, headers=headers, params=params)
-                response.raise_for_status()
-                files = response.json().get('value', [])
-                results = [{"file_name": file["name"], "url": file["webUrl"]} for file in files if "file" in file]
-                if not results:
-                    return {"solicitud": "GET", "result": {"message": "📭 No encontré archivos con eso, ¿probamos otra cosa?"}}, 200
-                return {"solicitud": "GET", "result": {"message": f"¡Órale! Encontré {len(results)} archivos 📁", "data": results}}, 200
-            else:
-                return {"solicitud": "GET", "result": {"error": "¡Uy! Solo puedo buscar archivos por ahora, ¿qué tal eso? 😅"}}, 400
-        except requests.RequestException as e:
-            return {"solicitud": "GET", "result": {"error": f"¡Ay, qué mala onda! Error con OneDrive: {str(e)}"}}, 500
-
-    def handle_post_request(intencion, email):
-        user = get_user_with_refreshed_tokens(email)
-        if not user:
-            return {"solicitud": "POST", "result": {"error": "¡Órale! No te encontré, compa 😕"}}, 404
-
-        onedrive_token = user.get('integrations', {}).get('onedrive', {}).get('token')
-        if not onedrive_token:
-            return {"solicitud": "POST", "result": {"error": "¡Ey! No tengo tu token de OneDrive, ¿me das permisos? 🔑"}}, 400
-
-        headers = {'Authorization': f"Bearer {onedrive_token}", 'Content-Type': 'application/json'}
-
-        query = intencion["onedrive"]
-        if isinstance(query, list) and all(isinstance(item, str) for item in query):
-            return {"solicitud": "POST", "result": {"message": "Solicitud múltiple detectada, pasando al intérprete multitarea", "actions": query}}, 200
-        if isinstance(query, list) and all(isinstance(item, dict) and "condition" in item for item in query):
-            return {"solicitud": "POST", "result": {"message": "Solicitud automatizada detectada, pasando al intérprete multitarea", "actions": query}}, 200
-
-        try:
-            # Subir archivo
-            if "subir archivo" in query.lower():
-                match = re.search(r'subir\s*archivo\s*(.+)', query, re.IGNORECASE)
-                if not match:
-                    return {"solicitud": "POST", "result": {"error": "¡Ey! ¿Cómo se llama el archivo que quieres subir? 📤"}}, 400
-                file_name = match.group(1).strip()
-                url = f"https://graph.microsoft.com/v1.0/me/drive/root:/{file_name}:/content"
-                headers['Content-Type'] = 'text/plain'
-                response = requests.put(url, headers=headers, data="Contenido simulado del archivo".encode('utf-8'))
-                response.raise_for_status()
-                return {"solicitud": "POST", "result": {"message": f"📤 Archivo '{file_name}' subido con éxito 🚀"}}, 200
-
-            # Actualizar archivo
-            elif "actualizar archivo" in query.lower():
-                match = re.search(r'actualizar\s*archivo\s*"(.+?)"\s*con\s*(.+)', query, re.IGNORECASE)
-                if not match:
-                    return {"solicitud": "POST", "result": {"error": "¡Ey! ¿Qué archivo y qué cambio quieres hacer? 🤔"}}, 400
-                file_name = match.group(1).strip()
-                update_content = match.group(2).strip()
-                search_url = "https://graph.microsoft.com/v1.0/me/drive/root/children"
-                response = requests.get(search_url, headers=headers)
-                response.raise_for_status()
-                files = response.json().get('value', [])
-                file_id = next((f["id"] for f in files if f["name"].lower() == file_name.lower()), None)
-                if not file_id:
-                    return {"solicitud": "POST", "result": {"message": f"📭 No encontré el archivo '{file_name}'"}}, 200
-                url = f"https://graph.microsoft.com/v1.0/me/drive/items/{file_id}"
-                payload = {"name": f"{file_name} - {update_content}"}
-                response = requests.patch(url, headers=headers, json=payload)
-                response.raise_for_status()
-                return {"solicitud": "POST", "result": {"message": f"✨ Archivo '{file_name}' actualizado con '{update_content}'"}}, 200
-
-            # Eliminar archivo
-            elif "eliminar archivo" in query.lower():
-                match = re.search(r'eliminar\s*archivo\s*"(.+?)"', query, re.IGNORECASE)
-                if not match:
-                    return {"solicitud": "POST", "result": {"error": "¡Ey! ¿Qué archivo quieres eliminar? 🗑️"}}, 400
-                file_name = match.group(1).strip()
-                search_url = "https://graph.microsoft.com/v1.0/me/drive/root/children"
-                response = requests.get(search_url, headers=headers)
-                response.raise_for_status()
-                files = response.json().get('value', [])
-                file_id = next((f["id"] for f in files if f["name"].lower() == file_name.lower()), None)
-                if not file_id:
-                    return {"solicitud": "POST", "result": {"message": f"📭 No encontré el archivo '{file_name}'"}}, 200
-                url = f"https://graph.microsoft.com/v1.0/me/drive/items/{file_id}"
-                response = requests.delete(url, headers=headers)
-                response.raise_for_status()
-                return {"solicitud": "POST", "result": {"message": f"🗑️ Archivo '{file_name}' eliminado con éxito"}}, 200
-
-            return {"solicitud": "POST", "result": {"error": "¡Uy! Acción no soportada en OneDrive, ¿qué tal subir o actualizar un archivo? 😅"}}, 400
-
-        except requests.RequestException as e:
-            return {"solicitud": "POST", "result": {"error": f"¡Ay, qué mala onda! Error con OneDrive: {str(e)}"}}, 500
-        except Exception as e:
-            return {"solicitud": "POST", "result": {"error": f"¡Se puso feo! Error inesperado: {str(e)}"}}, 500
-
-    @app.route("/api/chat/onedrive", methods=["POST"])
-    def chatOneDrive():
-        email = request.args.get("email")
-        data = request.get_json()
-        user_query = data.get("messages", [{}])[-1].get("content") if data.get("messages") else None
-        if not email:
-            return jsonify({"error": "¡Órale! Necesito tu email, compa 😅"}), 400
-        if not user_query:
-            return jsonify({"error": "¡Ey! Dame algo pa’ trabajar, ¿qué quieres hacer con OneDrive? 🤔"}), 400
-
-        user = get_user_with_refreshed_tokens(email)
-        if not user:
-            return jsonify({"error": "¡Uy! No te encontré en el sistema, ¿seguro que estás registrado? 😕"}), 404
-
-        if "chats" not in user or not any(chat["name"] == "OneDriveChat" for chat in user.get("chats", [])):
-            mongo.database.usuarios.update_one(
-                {"correo": email},
-                {"$set": {"chats": [{"name": "OneDriveChat", "messages": []}]}} if "chats" not in user else {"$push": {"chats": {"name": "OneDriveChat", "messages": []}}},
-                upsert=True
+        if data and "archivos" in message.lower():
+            file_info = "\n".join(
+                f"Nombre: {item['name']} | Última modificación: {item['last_modified']}"
+                for item in data
             )
-            user = get_user_with_refreshed_tokens(email)
+            base_text = f"El usuario pidió archivos y esto encontré:\n{message}\nDetalles:\n{file_info}"
+        else:
+            base_text = f"El usuario pidió algo y esto obtuve:\n{message}" + (f"\nDetalles: {str(data)}" if data else "")
 
-        onedrive_chat = next((chat for chat in user["chats"] if chat["name"] == "OneDriveChat"), None)
-        if not onedrive_chat:
-            return jsonify({"error": "¡Qué mala onda! Error al inicializar el chat 😓"}), 500
+        prompt = f"""
+        Debes responder la petición del usuario: {user_query}
+        Eres un asistente de OneDrive súper amigable y útil, con un tono relajado y natural, como si charlaras con un amigo. Usa emojis sutiles para darle onda, pero sin exagerar. Basándote en esta info, arma una respuesta concisa y en párrafo que resuma los resultados de forma práctica y clara:
 
-        timestamp = datetime.utcnow().isoformat()
-        user_message = {"role": "user", "content": user_query, "timestamp": timestamp}
+        {base_text}
+
+        - Si hay resultados de archivos, haz un resumen breve y útil, mencionando cuántos archivos encontré y algo relevante (como nombres o fechas). No listes todo como tabla, solo destaca lo más importante.
+        - Si no hay resultados, di algo amable y sugiere ajustar la búsqueda si hace falta.
+        - Habla en primera persona y evita sonar robótico o repetir los datos crudos tal cual.
+        NO INCLUYAS LINKS y responde amigable pero FORMALMENTE
+        """
 
         try:
-            prompt = f"""
-            Interpreta esta query para OneDrive: "{user_query}"
-            Si es un saludo (como "hola", "holaaaa"), responde: "Es un saludo" {{"onedrive": "N/A"}}
-            Si es otra cosa, clasifica como GET, POST, etc., según las reglas del system prompt anterior.
-            Devuelve el resultado en formato: "TIPO" {{"clave": "valor"}}
-            """
             response = openai.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "Eres un asistente de OneDrive amigable."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=400
+            )
+            ia_response = response.choices[0].message.content.strip()
+            return ia_response, prompt
+        except Exception as e:
+            return f"¡Ups! Algo salió mal al armar la respuesta: {str(e)}", prompt
+
+    # Extract query if not provided
+    if not user_query:
+        try:
+            data = request.get_json() or {}
+            user_query = (
+                data.get("messages", [{}])[-1].get("content")
+                if data.get("messages")
+                else request.args.get("query")
+            )
+        except Exception:
+            return {"message": "¡Ey! No me diste ninguna query, ¿qué quieres que haga con OneDrive? 📂"}, 400
+
+    if not email:
+        return {"message": "¡Órale! Necesito tu email pa’ trabajar, ¿me lo pasas? 😅"}, 400
+    if not user_query:
+        return {"message": "¡Ey! No me diste ninguna query, ¿qué quieres que haga con OneDrive? 📂"}, 400
+
+    user = get_user_with_refreshed_tokens(email)
+    if not user:
+        return {"message": "No encontré a este usuario, ¿seguro que está registrado? 😕"}, 404
+
+    if "chats" not in user or not any(chat.get("name") == "OneDriveChat" for chat in user.get("chats", [])):
+        mongo.database.usuarios.update_one(
+            {"correo": email},
+            {"$set": {"chats": [{"name": "OneDriveChat", "messages": []}]}} if "chats" not in user else {"$push": {"chats": {"name": "OneDriveChat", "messages": []}}},
+            upsert=True
+        )
+        user = get_user_with_refreshed_tokens(email)
+    usuario = mongo.database.usuarios.find_one({"correo": email})
+    onedrive_chat = next(
+        (chat for chat in usuario.get("chats", []) if isinstance(chat, dict) and chat.get("name") == "OneDriveChat"),
+        None
+    )
+
+    if not onedrive_chat:
+        return {"message": "¡Uy! Algo salió mal al preparar el chat, ¿intentamos otra vez? 😓"}, 500
+
+    timestamp = datetime.utcnow().isoformat()
+    user_message = {"role": "user", "content": user_query, "timestamp": timestamp}
+
+    try:
+        prompt = f"""
+            Interpreta esta query para OneDrive: "{user_query}"
+            Devuelve un JSON con esta estructura:
+            {{
+            "peticion": "GET" | "POST" | "SALUDO" | "AUTOMATIZADA" | "MULTIPLE" | "NO_CLASIFICABLE" | "GET_CONTEXT",
+            "accion": "buscar" | "subir" | "actualizar" | "eliminar" | "detalle_archivo" | null (si es saludo o no clasificable),
+            "solicitud": "<detalles específicos>" | null (si no aplica) | [array de acciones para MULTIPLE] | [{{"condition": "...", "action": "..."}} para AUTOMATIZADA]
+            }}
+
+            Reglas:
+            1. Si es un saludo (ej. "hola"), responde un string como "SALUDO".
+            2. Para GET, agrupa verbos de lectura como "dame", "mándame", "buscar", "muéstrame", "lista", "encuentra" en "accion": "buscar".
+            - Si la query menciona "archivo", "archivos" seguido de un término (ej. "carpetaX", "Juan"), asume que es una carpeta o nombre y usa "solicitud": "archivos en <término>".
+            3. Para GET de contexto (GET_CONTEXT), detecta si el usuario pide detalles sobre un archivo específico mencionado antes (ej. "De qué trata el archivo doc1.txt?", "Qué contiene el archivo en carpetaX") usando verbos o frases como "de qué trata", "qué contiene", "detalle", "muéstrame el contenido", "dame el contenido". Usa "peticion": "GET_CONTEXT", "accion": "detalle_archivo", "solicitud": "<término específico del archivo>", donde el término es el nombre del archivo o carpeta mencionada (ej. "doc1.txt", "carpetaX"). Si no se menciona un término claro, usa el último archivo mencionado en el historial.
+            4. Para POST, agrupa verbos en estas categorías:
+            - "subir": "subir", "envía", "carga"
+            - "actualizar": "actualizar", "modificar", "cambiar"
+            - "eliminar": "eliminar", "borrar", "quitar"
+            5. Si es AUTOMATIZADA o MULTIPLE, usa arrays según el system prompt.
+            6. Si no se entiende, usa "peticion": "NO_CLASIFICABLE", "accion": null, "solicitud": "Por favor, aclara qué quieres hacer".
+
+            Ejemplos:
+            - "Holaaaa" → {{"peticion": "SALUDO", "accion": null, "solicitud": null}}
+            - "Mándame los archivos en carpetaX" → {{"peticion": "GET", "accion": "buscar", "solicitud": "archivos en carpetaX"}}
+            - "De qué trata el archivo doc1.txt?" → {{"peticion": "GET_CONTEXT", "accion": "detalle_archivo", "solicitud": "doc1.txt"}}
+            - "Subir archivo doc1.txt a carpetaX" → {{"peticion": "POST", "accion": "subir", "solicitud": "archivo doc1.txt a carpetaX"}}
+            - "Si subo un archivo a carpetaX, envía correo" → {{"peticion": "AUTOMATIZADA", "accion": null, "solicitud": [{{"condition": "subo un archivo a carpetaX", "action": "envía correo"}}]}}
+            """
+        response = openai.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": onedrive_system_info},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=500
+        )
+        ia_response = response.choices[0].message.content.strip()
+
+        json_pattern = r'\{(?:[^{}]|\{[^{}]*\})*\}'
+        match = re.search(json_pattern, ia_response, re.DOTALL | re.MULTILINE)
+        if match:
+            parsed_response = json.loads(match.group(0))
+            peticion = parsed_response.get("peticion")
+            accion = parsed_response.get("accion")
+            solicitud = parsed_response.get("solicitud")
+        else:
+            parsed_response = {"peticion": "NO_CLASIFICABLE", "accion": None, "solicitud": "¡Ups! Algo salió mal con la respuesta, ¿me lo repites?"}
+            peticion = parsed_response["peticion"]
+            accion = parsed_response["accion"]
+            solicitud = parsed_response["solicitud"]
+
+        if "saludo" in peticion.lower():
+            greeting_prompt = f"El usuario dijo '{user_query}', responde de manera cálida y amigable con emojis. Menciona que eres su asistente personalizado de OneDrive."
+            greeting_response = openai.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "system", "content": "Eres su asistente personal de OneDrive muy amigable."}, {"role": "user", "content": greeting_prompt}],
+                max_tokens=200
             )
-            ia_response = response.choices[0].message.content.strip()
-
-            request_type_match = re.match(r'^"([^"]+)"\s*(\{.*\})', ia_response, re.DOTALL)
-            if not request_type_match:
-                result = {"message": "¡Uy! Algo salió mal, ¿puedes intentarlo otra vez? 😅"}
-            else:
-                request_type = request_type_match.group(1)
-                json_str = request_type_match.group(2)
-                parsed_response = json.loads(json_str)
-
-                if request_type == "Es un saludo":
-                    greeting_prompt = f"El usuario dijo {user_query}. Responde de manera cálida y amigable con emojis a un saludo simple. Menciona que eres su asistente personalizado de OneDrive."
-                    greeting_response = openai.chat.completions.create(
-                        model="gpt-3.5-turbo",
-                        messages=[{"role": "system", "content": "Eres su asistente personal de OneDrive muy amigable."}, {"role": "user", "content": greeting_prompt}],
-                        max_tokens=200
-                    )
-                    result = {"message": greeting_response.choices[0].message.content.strip()}
-                elif request_type == "Es una solicitud GET":
-                    result = handle_get_request(parsed_response, email)
-                elif request_type in ["Es una solicitud POST", "Es una solicitud automatizada", "Es una solicitud múltiple"]:
-                    result = handle_post_request(parsed_response, email)
-                else:
-                    result = {"solicitud": "ERROR", "result": {"error": parsed_response.get("message", "¡No entendí qué quieres hacer con OneDrive! 😕")}}
-
-            assistant_message = {"role": "assistant", "content": json.dumps(result), "timestamp": datetime.utcnow().isoformat()}
-            mongo.database.usuarios.update_one(
-                {"correo": email, "chats.name": "OneDriveChat"},
-                {"$push": {"chats.$.messages": {"$each": [user_message, assistant_message]}}}
+            result = greeting_response.choices[0].message.content.strip()
+            status = 200
+        elif "get_context" in peticion.lower():
+            context_handler = ContextHandler(mongo.database)
+            result, status = context_handler.get_chat_context(
+                email=email,
+                chat_name="OneDriveChat",
+                query=user_query,
+                solicitud=solicitud
             )
+        elif "get" in peticion.lower():
+            result, status = handle_get_request(accion, solicitud, email, user)
+            result, prompt = generate_prompt(result)
+        elif "post" in peticion.lower():
+            result, status = handle_post_request(accion, solicitud, email, user)
+            result = result.get("result", {}).get("message", "No se encontró mensaje")
+        else:
+            result = solicitud
+            status = 400
 
-            return jsonify(result)
+        assistant_message = {"role": "assistant", "content": result if isinstance(result, str) else json.dumps(result), "timestamp": datetime.utcnow().isoformat()}
+        mongo.database.usuarios.update_one(
+            {"correo": email, "chats.name": "OneDriveChat"},
+            {"$push": {"chats.$.messages": {"$each": [user_message, assistant_message]}}}
+        )
 
-        except Exception as e:
-            return jsonify({"solicitud": "ERROR", "result": {"error": f"¡Se puso feo! Error inesperado: {str(e)} 😓"}}), 500
+        return {"message": result}
+
+    except Exception as e:
+        return {"message": f"¡Ay, caray! Algo se rompió: {str(e)} 😓"}, 500
+
+def setup_onedrive_chat(app, mongo, cache, refresh_functions):
+    """Register OneDrive chat route."""
+    @app.route("/api/chat/onedrive", methods=["POST"])
+    def chatOneDrive():
+        email = request.args.get("email")
+        data = request.get_json() or {}
+        user_query = (
+            data.get("messages", [{}])[-1].get("content")
+            if data.get("messages")
+            else request.args.get("query")
+        )
+        result = process_onedrive_chat(email, user_query, mongo, cache, refresh_functions)
+        return jsonify(result)
 
     return chatOneDrive

@@ -35,14 +35,12 @@ def handle_get_request(accion, solicitud, email, user):
     try:
         if accion == "buscar":
             if any(palabra in solicitud for palabra in ["ultimo", "último"]):
-                # Caso 1: Último correo genérico (sin remitente específico)
                 if any(palabra in solicitud for palabra in ["mi", "mí", "mis"]) and "de" not in solicitud:
                     query = "is:inbox"
                     params = {"q": query, "maxResults": 1}
                     search_type = "último correo"
-                # Caso 2: Último correo de un remitente específico
-                elif "de" in solicitud:
-                    sender = solicitud.split("de")[-1].strip()
+                elif " de " in solicitud:
+                    sender = solicitud.split(" de ")[-1].strip()
                     if not sender:
                         return {"solicitud": "GET", "result": {"error": "¡Ey! ¿De quién quieres el último correo? Dame un nombre o correo."}}, 400
                     query = f"from:{sender}"
@@ -51,27 +49,35 @@ def handle_get_request(accion, solicitud, email, user):
                 else:
                     return {"solicitud": "GET", "result": {"error": "¡Uy! Si quieres el último correo, dime 'mi último correo' o 'último correo de alguien', ¿va?"}}, 400
             else:
-                # Búsqueda normal (sin "último")
-                if "correos" in solicitud or "email" in solicitud:
-                    if "de" in solicitud:
-                        sender = solicitud.split("de")[-1].strip()
-                        if not sender:
+                if any(p in solicitud for p in ["correos", "emails", "mensajes", "mails"]):
+                    if " de " in solicitud:
+                        sender = solicitud.split(" de ")[-1].strip()
+                        if sender:
+                            query = f"from:{sender}"
+                            search_type = f"correos de '{sender}'"
+                        else:
                             return {"solicitud": "GET", "result": {"error": "¡Ey! ¿De quién quieres los correos? Dame un nombre o correo."}}, 400
-                        query = f"from:{sender}"
-                        params = {"q": query, "maxResults": 5}
-                        search_type = f"correos de '{sender}'"
                     else:
-                        query = solicitud.replace("correos", "").replace("email", "").strip()
-                        if not query:
+                        posibles_temas = solicitud
+                        for palabra in ["correos", "emails", "mensajes", "mails", "relacionados con", "sobre"]:
+                            posibles_temas = posibles_temas.replace(palabra, "")
+                        posibles_temas = posibles_temas.strip()
+                        if not posibles_temas:
                             return {"solicitud": "GET", "result": {"error": "¡Ey! Dame algo pa’ buscar en los correos, ¿qué quieres encontrar?"}}, 400
-                        params = {"q": query, "maxResults": 5}
-                        search_type = f"correos sobre '{query}'"
+                        query = posibles_temas
+                        search_type = f"correos relacionados con '{query}'"
+
+                    params = {"q": query, "maxResults": 5}
                 elif "eventos" in solicitud or "reuniones" in solicitud:
                     url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
                     tomorrow = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
-                    params = {"timeMin": f"{tomorrow}T00:00:00Z", "timeMax": f"{tomorrow}T23:59:59Z", "maxResults": 5}
-                    if "de" in solicitud:
-                        attendee = solicitud.split("de")[-1].strip()
+                    params = {
+                        "timeMin": f"{tomorrow}T00:00:00Z",
+                        "timeMax": f"{tomorrow}T23:59:59Z",
+                        "maxResults": 5
+                    }
+                    if " de " in solicitud:
+                        attendee = solicitud.split(" de ")[-1].strip()
                         params["q"] = attendee
                     search_type = "eventos de mañana"
                 else:

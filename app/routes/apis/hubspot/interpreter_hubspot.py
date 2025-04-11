@@ -8,64 +8,81 @@ import requests
 openai.api_key = Config.CHAT_API_KEY
 from app.utils.utils import get_user_from_db
 from flask_caching import Cache
+from .getFunctionHubspot import handle_get_request
+from .postFunctionHubspot import handle_post_request
+from app.routes.core.context.ContextHandler import ContextHandler
 
-def hubspot_chat(app, mongo, cache, refresh_functions, query=None):
+def process_hubspot_chat(email, user_query=None, mongo=None, cache=None, refresh_functions=None):
+    """Core logic for processing HubSpot chat requests."""
     hoy = datetime.today().strftime('%Y-%m-%d')
 
     hubspot_system_info = f"""
-    Eres un intérprete de intenciones avanzado para la API de HubSpot. Tu tarea es analizar el mensaje del usuario, clasificarlo en una categoría general y generar consultas generales. Para GET y POST simples, enfócate solo en HubSpot. Para solicitudes múltiples y automatizadas, incluye todas las intenciones detectadas (incluso de otras APIs) sin filtrarlas, dejando que un intérprete multitarea las procese. Si el mensaje es ambiguo o no se puede clasificar, solicita aclaración al usuario. Sigue estos pasos:
+    Eres un intérprete de intenciones avanzado para la API de HubSpot, pero también debes detectar acciones relacionadas con otras APIs cuando el usuario las mencione en solicitudes múltiples o automatizadas. Tu tarea es analizar el mensaje del usuario, clasificarlo en una categoría general y generar consultas generales. Para GET y POST simples, enfócate solo en HubSpot. Para solicitudes múltiples y automatizadas, incluye todas las intenciones detectadas (incluso de otras APIs) sin filtrarlas, dejando que un intérprete multitarea las procese. Si el mensaje es ambiguo o no se puede clasificar, solicita aclaración al usuario. Sigue estos pasos:
 
     1. **Clasificación del Tipo de Solicitud**:
-       - **Saludo**: Si el mensaje es un saludo (ej. 'hola', '¿cómo estás?', 'buenos días'), responde con: `"Es un saludo"`.
-       - **Solicitud GET**: Si el usuario pide información con verbos como 'Mándame', 'Pásame', 'Envíame', 'Muéstrame', 'Busca', 'Dame', 'Dime', 'Quiero ver', 'Lista', 'Encuentra' (ej. 'Dame los contactos de mi lista'), responde con: `"Es una solicitud GET"`.
-       - **Solicitud POST**: Si el usuario pide una acción con verbos como 'Crear', 'Enviar', 'Eliminar', 'Actualizar', 'Agregar' (ej. 'Crear contacto Juan'), responde con: `"Es una solicitud POST"`.
-       - **Solicitud Automatizada**: Si el usuario pide algo repetitivo o condicional con frases como 'Cada vez que', 'Siempre que', 'Automáticamente', 'Si pasa X haz Y' (ej. 'Si creo un contacto, envía un correo'), responde con: `"Es una solicitud automatizada"`.
-       - **Solicitud Múltiple**: Si el mensaje combina varias acciones con conjunciones como 'y', 'luego', 'después', o verbos consecutivos (ej. 'Busca contactos y crea uno nuevo'), responde con: `"Es una solicitud múltiple"`.
-       - **No Clasificable**: Si el mensaje es demasiado vago o incompleto (ej. 'Haz algo', 'Contacto'), responde con: `"No puedo clasificar la solicitud, por favor aclara qué quieres hacer"`.
+    - **Saludo**: Si el mensaje es un saludo o interacción social (ej. 'hola', '¿cómo estás?', 'buenos días', 'hey'), clasifica como: `"Es un saludo"`.
+    - **Solicitud GET**: Si el usuario pide información con verbos como 'Mándame', 'Pásame', 'Envíame', 'Muéstrame', 'Busca', 'Dame', 'Dime', 'Quiero ver', 'Lista', 'Encuentra', '¿Qué hay?', '¿Cuáles son?' (ej. 'Dame los contactos de mi lista', 'Busca deals de Juan'), clasifica como: `"Es una solicitud GET"`.
+    - **Solicitud GET de Contexto (GET_CONTEXT)**: Si el usuario pide detalles sobre un contacto, deal o compañía específica mencionada previamente (ej. 'Qué dice el contacto Juan?', 'Dame los detalles del deal Proyecto X'), usando frases como 'qué dice', 'dame los detalles', 'qué contiene', 'detalle', 'muéstrame los detalles', clasifica como: `"Es una solicitud GET de contexto"`.
+    - **Solicitud POST**: Si el usuario pide una acción con verbos como 'Crear', 'Enviar', 'Eliminar', 'Actualizar', 'Agregar', 'Escribe', 'Modificar' (ej. 'Crear contacto Juan', 'Actualizar deal Proyecto X'), clasifica como: `"Es una solicitud POST"`.
+    - **Solicitud Automatizada**: Si el usuario pide algo repetitivo o condicional con frases como 'Cada vez que', 'Siempre que', 'Automáticamente', 'Si pasa X haz Y', 'Cuando ocurra X' (ej. 'Si creo un contacto, envía un correo'), clasifica como: `"Es una solicitud automatizada"`.
+    - **Solicitud Múltiple**: Si el mensaje combina varias acciones con conjunciones como 'y', 'luego', 'después', o verbos consecutivos (ej. 'Busca contactos y crea uno nuevo', 'Actualiza un deal y envía un correo'), clasifica como: `"Es una solicitud múltiple"`.
+    - **No Clasificable**: Si el mensaje es demasiado vago, incompleto o no encaja en las categorías anteriores (ej. 'Haz algo', 'Contacto'), clasifica como: `"No puedo clasificar la solicitud, por favor aclara qué quieres hacer"`.
 
     2. **Reglas Críticas para Clasificación**:
-       - **GET**: Solicitudes de lectura solo para HubSpot (obtener contactos, deals, compañías).
-       - **POST**: Acciones de escritura solo para HubSpot (crear contactos, actualizar contactos, eliminar contactos).
-       - **Automatizadas**: Acciones con condiciones, detectando intenciones para HubSpot y otras APIs mencionadas por el usuario.
-       - **Múltiple**: Detecta conjunciones ('y', 'luego'), verbos consecutivos, o intenciones separadas, incluyendo acciones de cualquier API mencionada.
-       - **Ambigüedad**: Si un verbo podría ser GET o POST (ej. 'Manda'), usa el contexto; si no hay suficiente, clasifica como "No Clasificable".
-       - **Errores del Usuario**: Si falta información clave (ej. 'Busca contactos' sin especificar cuáles), clasifica como "No Clasificable".
+    - **GET**: Solicitudes de lectura solo para HubSpot (obtener contactos, deals, compañías). Ejemplo: 'Dame los contactos de mi lista' → GET.
+    - **GET_CONTEXT**: Solicitudes que buscan detalles de un contacto, deal o compañía específica mencionada antes, usando el historial si aplica. Ejemplo: 'Qué dice el contacto Juan?' → GET_CONTEXT.
+    - **POST**: Acciones de escritura solo para HubSpot (crear contactos, actualizar deals, eliminar compañías). Ejemplo: 'Crear contacto Juan' → POST.
+    - **Automatizadas**: Acciones con condiciones, detectando intenciones para HubSpot y otras APIs. Ejemplo: 'Si creo un contacto, envía un correo' → Automatizada.
+    - **Múltiple**: Detecta conjunciones ('y', 'luego'), incluyendo acciones de cualquier API. Ejemplo: 'Busca contactos y crea uno nuevo' → Múltiple.
+    - **Ambigüedad**: Si un verbo puede ser GET o POST (ej. 'Manda'), analiza el contexto:
+        - Si pide información (ej. 'Manda los contactos de mi lista'), es GET.
+        - Si pide una acción (ej. 'Manda un contacto a HubSpot'), es POST.
+        - Si no hay suficiente contexto, clasifica como "No Clasificable".
+    - **Errores del Usuario**: Si falta información clave (ej. 'Busca contactos' sin especificar cuáles), clasifica como "No Clasificable".
 
     3. **Detección y Generación de Consultas**:
-       - Para **GET y POST simples**, genera intenciones solo para HubSpot:
-         - **HubSpot**: Buscar contactos, obtener deals, crear contactos, actualizar contactos, eliminar contactos.
-       - Para **Automatizadas y Múltiples**, incluye todas las intenciones detectadas, incluso si involucran otras APIs (ej. Gmail, Slack), sin filtrarlas.
-       - Si una acción no encaja con HubSpot en GET o POST simples, usa 'N/A'.
+    - Para **GET y POST simples**, genera intenciones solo para HubSpot:
+        - **HubSpot**: Buscar contactos, obtener deals, crear contactos, actualizar deals, eliminar contactos, etc.
+    - Para **GET_CONTEXT**, genera una intención que describa qué detalle se pide del contacto, deal o compañía (ej. "detalle del contacto Juan").
+    - Para **Automatizadas y Múltiples**, incluye todas las intenciones detectadas, incluso si involucran otras APIs (ej. Gmail, Slack), sin filtrarlas.
+    - Si una acción no encaja con HubSpot en GET o POST simples, usa 'N/A'.
 
     4. **Formato de Salida**:
-       - Devuelve un string con el tipo de solicitud seguido de un JSON con consultas generales bajo la clave "hubspot".
-       - **GET y POST simples**: Usa 'N/A' si no aplica a HubSpot.
-       - **Automatizadas**: Lista condiciones y acciones, incluyendo otras APIs si se mencionan.
-       - **Múltiples**: Lista todas las intenciones detectadas como un array, sin filtrar por HubSpot.
-       - **No Clasificable**: `{{"message": "Por favor, aclara qué quieres hacer"}}`.
+    - Devuelve un string con el tipo de solicitud seguido de un JSON con consultas generales bajo la clave "hubspot".
+    - **GET**: `{{"hubspot": "<intención>"}}`
+    - **GET_CONTEXT**: `{{"hubspot": "<intención>"}}`
+    - **POST**: `{{"hubspot": "<intención>"}}`
+    - **Automatizada**: `{{"hubspot": [{{"condition": "<condición>", "action": "<acción>"}}, ...]}}`
+    - **Múltiple**: `{{"hubspot": ["<intención 1>", "<intención 2>", ...]}}`
+    - **No Clasificable**: `{{"message": "Por favor, aclara qué quieres hacer"}}`
+    - **Saludo**: `{{"hubspot": "N/A"}}`
 
-    5. **Estructura del JSON**:
-       - **GET**: `{{"hubspot": "<intención>"}}`
-       - **POST**: `{{"hubspot": "<intención>"}}`
-       - **Automatizada**: `{{"hubspot": [{{"condition": "<condición>", "action": "<acción>"}}, ...]}}`
-       - **Múltiple**: `{{"hubspot": ["<intención 1>", "<intención 2>", ...]}}`
-       - **No Clasificable**: `{{"message": "Por favor, aclara qué quieres hacer"}}`
+    5. **Reglas para Consultas Generales**:
+    - **GET**: Describe qué obtener en HubSpot (ej. "obtener contactos de mi lista"). Si no aplica, clasifica como "No Clasificable".
+    - **GET_CONTEXT**: Describe qué detalle se pide (ej. "detalle del contacto Juan", "detalle del deal Proyecto X"). Si no se especifica un elemento claro, usa "detalle del último elemento mencionado".
+    - **POST**: Describe la acción en HubSpot (ej. "crear contacto Juan"). Si no aplica, clasifica como "No Clasificable".
+    - **Automatizada**: Divide en condición y acción, incluyendo otras APIs (ej. "condición: crear un contacto", "acción: enviar un correo").
+    - **Múltiple**: Separa cada intención en una frase clara, incluyendo acciones de otras APIs (ej. "obtener contactos", "enviar un correo").
+    - Incluye nombres o datos clave del usuario (ej. "Juan", "mañana") si se mencionan.
 
-    6. **Reglas para Consultas Generales**:
-       - **GET**: Describe qué obtener en HubSpot (ej. "obtener contactos de mi lista"). Si no aplica, "No Clasificable".
-       - **POST**: Describe la acción en HubSpot (ej. "crear contacto Juan"). Si no aplica, "No Clasificable".
-       - **Automatizada**: Divide en condición y acción, incluyendo otras APIs (ej. "cuando cree un contacto" y "enviar correo").
-       - **Múltiple**: Separa cada intención en una frase clara, incluyendo acciones de otras APIs (ej. "subir archivo a Drive").
-       - Incluye nombres o datos clave del usuario (ej. "Juan", "mañana") si se mencionan.
+    6. **Manejo de Casos Especiales**:
+    - **Términos Temporales**: Si se mencionan términos como 'hoy', 'mañana', 'ayer', inclúyelos en la intención (ej. 'obtener deals de hoy').
+    - **Contactos o Elementos Específicos**: Si se pide un contacto, deal o compañía específica (ej. 'el contacto Juan', 'el deal Proyecto X'), inclúyelo en la intención (ej. "obtener el contacto Juan").
+    - **Contexto Implícito**: Si el usuario no especifica un contacto o elemento en una solicitud GET_CONTEXT, asume que se refiere al último elemento mencionado en el historial (ej. 'Qué dice el contacto?' → "detalle del último contacto mencionado").
 
     Ejemplos:
     - "Dame los contactos de mi lista" → "Es una solicitud GET" {{"hubspot": "obtener contactos de mi lista"}}
+    - "Busca deals de Juan" → "Es una solicitud GET" {{"hubspot": "obtener deals de Juan"}}
+    - "Qué dice el contacto Juan?" → "Es una solicitud GET de contexto" {{"hubspot": "detalle del contacto Juan"}}
     - "Crear contacto Juan" → "Es una solicitud POST" {{"hubspot": "crear contacto Juan"}}
     - "Si creo un contacto, envía un correo" → "Es una solicitud automatizada" {{"hubspot": [{{"condition": "crear un contacto", "action": "enviar un correo"}}]}}
-    - "Busca contactos y crea uno nuevo" → "Es una solicitud múltiple" {{"hubspot": ["obtener contactos", "crear un contacto nuevo"]}}
+    - "Busca contactos y crea uno nuevo" → "Es una solicitud múltiple" {{"hubspot": ["ob
+
+tener contactos", "crear un contacto nuevo"]}}
     - "Hola" → "Es un saludo" {{"hubspot": "N/A"}}
     - "Subir archivo a Drive" → "No puedo clasificar la solicitud, por favor aclara qué quieres hacer" {{"message": "Esto no es una acción para HubSpot, ¿qué quieres hacer con HubSpot?"}}
     """
+
 
     def should_refresh_tokens(email):
         last_refresh_key = f"last_refresh_{email}"
@@ -112,197 +129,188 @@ def hubspot_chat(app, mongo, cache, refresh_functions, query=None):
             print(f"[ERROR] Error en get_user_with_refreshed_tokens para {email}: {e}")
             return None
 
-    def handle_get_request(intencion, email):
-        user = get_user_with_refreshed_tokens(email)
-        if not user:
-            return {"solicitud": "GET", "result": {"error": "¡Órale! No te encontré, compa 😕"}}, 404
+    def generate_prompt(get_result):
+        result = get_result.get("result", {})
+        message = result.get("message", "No se pudo procesar la solicitud, algo salió mal.")
+        data = result.get("data", None)
 
-        hubspot_token = user.get('integrations', {}).get('hubspot', {}).get('token')
-        if not hubspot_token:
-            return {"solicitud": "GET", "result": {"error": "¡Ey! No tengo tu token de HubSpot, ¿me das permisos? 🔑"}}, 400
+        if data and "contactos" in message.lower():
+            contact_info = "\n".join(
+                f"Nombre: {item['contact_name']} | ID: {item['id']}"
+                for item in data
+            )
+            base_text = f"El usuario pidió contactos y esto encontré:\n{message}\nDetalles:\n{contact_info}"
+        else:
+            base_text = f"El usuario pidió algo y esto obtuve:\n{message}" + (f"\nDetalles: {str(data)}" if data else "")
 
-        headers = {'Authorization': f"Bearer {hubspot_token}", 'Content-Type': 'application/json'}
-        url = "https://api.hubapi.com/crm/v3/objects/contacts"
+        prompt = f"""
+        Debes responder la petición del usuario: {user_query}
+        Eres un asistente de HubSpot súper amigable y útil, con un tono relajado y natural, como si charlaras con un amigo. Usa emojis sutiles para darle onda, pero sin exagerar. Basándote en esta info, arma una respuesta concisa y en párrafo que resuma los resultados de forma práctica y clara:
 
-        query = intencion["hubspot"]
-        if not query or query == "N/A":
-            return {"solicitud": "GET", "result": {"error": "¡Falta algo, papu! ¿Qué quieres buscar en HubSpot? 🤔"}}, 400
+        {base_text}
 
-        try:
-            if "obtener contactos" in query.lower():
-                list_name = query.split("de")[-1].strip() if "de" in query else ""
-                params = {"filter": {"propertyName": "email", "operator": "CONTAINS", "value": list_name}} if list_name else {}
-                response = requests.get(url, headers=headers, params=params)
-                response.raise_for_status()
-                contacts = response.json().get('results', [])
-                results = [{"contact_name": f"{c['properties'].get('firstname', '')} {c['properties'].get('lastname', '')}".strip(), "id": c["id"]} for c in contacts]
-                if not results:
-                    return {"solicitud": "GET", "result": {"message": "📭 No encontré contactos con eso, ¿probamos otra cosa?"}}, 200
-                return {"solicitud": "GET", "result": {"message": f"¡Órale! Encontré {len(results)} contactos 📇", "data": results}}, 200
-            else:
-                return {"solicitud": "GET", "result": {"error": "¡Uy! Solo puedo buscar contactos por ahora, ¿qué tal eso? 😅"}}, 400
-        except requests.RequestException as e:
-            return {"solicitud": "GET", "result": {"error": f"¡Ay, qué mala onda! Error con HubSpot: {str(e)}"}}, 500
-
-    def handle_post_request(intencion, email):
-        user = get_user_with_refreshed_tokens(email)
-        if not user:
-            return {"solicitud": "POST", "result": {"error": "¡Órale! No te encontré, compa 😕"}}, 404
-
-        hubspot_token = user.get('integrations', {}).get('hubspot', {}).get('token')
-        if not hubspot_token:
-            return {"solicitud": "POST", "result": {"error": "¡Ey! No tengo tu token de HubSpot, ¿me das permisos? 🔑"}}, 400
-
-        headers = {'Authorization': f"Bearer {hubspot_token}", 'Content-Type': 'application/json'}
-
-        query = intencion["hubspot"]
-        if isinstance(query, list) and all(isinstance(item, str) for item in query):
-            return {"solicitud": "POST", "result": {"message": "Solicitud múltiple detectada, pasando al intérprete multitarea", "actions": query}}, 200
-        if isinstance(query, list) and all(isinstance(item, dict) and "condition" in item for item in query):
-            return {"solicitud": "POST", "result": {"message": "Solicitud automatizada detectada, pasando al intérprete multitarea", "actions": query}}, 200
+        - Si hay resultados de contactos, haz un resumen breve y útil, mencionando cuántos contactos encontré y algo relevante (como nombres). No listes todo como tabla, solo destaca lo más importante.
+        - Si no hay resultados, di algo amable y sugiere ajustar la búsqueda si hace falta.
+        - Habla en primera persona y evita sonar robótico o repetir los datos crudos tal cual.
+        NO INCLUYAS LINKS y responde amigable pero FORMALMENTE
+        """
 
         try:
-            # Crear contacto
-            if "crear contacto" in query.lower():
-                match = re.search(r'crear\s*contacto\s*(.+)', query, re.IGNORECASE)
-                if not match:
-                    return {"solicitud": "POST", "result": {"error": "¡Ey! ¿Cómo se llama el contacto que quieres crear? 📇"}}, 400
-                contact_name = match.group(1).strip()
-                url = "https://api.hubapi.com/crm/v3/objects/contacts"
-                name_parts = contact_name.split(" ", 1)
-                payload = {
-                    "properties": {
-                        "firstname": name_parts[0],
-                        "lastname": name_parts[1] if len(name_parts) > 1 else ""
-                    }
-                }
-                response = requests.post(url, headers=headers, json=payload)
-                response.raise_for_status()
-                return {"solicitud": "POST", "result": {"message": f"📇 Contacto '{contact_name}' creado con éxito 🚀"}}, 200
-
-            # Actualizar contacto
-            elif "actualizar contacto" in query.lower():
-                match = re.search(r'actualizar\s*contacto\s*"(.+?)"\s*con\s*(.+)', query, re.IGNORECASE)
-                if not match:
-                    return {"solicitud": "POST", "result": {"error": "¡Ey! ¿Qué contacto y qué cambio quieres hacer? 🤔"}}, 400
-                contact_name = match.group(1).strip()
-                update_content = match.group(2).strip()
-                search_url = "https://api.hubapi.com/crm/v3/objects/contacts"
-                response = requests.get(search_url, headers=headers)
-                response.raise_for_status()
-                contacts = response.json().get('results', [])
-                contact_id = next((c["id"] for c in contacts if f"{c['properties'].get('firstname', '')} {c['properties'].get('lastname', '')}".strip().lower() == contact_name.lower()), None)
-                if not contact_id:
-                    return {"solicitud": "POST", "result": {"message": f"📭 No encontré el contacto '{contact_name}'"}}, 200
-                url = f"https://api.hubapi.com/crm/v3/objects/contacts/{contact_id}"
-                payload = {"properties": {"company": update_content}}  # Ejemplo: actualiza el campo "company"
-                response = requests.patch(url, headers=headers, json=payload)
-                response.raise_for_status()
-                return {"solicitud": "POST", "result": {"message": f"✨ Contacto '{contact_name}' actualizado con '{update_content}'"}}, 200
-
-            # Eliminar contacto
-            elif "eliminar contacto" in query.lower():
-                match = re.search(r'eliminar\s*contacto\s*"(.+?)"', query, re.IGNORECASE)
-                if not match:
-                    return {"solicitud": "POST", "result": {"error": "¡Ey! ¿Qué contacto quieres eliminar? 🗑️"}}, 400
-                contact_name = match.group(1).strip()
-                search_url = "https://api.hubapi.com/crm/v3/objects/contacts"
-                response = requests.get(search_url, headers=headers)
-                response.raise_for_status()
-                contacts = response.json().get('results', [])
-                contact_id = next((c["id"] for c in contacts if f"{c['properties'].get('firstname', '')} {c['properties'].get('lastname', '')}".strip().lower() == contact_name.lower()), None)
-                if not contact_id:
-                    return {"solicitud": "POST", "result": {"message": f"📭 No encontré el contacto '{contact_name}'"}}, 200
-                url = f"https://api.hubapi.com/crm/v3/objects/contacts/{contact_id}"
-                response = requests.delete(url, headers=headers)
-                response.raise_for_status()
-                return {"solicitud": "POST", "result": {"message": f"🗑️ Contacto '{contact_name}' eliminado con éxito"}}, 200
-
-            return {"solicitud": "POST", "result": {"error": "¡Uy! Acción no soportada en HubSpot, ¿qué tal crear o actualizar un contacto? 😅"}}, 400
-
-        except requests.RequestException as e:
-            return {"solicitud": "POST", "result": {"error": f"¡Ay, qué mala onda! Error con HubSpot: {str(e)}"}}, 500
+            response = openai.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "Eres un asistente de HubSpot amigable."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=400
+            )
+            ia_response = response.choices[0].message.content.strip()
+            return ia_response, prompt
         except Exception as e:
-            return {"solicitud": "POST", "result": {"error": f"¡Se puso feo! Error inesperado: {str(e)}"}}, 500
+            return f"¡Ups! Algo salió mal al armar la respuesta: {str(e)}", prompt
 
+    # Extract query if not provided
+    if not user_query:
+        try:
+            data = request.get_json() or {}
+            user_query = (
+                data.get("messages", [{}])[-1].get("content")
+                if data.get("messages")
+                else request.args.get("query")
+            )
+        except Exception:
+            return {"message": "¡Ey! Dame algo pa’ trabajar, ¿qué quieres hacer con HubSpot? 🤔"}, 400
+
+    if not email:
+        return {"message": "¡Órale! Necesito tu email, compa 😅"}, 400
+    if not user_query:
+        return {"message": "¡Ey! Dame algo pa’ trabajar, ¿qué quieres hacer con HubSpot? 🤔"}, 400
+
+    user = get_user_with_refreshed_tokens(email)
+    if not user:
+        return {"message": "¡Uy! No te encontré en el sistema, ¿seguro que estás registrado? 😕"}, 404
+
+    if "chats" not in user or not any(chat.get("name") == "HubSpotChat" for chat in user.get("chats", [])):
+        mongo.database.usuarios.update_one(
+            {"correo": email},
+            {"$set": {"chats": [{"name": "HubSpotChat", "messages": []}]}} if "chats" not in user else {"$push": {"chats": {"name": "HubSpotChat", "messages": []}}},
+            upsert=True
+        )
+        user = get_user_with_refreshed_tokens(email)
+
+    usuario = mongo.database.usuarios.find_one({"correo": email})
+    hubspot_chat = next(
+        (chat for chat in usuario.get("chats", []) if isinstance(chat, dict) and chat.get("name") == "HubSpotChat"),
+        None
+    )
+
+    if not hubspot_chat:
+        return {"message": "¡Qué mala onda! Error al inicializar el chat 😓"}, 500
+
+    timestamp = datetime.utcnow().isoformat()
+    user_message = {"role": "user", "content": user_query, "timestamp": timestamp}
+
+    try:
+        prompt = f"""
+                    Interpreta esta query para HubSpot: "{user_query}"
+                    Devuelve un JSON con esta estructura:
+                    {{
+                    "peticion": "GET" | "POST" | "SALUDO" | "AUTOMATIZADA" | "MULTIPLE" | "NO_CLASIFICABLE" | "GET_CONTEXT",
+                    "accion": "buscar" | "crear" | "actualizar" | "eliminar" | "detalle_contacto" | null,
+                    "solicitud": "<detalles específicos>" | null | [array de acciones para MULTIPLE] | [{{"condition": "...", "action": "..."}} para AUTOMATIZADA]
+                    }}
+
+                    Reglas:
+                    1. Si es un saludo (ej. "hola"), responde con "SALUDO".
+                    2. Para GET, agrupa verbos de lectura como "dame", "mándame", "busca", "lista" en "accion": "buscar".
+                    - Si la query menciona "contactos", "deals" o "compañías" seguido de un término (ej. "mi lista", "Juan"), asume que es un filtro y usa "solicitud": "contactos de <término>".
+                    3. Para GET_CONTEXT, detecta si el usuario pide detalles sobre un contacto, deal o compañía específica mencionada antes (ej. "Qué dice el contacto Juan?", "Dame los detalles del deal Proyecto X") usando verbos o frases como "qué dice", "dame los detalles", "detalle", "muéstrame los detalles". Usa "peticion": "GET_CONTEXT", "accion": "detalle_contacto", "solicitud": "<término específico>", donde el término es el nombre del contacto, deal o compañía (ej. "Juan", "Proyecto X"). Si no se menciona un término claro, usa "último elemento mencionado".
+                    4. Para POST, agrupa verbos en estas categorías:
+                    - "crear": "crear", "añadir", "agregar", "escribe"
+                    - "actualizar": "actualizar", "modificar", "cambiar"
+                    - "eliminar": "eliminar", "borrar", "quitar"
+                    5. Si es AUTOMATIZADA o MULTIPLE, usa arrays según el system prompt.
+                    6. Si no se entiende, usa "peticion": "NO_CLASIFICABLE", "accion": null, "solicitud": "Por favor, aclara qué quieres hacer".
+
+                    Ejemplos:
+                    - "Holaaaa" → {{"peticion": "SALUDO", "accion": null, "solicitud": null}}
+                    - "Dame los contactos de mi lista" → {{"peticion": "GET", "accion": "buscar", "solicitud": "contactos de mi lista"}}
+                    - "Qué dice el contacto Juan?" → {{"peticion": "GET_CONTEXT", "accion": "detalle_contacto", "solicitud": "Juan"}}
+                    - "Crear contacto Juan" → {{"peticion": "POST", "accion": "crear", "solicitud": "contacto Juan"}}
+                    - "Si creo un contacto, envía un correo" → {{"peticion": "AUTOMATIZADA", "accion": null, "solicitud": [{{"condition": "creo un contacto", "action": "envía un correo"}}]}}
+                    """
+        response = openai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": hubspot_system_info},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=500
+        )
+        ia_response = response.choices[0].message.content.strip()
+
+        match = re.search(r'\{.*\}', ia_response, re.DOTALL)
+        if match:
+            parsed_response = json.loads(match.group(0))
+            peticion = parsed_response.get("peticion")
+            accion = parsed_response.get("accion")
+            solicitud = parsed_response.get("solicitud")
+        else:
+            parsed_response = {"peticion": "NO_CLASIFICABLE", "accion": None, "solicitud": "Por favor, aclara qué quieres hacer"}
+            peticion = parsed_response["peticion"]
+            accion = parsed_response["accion"]
+            solicitud = parsed_response["solicitud"]
+
+        if "saludo" in peticion.lower():
+            greeting_prompt = f"El usuario dijo '{user_query}', responde de manera cálida y amigable con emojis. Menciona que eres su asistente personalizado de HubSpot."
+            greeting_response = openai.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "system", "content": "Eres su asistente personal de HubSpot muy amigable."}, {"role": "user", "content": greeting_prompt}],
+                max_tokens=200
+            )
+            result = greeting_response.choices[0].message.content.strip()
+            status = 200
+        elif "get_context" in peticion.lower():
+            context_handler = ContextHandler(mongo.database)
+            result, status = context_handler.get_chat_context(
+                email=email,
+                chat_name="HubSpotChat",
+                query=user_query,
+                solicitud=solicitud
+            )
+        elif "get" in peticion.lower():
+            result, status = handle_get_request(accion, solicitud, email, user)
+            result, prompt = generate_prompt(result)
+        elif "post" in peticion.lower():
+            result, status = handle_post_request(accion, solicitud, email, user)
+            result = result.get("result", {}).get("message", "No se encontró mensaje")
+        else:
+            result = solicitud
+            status = 400
+
+        assistant_message = {"role": "assistant", "content": result if isinstance(result, str) else json.dumps(result), "timestamp": datetime.utcnow().isoformat()}
+        mongo.database.usuarios.update_one(
+            {"correo": email, "chats.name": "HubSpotChat"},
+            {"$push": {"chats.$.messages": {"$each": [user_message, assistant_message]}}}
+        )
+
+        return {"message": result}
+
+    except Exception as e:
+        return {"message": f"¡Se puso feo! Error inesperado: {str(e)} 😓"}, 500
+
+def setup_hubspot_chat(app, mongo, cache, refresh_functions):
+    """Register HubSpot chat route."""
     @app.route("/api/chat/hubspot", methods=["POST"])
     def chatHubSpot():
         email = request.args.get("email")
-        data = request.get_json()
-        user_query = data.get("messages", [{}])[-1].get("content") if data.get("messages") else None
-        if not email:
-            return jsonify({"error": "¡Órale! Necesito tu email, compa 😅"}), 400
-        if not user_query:
-            return jsonify({"error": "¡Ey! Dame algo pa’ trabajar, ¿qué quieres hacer con HubSpot? 🤔"}), 400
-
-        user = get_user_with_refreshed_tokens(email)
-        if not user:
-            return jsonify({"error": "¡Uy! No te encontré en el sistema, ¿seguro que estás registrado? 😕"}), 404
-
-        if "chats" not in user or not any(chat["name"] == "HubSpotChat" for chat in user.get("chats", [])):
-            mongo.database.usuarios.update_one(
-                {"correo": email},
-                {"$set": {"chats": [{"name": "HubSpotChat", "messages": []}]}} if "chats" not in user else {"$push": {"chats": {"name": "HubSpotChat", "messages": []}}},
-                upsert=True
-            )
-            user = get_user_with_refreshed_tokens(email)
-
-        hubspot_chat = next((chat for chat in user["chats"] if chat["name"] == "HubSpotChat"), None)
-        if not hubspot_chat:
-            return jsonify({"error": "¡Qué mala onda! Error al inicializar el chat 😓"}), 500
-
-        timestamp = datetime.utcnow().isoformat()
-        user_message = {"role": "user", "content": user_query, "timestamp": timestamp}
-
-        try:
-            prompt = f"""
-            Interpreta esta query para HubSpot: "{user_query}"
-            Si es un saludo (como "hola", "holaaaa"), responde: "Es un saludo" {{"hubspot": "N/A"}}
-            Si es otra cosa, clasifica como GET, POST, etc., según las reglas del system prompt anterior.
-            Devuelve el resultado en formato: "TIPO" {{"clave": "valor"}}
-            """
-            response = openai.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": hubspot_system_info},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=500
-            )
-            ia_response = response.choices[0].message.content.strip()
-
-            request_type_match = re.match(r'^"([^"]+)"\s*(\{.*\})', ia_response, re.DOTALL)
-            if not request_type_match:
-                result = {"message": "¡Uy! Algo salió mal, ¿puedes intentarlo otra vez? 😅"}
-            else:
-                request_type = request_type_match.group(1)
-                json_str = request_type_match.group(2)
-                parsed_response = json.loads(json_str)
-
-                if request_type == "Es un saludo":
-                    greeting_prompt = f"El usuario dijo {user_query}. Responde de manera cálida y amigable con emojis a un saludo simple. Menciona que eres su asistente personalizado de HubSpot."
-                    greeting_response = openai.chat.completions.create(
-                        model="gpt-3.5-turbo",
-                        messages=[{"role": "system", "content": "Eres su asistente personal de HubSpot muy amigable."}, {"role": "user", "content": greeting_prompt}],
-                        max_tokens=200
-                    )
-                    result = {"message": greeting_response.choices[0].message.content.strip()}
-                elif request_type == "Es una solicitud GET":
-                    result = handle_get_request(parsed_response, email)
-                elif request_type in ["Es una solicitud POST", "Es una solicitud automatizada", "Es una solicitud múltiple"]:
-                    result = handle_post_request(parsed_response, email)
-                else:
-                    result = {"solicitud": "ERROR", "result": {"error": parsed_response.get("message", "¡No entendí qué quieres hacer con HubSpot! 😕")}}
-
-            assistant_message = {"role": "assistant", "content": json.dumps(result), "timestamp": datetime.utcnow().isoformat()}
-            mongo.database.usuarios.update_one(
-                {"correo": email, "chats.name": "HubSpotChat"},
-                {"$push": {"chats.$.messages": {"$each": [user_message, assistant_message]}}}
-            )
-
-            return jsonify(result)
-
-        except Exception as e:
-            return jsonify({"solicitud": "ERROR", "result": {"error": f"¡Se puso feo! Error inesperado: {str(e)} 😓"}}), 500
+        data = request.get_json() or {}
+        user_query = (
+            data.get("messages", [{}])[-1].get("content")
+            if data.get("messages")
+            else request.args.get("query")
+        )
+        result = process_hubspot_chat(email, user_query, mongo, cache, refresh_functions)
+        return jsonify(result)
 
     return chatHubSpot

@@ -1,304 +1,266 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 from flask import request, jsonify
 from config import Config
 import json
 import re
 import openai
-import requests
 openai.api_key = Config.CHAT_API_KEY
 from app.utils.utils import get_user_from_db
 from flask_caching import Cache
+from .getFunctionDropbox import handle_get_request
+from .postFunctionDropbox import handle_post_request
+from app.routes.core.context.ContextHandler import ContextHandler
 
-def dropbox_chat(app, mongo, cache, refresh_functions, query=None):
-    hoy = datetime.today().strftime('%Y-%m-%d')
-
+def process_dropbox_chat(email, user_query=None, mongo=None, cache=None, refresh_functions=None):
+    """Core logic for processing Dropbox chat requests."""
     dropbox_system_info = f"""
-    Eres un intérprete de intenciones avanzado para la API de Dropbox. Tu tarea es analizar el mensaje del usuario, clasificarlo en una categoría general y generar consultas generales. Para GET y POST simples, enfócate solo en Dropbox. Para solicitudes múltiples y automatizadas, incluye todas las intenciones detectadas (incluso de otras APIs) sin filtrarlas, dejando que un intérprete multitarea las procese. Si el mensaje es ambiguo o no se puede clasificar, solicita aclaración al usuario. Sigue estos pasos:
+    Eres un intérprete de intenciones avanzado para la API de Dropbox, pero también debes detectar acciones relacionadas con otras APIs cuando el usuario las mencione en solicitudes múltiples o automatizadas. Tu tarea es analizar el mensaje del usuario, clasificarlo en una categoría general y generar consultas generales. Para GET y POST simples, enfócate solo en Dropbox. Para solicitudes múltiples y automatizadas, incluye todas las intenciones detectadas (incluso de otras APIs) sin filtrarlas, dejando que un intérprete multitarea las procese. Si el mensaje es ambiguo o no se puede clasificar, solicita aclaración al usuario. Sigue estos pasos:
 
     1. **Clasificación del Tipo de Solicitud**:
-       - **Saludo**: Si el mensaje es un saludo (ej. 'hola', '¿cómo estás?', 'buenos días'), responde con: `"Es un saludo"`.
-       - **Solicitud GET**: Si el usuario pide información con verbos como 'Mándame', 'Pásame', 'Envíame', 'Muéstrame', 'Busca', 'Dame', 'Dime', 'Quiero ver', 'Lista', 'Encuentra' (ej. 'Dame los archivos de mi carpeta'), responde con: `"Es una solicitud GET"`.
-       - **Solicitud POST**: Si el usuario pide una acción con verbos como 'Crear', 'Subir', 'Eliminar', 'Actualizar', 'Agregar', 'Mover' (ej. 'Subir archivo Proyecto X'), responde con: `"Es una solicitud POST"`.
-       - **Solicitud Automatizada**: Si el usuario pide algo repetitivo o condicional con frases como 'Cada vez que', 'Siempre que', 'Automáticamente', 'Si pasa X haz Y' (ej. 'Si subo un archivo, notifica a Juan'), responde con: `"Es una solicitud automatizada"`.
-       - **Solicitud Múltiple**: Si el mensaje combina varias acciones con conjunciones como 'y', 'luego', 'después', o verbos consecutivos (ej. 'Busca archivos y sube uno nuevo'), responde con: `"Es una solicitud múltiple"`.
-       - **No Clasificable**: Si el mensaje es demasiado vago o incompleto (ej. 'Haz algo', 'Archivo'), responde con: `"No puedo clasificar la solicitud, por favor aclara qué quieres hacer"`.
+    - **Saludo**: Si el mensaje es un saludo o interacción social (ej. 'hola', '¿cómo estás?', 'hey'), clasifica como: `"Es un saludo"`.
+    - **Solicitud GET**: Si el usuario pide información con verbos como 'Mándame', 'Pásame', 'Busca', 'Dame', 'Dime', 'Quiero ver', 'Lista', 'Encuentra', '¿Qué hay?', '¿Cuáles son?' (ej. 'Dame los archivos en Proyectos', 'Busca archivos de Juan'), clasifica como: `"Es una solicitud GET"`.
+    - **Solicitud GET de Contexto (GET_CONTEXT)**: Si el usuario pide detalles sobre un archivo específico mencionado previamente (ej. 'De qué trata el archivo doc1.txt?', 'Qué contiene el archivo en Proyectos?', 'Dame el contenido del archivo de ayer'), usando frases como 'de qué trata', 'qué contiene', 'dame el contenido', 'detalle', 'muéstrame el contenido', clasifica como: `"Es una solicitud GET de contexto"`.
+    - **Solicitud POST**: Si el usuario pide una acción con verbos como 'Subir', 'Crear', 'Eliminar', 'Mover', 'Escribe' (ej. 'Subir archivo doc1.txt a Proyectos', 'Eliminar archivo doc1.txt'), clasifica como: `"Es una solicitud POST"`.
+    - **Solicitud Automatizada**: Si el usuario pide algo repetitivo o condicional con frases como 'Cada vez que', 'Siempre que', 'Automáticamente', 'Si pasa X haz Y', 'Cuando ocurra X' (ej. 'Si subo un archivo a Proyectos, envía un correo'), clasifica como: `"Es una solicitud automatizada"`.
+    - **Solicitud Múltiple**: Si el mensaje combina varias acciones con conjunciones como 'y', 'luego', 'después', o verbos consecutivos (ej. 'Busca archivos en Proyectos y sube uno a Drive', 'Sube un archivo y envía un mensaje'), clasifica como: `"Es una solicitud múltiple"`.
+    - **No Clasificable**: Si el mensaje es vago o incompleto (ej. 'Haz algo', 'Archivo'), clasifica como: `"No puedo clasificar la solicitud, por favor aclara qué quieres hacer"`.
 
     2. **Reglas Críticas para Clasificación**:
-       - **GET**: Solicitudes de lectura solo para Dropbox (obtener archivos, carpetas, listar contenido).
-       - **POST**: Acciones de escritura solo para Dropbox (subir archivos, actualizar nombres, eliminar archivos).
-       - **Automatizadas**: Acciones con condiciones, detectando intenciones para Dropbox y otras APIs mencionadas por el usuario.
-       - **Múltiple**: Detecta conjunciones ('y', 'luego'), verbos consecutivos, o intenciones separadas, incluyendo acciones de cualquier API mencionada.
-       - **Ambigüedad**: Si un verbo podría ser GET o POST (ej. 'Manda'), usa el contexto; si no hay suficiente, clasifica como "No Clasificable".
-       - **Errores del Usuario**: Si falta información clave (ej. 'Busca archivos' sin especificar dónde), clasifica como "No Clasificable".
+    - **GET**: Solicitudes de lectura solo para Dropbox (obtener archivos, carpetas). Ejemplo: 'Dame los archivos en Proyectos' → GET.
+    - **GET_CONTEXT**: Solicitudes que buscan detalles de un archivo específico mencionado antes, usando el historial si aplica. Ejemplo: 'De qué trata el archivo doc1.txt?' → GET_CONTEXT.
+    - **POST**: Acciones de escritura solo para Dropbox (subir archivos, crear carpetas, eliminar archivos). Ejemplo: 'Subir archivo doc1.txt' → POST.
+    - **Automatizadas**: Acciones con condiciones, detectando intenciones para Dropbox y otras APIs. Ejemplo: 'Si subo un archivo a Proyectos, envía un correo' → Automatizada.
+    - **Múltiple**: Detecta conjunciones ('y', 'luego'), incluyendo acciones de cualquier API. Ejemplo: 'Busca archivos en Proyectos y sube uno' → Múltiple.
+    - **Ambigüedad**: Si un verbo puede ser GET o POST (ej. 'Manda'), analiza el contexto:
+        - Si pide información (ej. 'Manda los archivos de Proyectos'), es GET.
+        - Si pide una acción (ej. 'Manda un archivo a Proyectos'), es POST.
+        - Si no hay suficiente contexto, clasifica como "No Clasificable".
+    - **Errores del Usuario**: Si falta información clave (ej. 'Busca archivos' sin especificar dónde), clasifica como "No Clasificable".
 
     3. **Detección y Generación de Consultas**:
-       - Para **GET y POST simples**, genera intenciones solo para Dropbox:
-         - **Dropbox**: Buscar archivos, obtener carpetas, subir archivos, actualizar archivos, eliminar archivos.
-       - Para **Automatizadas y Múltiples**, incluye todas las intenciones detectadas, incluso si involucran otras APIs (ej. Slack, Gmail), sin filtrarlas.
-       - Si una acción no encaja con Dropbox en GET o POST simples, usa 'N/A'.
+    - Para **GET y POST simples**, genera intenciones solo para Dropbox:
+        - **Dropbox**: Buscar archivos, obtener carpetas, subir archivos, crear carpetas, eliminar archivos.
+    - Para **GET_CONTEXT**, genera una intención que describa qué detalle se pide del archivo (ej. "detalle del archivo doc1.txt").
+    - Para **Automatizadas y Múltiples**, incluye todas las intenciones detectadas, incluso si involucran otras APIs (ej. Slack, Gmail), sin filtrarlas.
+    - Si una acción no encaja con Dropbox en GET o POST simples, usa 'N/A'.
 
     4. **Formato de Salida**:
-       - Devuelve un string con el tipo de solicitud seguido de un JSON con consultas generales bajo la clave "dropbox".
-       - **GET y POST simples**: Usa 'N/A' si no aplica a Dropbox.
-       - **Automatizadas**: Lista condiciones y acciones, incluyendo otras APIs si se mencionan.
-       - **Múltiples**: Lista todas las intenciones detectadas como un array, sin filtrar por Dropbox.
-       - **No Clasificable**: `{{"message": "Por favor, aclara qué quieres hacer"}}`.
+    - Devuelve un string con el tipo de solicitud seguido de un JSON con consultas generales bajo la clave "dropbox".
+    - **GET**: `{{"dropbox": "<intención>"}}`
+    - **GET_CONTEXT**: `{{"dropbox": "<intención>"}}`
+    - **POST**: `{{"dropbox": "<intención>"}}`
+    - **Automatizada**: `{{"dropbox": [{{"condition": "<condición>", "action": "<acción>"}}, ...]}}`
+    - **Múltiple**: `{{"dropbox": ["<intención 1>", "<intención 2>", ...]}}`
+    - **No Clasificable**: `{{"message": "Por favor, aclara qué quieres hacer"}}`
+    - **Saludo**: `{{"dropbox": "N/A"}}`
 
-    5. **Estructura del JSON**:
-       - **GET**: `{{"dropbox": "<intención>"}}`
-       - **POST**: `{{"dropbox": "<intención>"}}`
-       - **Automatizada**: `{{"dropbox": [{{"condition": "<condición>", "action": "<acción>"}}, ...]}}`
-       - **Múltiple**: `{{"dropbox": ["<intención 1>", "<intención 2>", ...]}}`
-       - **No Clasificable**: `{{"message": "Por favor, aclara qué quieres hacer"}}`
+    5. **Reglas para Consultas Generales**:
+    - **GET**: Describe qué obtener en Dropbox (ej. "obtener archivos en Proyectos"). Si no aplica, clasifica como "No Clasificable".
+    - **GET_CONTEXT**: Describe qué detalle se pide (ej. "detalle del archivo doc1.txt", "contenido del archivo en Proyectos"). Si no se especifica un archivo, usa "detalle del último archivo mencionado".
+    - **POST**: Describe la acción en Dropbox (ej. "subir archivo doc1.txt a Proyectos"). Si no aplica, clasifica como "No Clasificable".
+    - **Automatizada**: Divide en condición y acción, incluyendo otras APIs (ej. "condición: subir un archivo a Proyectos", "acción: enviar un correo").
+    - **Múltiple**: Separa cada intención en una frase clara, incluyendo acciones de otras APIs (ej. "obtener archivos en Proyectos", "enviar un mensaje en Slack").
+    - Incluye nombres de archivos o carpetas clave del usuario (ej. "doc1.txt", "Proyectos") si se mencionan.
 
-    6. **Reglas para Consultas Generales**:
-       - **GET**: Describe qué obtener en Dropbox (ej. "obtener archivos de la carpeta Proyecto X"). Si no aplica, "No Clasificable".
-       - **POST**: Describe la acción en Dropbox (ej. "subir archivo Proyecto X"). Si no aplica, "No Clasificable".
-       - **Automatizada**: Divide en condición y acción, incluyendo otras APIs (ej. "cuando suba un archivo" y "notificar a Juan").
-       - **Múltiple**: Separa cada intención en una frase clara, incluyendo acciones de otras APIs (ej. "enviar mensaje a Slack").
-       - Incluye nombres o datos clave del usuario (ej. "Proyecto X", "mañana") si se mencionan.
+    6. **Manejo de Casos Especiales**:
+    - **Términos Temporales**: Si se mencionan términos como 'hoy', 'mañana', 'ayer', inclúyelos en la intención (ej. 'obtener archivos de ayer').
+    - **Archivos o Carpetas Específicos**: Si se pide un archivo o carpeta específica (ej. 'el archivo doc1.txt'), inclúyelo en la intención (ej. "obtener el archivo doc1.txt").
+    - **Contexto Implícito**: Si el usuario no especifica un archivo o carpeta en una solicitud GET_CONTEXT, asume que se refiere al último archivo o carpeta mencionada en el historial (ej. 'De qué trata el archivo?' → "detalle del último archivo mencionado").
 
     Ejemplos:
-    - "Dame los archivos de mi carpeta" → "Es una solicitud GET" {{"dropbox": "obtener archivos de mi carpeta"}}
-    - "Subir archivo Proyecto X" → "Es una solicitud POST" {{"dropbox": "subir archivo Proyecto X"}}
-    - "Si subo un archivo, notifica a Juan" → "Es una solicitud automatizada" {{"dropbox": [{{"condition": "subir un archivo", "action": "notificar a Juan"}}]}}
-    - "Busca archivos y sube uno nuevo" → "Es una solicitud múltiple" {{"dropbox": ["obtener archivos", "subir un archivo nuevo"]}}
+    - "Mandame los archivos en Proyectos" → "Es una solicitud GET" {{"dropbox": "obtener archivos en Proyectos"}}
+    - "Dame los archivos de Juan" → "Es una solicitud GET" {{"dropbox": "obtener archivos de Juan"}}
+    - "De qué trata el archivo doc1.txt?" → "Es una solicitud GET de contexto" {{"dropbox": "detalle del archivo doc1.txt"}}
+    - "Qué contiene el archivo en Proyectos?" → "Es una solicitud GET de contexto" {{"dropbox": "contenido del archivo en Proyectos"}}
+    - "Subir archivo doc1.txt a Proyectos" → "Es una solicitud POST" {{"dropbox": "subir archivo doc1.txt a Proyectos"}}
+    - "Si subo un archivo a Proyectos, envía un correo" → "Es una solicitud automatizada" {{"dropbox": [{{"condition": "subir un archivo a Proyectos", "action": "enviar un correo"}}]}}
+    - "Busca archivos en Proyectos y sube uno" → "Es una solicitud múltiple" {{"dropbox": ["obtener archivos en Proyectos", "subir un archivo"]}}
     - "Hola" → "Es un saludo" {{"dropbox": "N/A"}}
-    - "Crear contacto en HubSpot" → "No puedo clasificar la solicitud, por favor aclara qué quieres hacer" {{"message": "Esto no es una acción para Dropbox, ¿qué quieres hacer con Dropbox?"}}
+    - "Enviar mensaje a Slack" → "No puedo clasificar la solicitud, por favor aclara qué quieres hacer" {{"message": "Esto no es una acción para Dropbox, ¿qué quieres hacer con Dropbox?"}}
     """
 
-    def should_refresh_tokens(email):
-        last_refresh_key = f"last_refresh_{email}"
-        last_refresh = cache.get(last_refresh_key)
-        current_time = datetime.utcnow()
-        if last_refresh is None:
-            return True
-        last_refresh_time = datetime.fromtimestamp(last_refresh)
-        refresh_interval = timedelta(minutes=30)
-        return (current_time - last_refresh_time) >= refresh_interval
 
-    def get_user_with_refreshed_tokens(email):
+    def generate_prompt(get_result):
+        result = get_result.get("result", {})
+        message = result.get("message", "No se pudo procesar la solicitud, algo salió mal.")
+        data = result.get("data", None)
+
+        if data and "archivos" in message.lower():
+            file_info = "\n".join(
+                f"Nombre: {item['name']} | Última modificación: {item['last_modified']}"
+                for item in data
+            )
+            base_text = f"El usuario pidió archivos y esto encontré:\n{message}\nDetalles:\n{file_info}"
+        else:
+            base_text = f"El usuario pidió algo y esto obtuve:\n{message}" + (f"\nDetalles: {str(data)}" if data else "")
+
+        prompt = f"""
+        Debes responder la petición del usuario: {user_query}
+        Eres un asistente de Dropbox súper amigable y útil, con un tono relajado y natural, como si charlaras con un amigo. Usa emojis sutiles para darle onda, pero sin exagerar. Basándote en esta info, arma una respuesta concisa y en párrafo que resuma los resultados de forma práctica y clara:
+
+        {base_text}
+
+        - Si hay resultados de archivos, haz un resumen breve y útil, mencionando cuántos archivos encontré y algo relevante (como nombres o fechas). No listes todo como tabla, solo destaca lo más importante.
+        - Si no hay resultados, di algo amable y sugiere ajustar la búsqueda si hace falta.
+        - Habla en primera persona y evita sonar robótico o repetir los datos crudos tal cual.
+        NO INCLUYAS LINKS y responde amigable pero FORMALMENTE
+        """
+
         try:
-            user = cache.get(email)
-            if not user:
-                user = get_user_from_db(email, cache, mongo)
-                if not user:
-                    return None
-                cache.set(email, user, timeout=1800)
-
-            if not should_refresh_tokens(email):
-                return user
-
-            refresh_tokens_dict = refresh_functions["get_refresh_tokens_from_db"](email)
-            if not refresh_tokens_dict or "dropbox" not in refresh_tokens_dict:
-                cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
-                return user
-
-            integrations = user.get("integrations", {})
-            tokens_to_refresh = {
-                "dropbox": refresh_tokens_dict["dropbox"]
-            } if "dropbox" in integrations and integrations["dropbox"].get("refresh_token") not in (None, "n/a") else {}
-
-            if not tokens_to_refresh:
-                cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
-                return user
-
-            refreshed_tokens, errors = refresh_functions["refresh_tokens"](tokens_to_refresh, email)
-            if refreshed_tokens or errors:
-                user = get_user_from_db(email, cache, mongo)
-                cache.set(f"last_refresh_{email}", datetime.utcnow().timestamp(), timeout=1800)
-            return user
+            response = openai.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "Eres un asistente de Dropbox amigable."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=400
+            )
+            ia_response = response.choices[0].message.content.strip()
+            return ia_response, prompt
         except Exception as e:
-            print(f"[ERROR] Error en get_user_with_refreshed_tokens para {email}: {e}")
-            return None
+            return f"¡Ups! Algo salió mal al armar la respuesta: {str(e)}", prompt
 
-    def handle_get_request(intencion, email):
-        user = get_user_with_refreshed_tokens(email)
-        if not user:
-            return {"solicitud": "GET", "result": {"error": "¡Órale! No te encontré, compa 😕"}}, 404
-
-        dropbox_token = user.get('integrations', {}).get('dropbox', {}).get('token')
-        if not dropbox_token:
-            return {"solicitud": "GET", "result": {"error": "¡Ey! No tengo tu token de Dropbox, ¿me das permisos? 🔑"}}, 400
-
-        headers = {'Authorization': f"Bearer {dropbox_token}", 'Content-Type': 'application/json'}
-        url = "https://api.dropboxapi.com/2/files/list_folder"
-
-        query = intencion["dropbox"]
-        if not query or query == "N/A":
-            return {"solicitud": "GET", "result": {"error": "¡Falta algo, papu! ¿Qué quieres buscar en Dropbox? 🤔"}}, 400
-
+    # Extract query if not provided
+    if not user_query:
         try:
-            if "obtener archivos" in query.lower():
-                folder_name = query.split("de")[-1].strip() if "de" in query else ""
-                payload = {"path": f"/{folder_name}" if folder_name else ""}
-                response = requests.post(url, headers=headers, json=payload)
-                response.raise_for_status()
-                files = response.json().get('entries', [])
-                results = [{"file_name": file["name"], "path": file["path_display"]} for file in files if file[".tag"] == "file"]
-                if not results:
-                    return {"solicitud": "GET", "result": {"message": "📭 No encontré archivos con eso, ¿probamos otra cosa?"}}, 200
-                return {"solicitud": "GET", "result": {"message": f"¡Órale! Encontré {len(results)} archivos 📁", "data": results}}, 200
-            else:
-                return {"solicitud": "GET", "result": {"error": "¡Uy! Solo puedo buscar archivos por ahora, ¿qué tal eso? 😅"}}, 400
-        except requests.RequestException as e:
-            return {"solicitud": "GET", "result": {"error": f"¡Ay, qué mala onda! Error con Dropbox: {str(e)}"}}, 500
+            data = request.get_json() or {}
+            user_query = (
+                data.get("messages", [{}])[-1].get("content")
+                if data.get("messages")
+                else request.args.get("query")
+            )
+        except Exception:
+            return {"message": "¡Ey! No me dijiste qué hacer. ¿En qué te ayudo con Dropbox? 📂"}, 400
 
-    def handle_post_request(intencion, email):
-        user = get_user_with_refreshed_tokens(email)
-        if not user:
-            return {"solicitud": "POST", "result": {"error": "¡Órale! No te encontré, compa 😕"}}, 404
+    if not email:
+        return {"message": "¡Hola! Necesito tu email para empezar. ¿Me lo pasas, por favor? 😊"}, 400
+    if not user_query:
+        return {"message": "¡Ey! No me dijiste qué hacer. ¿En qué te ayudo con Dropbox? 📂"}, 400
 
-        dropbox_token = user.get('integrations', {}).get('dropbox', {}).get('token')
-        if not dropbox_token:
-            return {"solicitud": "POST", "result": {"error": "¡Ey! No tengo tu token de Dropbox, ¿me das permisos? 🔑"}}, 400
+    user = get_user_from_db(email, cache, mongo)
+    if not user:
+        return {"message": "No te encontré en el sistema. ¿Estás registrado? 😅"}, 404
 
-        headers = {'Authorization': f"Bearer {dropbox_token}"}
+    if "chats" not in user or not any(chat.get("name") == "DropboxChat" for chat in user.get("chats", [])):
+        mongo.database.usuarios.update_one(
+            {"correo": email},
+            {"$set": {"chats": [{"name": "DropboxChat", "messages": []}]}} if "chats" not in user else {"$push": {"chats": {"name": "DropboxChat", "messages": []}}},
+            upsert=True
+        )
+        user = get_user_from_db(email, cache, mongo)
+    usuario = mongo.database.usuarios.find_one({"correo": email})
+    dropbox_chat = next(
+        (chat for chat in usuario.get("chats", []) if isinstance(chat, dict) and chat.get("name") == "DropboxChat"),
+        None
+    )
 
-        query = intencion["dropbox"]
-        if isinstance(query, list) and all(isinstance(item, str) for item in query):
-            return {"solicitud": "POST", "result": {"message": "Solicitud múltiple detectada, pasando al intérprete multitarea", "actions": query}}, 200
-        if isinstance(query, list) and all(isinstance(item, dict) and "condition" in item for item in query):
-            return {"solicitud": "POST", "result": {"message": "Solicitud automatizada detectada, pasando al intérprete multitarea", "actions": query}}, 200
+    if not dropbox_chat:
+        return {"message": "¡Uy! Algo salió mal al preparar el chat, ¿intentamos otra vez?"}, 500
 
-        try:
-            # Subir archivo
-            if "subir archivo" in query.lower():
-                match = re.search(r'subir\s*archivo\s*(.+)', query, re.IGNORECASE)
-                if not match:
-                    return {"solicitud": "POST", "result": {"error": "¡Ey! ¿Cómo se llama el archivo que quieres subir? 📤"}}, 400
-                file_name = match.group(1).strip()
-                url = "https://content.dropboxapi.com/2/files/upload"
-                headers['Dropbox-API-Arg'] = json.dumps({"path": f"/{file_name}", "mode": "add"})
-                headers['Content-Type'] = 'application/octet-stream'
-                response = requests.post(url, headers=headers, data="Contenido simulado del archivo".encode('utf-8'))
-                response.raise_for_status()
-                return {"solicitud": "POST", "result": {"message": f"📤 Archivo '{file_name}' subido con éxito 🚀"}}, 200
+    timestamp = datetime.utcnow().isoformat()
+    user_message = {"role": "user", "content": user_query, "timestamp": timestamp}
 
-            # Actualizar archivo
-            elif "actualizar archivo" in query.lower():
-                match = re.search(r'actualizar\s*archivo\s*"(.+?)"\s*con\s*(.+)', query, re.IGNORECASE)
-                if not match:
-                    return {"solicitud": "POST", "result": {"error": "¡Ey! ¿Qué archivo y qué cambio quieres hacer? 🤔"}}, 400
-                file_name = match.group(1).strip()
-                update_content = match.group(2).strip()
-                search_url = "https://api.dropboxapi.com/2/files/list_folder"
-                response = requests.post(search_url, headers=headers, json={"path": ""})
-                response.raise_for_status()
-                files = response.json().get('entries', [])
-                file_path = next((f["path_lower"] for f in files if f["name"].lower() == file_name.lower()), None)
-                if not file_path:
-                    return {"solicitud": "POST", "result": {"message": f"📭 No encontré el archivo '{file_name}'"}}, 200
-                url = "https://api.dropboxapi.com/2/files/move_v2"
-                payload = {"from_path": file_path, "to_path": f"/{file_name} - {update_content}"}
-                response = requests.post(url, headers=headers, json=payload)
-                response.raise_for_status()
-                return {"solicitud": "POST", "result": {"message": f"✨ Archivo '{file_name}' actualizado con '{update_content}'"}}, 200
+    try:
+        prompt = f"""
+            Interpreta esta query para Dropbox: "{user_query}"
+            Devuelve un JSON con esta estructura:
+            {{
+            "peticion": "GET" | "POST" | "SALUDO" | "AUTOMATIZADA" | "MULTIPLE" | "NO_CLASIFICABLE" | "GET_CONTEXT",
+            "accion": "buscar" | "subir" | "crear" | "eliminar" | "detalle_archivo" | null,
+            "solicitud": "<detalles específicos>" | null | [array de acciones para MULTIPLE] | [{{"condition": "...", "action": "..."}} para AUTOMATIZADA]
+            }}
 
-            # Eliminar archivo
-            elif "eliminar archivo" in query.lower():
-                match = re.search(r'eliminar\s*archivo\s*"(.+?)"', query, re.IGNORECASE)
-                if not match:
-                    return {"solicitud": "POST", "result": {"error": "¡Ey! ¿Qué archivo quieres eliminar? 🗑️"}}, 400
-                file_name = match.group(1).strip()
-                search_url = "https://api.dropboxapi.com/2/files/list_folder"
-                response = requests.post(search_url, headers=headers, json={"path": ""})
-                response.raise_for_status()
-                files = response.json().get('entries', [])
-                file_path = next((f["path_lower"] for f in files if f["name"].lower() == file_name.lower()), None)
-                if not file_path:
-                    return {"solicitud": "POST", "result": {"message": f"📭 No encontré el archivo '{file_name}'"}}, 200
-                url = "https://api.dropboxapi.com/2/files/delete_v2"
-                payload = {"path": file_path}
-                response = requests.post(url, headers=headers, json=payload)
-                response.raise_for_status()
-                return {"solicitud": "POST", "result": {"message": f"🗑️ Archivo '{file_name}' eliminado con éxito"}}, 200
+            Reglas:
+            1. Si es un saludo (ej. "hola"), responde un string como "SALUDO".
+            2. Para GET, agrupa verbos de lectura como "dame", "mándame", "buscar", "lista" en "accion": "buscar".
+            - Si la query menciona "archivo", "archivos" seguido de un término (ej. "Proyectos", "Juan"), asume que es una carpeta o nombre y usa "solicitud": "archivos en <término>".
+            3. Para GET de contexto (GET_CONTEXT), detecta si el usuario pide detalles sobre un archivo específico mencionado antes (ej. "De qué trata el archivo doc1.txt?", "Qué contiene el archivo en Proyectos") usando verbos o frases como "de qué trata", "qué contiene", "detalle", "dame el contenido". Usa "peticion": "GET_CONTEXT", "accion": "detalle_archivo", "solicitud": "<término específico del archivo>", donde el término es el nombre del archivo o carpeta mencionada (ej. "doc1.txt", "Proyectos"). Si no se menciona un término claro, usa el último archivo mencionado en el historial.
+            4. Para POST, agrupa verbos en estas categorías:
+            - "subir": "subir", "envía", "carga"
+            - "crear": "crear", "nueva carpeta"
+            - "eliminar": "eliminar", "borrar", "quitar"
+            5. Si es AUTOMATIZADA o MULTIPLE, usa arrays según el system prompt.
+            6. Si no se entiende, usa "peticion": "NO_CLASIFICABLE", "accion": null, "solicitud": "Por favor, aclara qué quieres hacer".
 
-            return {"solicitud": "POST", "result": {"error": "¡Uy! Acción no soportada en Dropbox, ¿qué tal subir o actualizar un archivo? 😅"}}, 400
+            Ejemplos:
+            - "Holaaaa" → {{"peticion": "SALUDO", "accion": null, "solicitud": null}}
+            - "Mándame los archivos en Proyectos" → {{"peticion": "GET", "accion": "buscar", "solicitud": "archivos en Proyectos"}}
+            - "De qué trata el archivo doc1.txt?" → {{"peticion": "GET_CONTEXT", "accion": "detalle_archivo", "solicitud": "doc1.txt"}}
+            - "Subir archivo doc1.txt a Proyectos" → {{"peticion": "POST", "accion": "subir", "solicitud": "archivo doc1.txt a Proyectos"}}
+            - "Si subo un archivo a Proyectos, envía correo" → {{"peticion": "AUTOMATIZADA", "accion": null, "solicitud": [{{"condition": "subo un archivo a Proyectos", "action": "envía correo"}}]}}
+            """
+        response = openai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": dropbox_system_info},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=500
+        )
+        ia_response = response.choices[0].message.content.strip()
 
-        except requests.RequestException as e:
-            return {"solicitud": "POST", "result": {"error": f"¡Ay, qué mala onda! Error con Dropbox: {str(e)}"}}, 500
-        except Exception as e:
-            return {"solicitud": "POST", "result": {"error": f"¡Se puso feo! Error inesperado: {str(e)}"}}, 500
+        match = re.search(r'\{.*\}', ia_response, re.DOTALL)
+        if match:
+            parsed_response = json.loads(match.group(0))
+            peticion = parsed_response.get("peticion")
+            accion = parsed_response.get("accion")
+            solicitud = parsed_response.get("solicitud")
+        else:
+            parsed_response = {"peticion": "NO_CLASIFICABLE", "accion": None, "solicitud": "Por favor, aclara qué quieres hacer"}
+            peticion = parsed_response["peticion"]
+            accion = parsed_response["accion"]
+            solicitud = parsed_response["solicitud"]
 
+        if "saludo" in peticion.lower():
+            greeting_prompt = f"El usuario dijo '{user_query}', responde de manera cálida y amigable con emojis. Menciona que eres su asistente personalizado de Dropbox."
+            greeting_response = openai.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "system", "content": "Eres su asistente personal de Dropbox muy amigable."}, {"role": "user", "content": greeting_prompt}],
+                max_tokens=200
+            )
+            result = greeting_response.choices[0].message.content.strip()
+            status = 200
+        elif "get_context" in peticion.lower():
+            context_handler = ContextHandler(mongo.database)
+            result, status = context_handler.get_chat_context(
+                email=email,
+                chat_name="DropboxChat",
+                query=user_query,
+                solicitud=solicitud
+            )
+        elif "get" in peticion.lower():
+            result, status = handle_get_request(accion, solicitud, email, user)
+            result, prompt = generate_prompt(result)
+        elif "post" in peticion.lower():
+            result, status = handle_post_request(accion, solicitud, email, user)
+            result = result.get("result", {}).get("message", "No se encontró mensaje")
+        else:
+            result = solicitud
+            status = 400
+
+        assistant_message = {"role": "assistant", "content": result if isinstance(result, str) else json.dumps(result), "timestamp": datetime.utcnow().isoformat()}
+        mongo.database.usuarios.update_one(
+            {"correo": email, "chats.name": "DropboxChat"},
+            {"$push": {"chats.$.messages": {"$each": [user_message, assistant_message]}}}
+        )
+
+        return {"message": result}, status
+
+    except Exception as e:
+        return {"message": f"¡Ay, qué pena! Algo salió mal: {str(e)}. ¿Intentamos de nuevo? 🙏"}, 500
+
+def setup_dropbox_chat(app, mongo, cache, refresh_functions):
+    """Register Dropbox chat route."""
     @app.route("/api/chat/dropbox", methods=["POST"])
     def chatDropbox():
         email = request.args.get("email")
-        data = request.get_json()
-        user_query = data.get("messages", [{}])[-1].get("content") if data.get("messages") else None
-        if not email:
-            return jsonify({"error": "¡Órale! Necesito tu email, compa 😅"}), 400
-        if not user_query:
-            return jsonify({"error": "¡Ey! Dame algo pa’ trabajar, ¿qué quieres hacer con Dropbox? 🤔"}), 400
-
-        user = get_user_with_refreshed_tokens(email)
-        if not user:
-            return jsonify({"error": "¡Uy! No te encontré en el sistema, ¿seguro que estás registrado? 😕"}), 404
-
-        if "chats" not in user or not any(chat["name"] == "DropboxChat" for chat in user.get("chats", [])):
-            mongo.database.usuarios.update_one(
-                {"correo": email},
-                {"$set": {"chats": [{"name": "DropboxChat", "messages": []}]}} if "chats" not in user else {"$push": {"chats": {"name": "DropboxChat", "messages": []}}},
-                upsert=True
-            )
-            user = get_user_with_refreshed_tokens(email)
-
-        dropbox_chat = next((chat for chat in user["chats"] if chat["name"] == "DropboxChat"), None)
-        if not dropbox_chat:
-            return jsonify({"error": "¡Qué mala onda! Error al inicializar el chat 😓"}), 500
-
-        timestamp = datetime.utcnow().isoformat()
-        user_message = {"role": "user", "content": user_query, "timestamp": timestamp}
-
-        try:
-            prompt = f"""
-            Interpreta esta query para Dropbox: "{user_query}"
-            Si es un saludo (como "hola", "holaaaa"), responde: "Es un saludo" {{"dropbox": "N/A"}}
-            Si es otra cosa, clasifica como GET, POST, etc., según las reglas del system prompt anterior.
-            Devuelve el resultado en formato: "TIPO" {{"clave": "valor"}}
-            """
-            response = openai.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": dropbox_system_info},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=500
-            )
-            ia_response = response.choices[0].message.content.strip()
-
-            request_type_match = re.match(r'^"([^"]+)"\s*(\{.*\})', ia_response, re.DOTALL)
-            if not request_type_match:
-                result = {"message": "¡Uy! Algo salió mal, ¿puedes intentarlo otra vez? 😅"}
-            else:
-                request_type = request_type_match.group(1)
-                json_str = request_type_match.group(2)
-                parsed_response = json.loads(json_str)
-
-                if request_type == "Es un saludo":
-                    greeting_prompt = f"El usuario dijo {user_query}. Responde de manera cálida y amigable con emojis a un saludo simple. Menciona que eres su asistente personalizado de Dropbox."
-                    greeting_response = openai.chat.completions.create(
-                        model="gpt-3.5-turbo",
-                        messages=[{"role": "system", "content": "Eres su asistente personal de Dropbox muy amigable."}, {"role": "user", "content": greeting_prompt}],
-                        max_tokens=200
-                    )
-                    result = {"message": greeting_response.choices[0].message.content.strip()}
-                elif request_type == "Es una solicitud GET":
-                    result = handle_get_request(parsed_response, email)
-                elif request_type in ["Es una solicitud POST", "Es una solicitud automatizada", "Es una solicitud múltiple"]:
-                    result = handle_post_request(parsed_response, email)
-                else:
-                    result = {"solicitud": "ERROR", "result": {"error": parsed_response.get("message", "¡No entendí qué quieres hacer con Dropbox! 😕")}}
-
-            assistant_message = {"role": "assistant", "content": json.dumps(result), "timestamp": datetime.utcnow().isoformat()}
-            mongo.database.usuarios.update_one(
-                {"correo": email, "chats.name": "DropboxChat"},
-                {"$push": {"chats.$.messages": {"$each": [user_message, assistant_message]}}}
-            )
-
-            return jsonify(result)
-
-        except Exception as e:
-            return jsonify({"solicitud": "ERROR", "result": {"error": f"¡Se puso feo! Error inesperado: {str(e)} 😓"}}), 500
+        data = request.get_json() or {}
+        user_query = (
+            data.get("messages", [{}])[-1].get("content")
+            if data.get("messages")
+            else request.args.get("query")
+        )
+        result, status = process_dropbox_chat(email, user_query, mongo, cache, refresh_functions)
+        return jsonify(result), status
 
     return chatDropbox

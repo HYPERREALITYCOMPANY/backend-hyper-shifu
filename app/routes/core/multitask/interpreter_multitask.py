@@ -9,8 +9,8 @@ openai.api_key = Config.CHAT_API_KEY
 from app.utils.utils import get_user_from_db
 from flask_caching import Cache
 
-def setup_routes_multitasks(app, mongo, cache, refresh_functions):
-    cache = Cache(app)
+def process_multitask(email, multitask_data=None, mongo=None, cache=None, refresh_functions=None):
+    """Core logic for processing multitask requests."""
     get_refresh_tokens_from_db = refresh_functions["get_refresh_tokens_from_db"]
     refresh_tokens_func = refresh_functions["refresh_tokens"]
 
@@ -94,79 +94,96 @@ def setup_routes_multitasks(app, mongo, cache, refresh_functions):
             print(f"[ERROR] Error en get_user_with_refreshed_tokens para {email}: {e}")
             return None
 
-    @app.route("/api/multitask", methods=["POST"])
-    def api_multitask():
-        data = request.get_json()
-        email = data.get("email")  # Obtenemos el email del JSON
-        if not email:
-            email = request.args.get("email")  # Fallback a query param
-        multitask_data = data.get("multitask_data", {})
-
-        if not email:
-            return jsonify({"error": "Email del usuario es requerido"}), 400
-
-        if not multitask_data:
-            return jsonify({"error": "Datos de la solicitud múltiple son requeridos"}), 400
-
-        # Obtenemos el usuario con tokens refrescados
-        user = get_user_with_refreshed_tokens(email)
-        if not user:
-            return jsonify({"error": "Usuario no encontrado"}), 404
-
+    # Extract multitask_data if not provided
+    if multitask_data is None:
         try:
-            response = openai.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": system_prompt_multi},
-                    {"role": "user", "content": json.dumps(multitask_data)}
-                ],
-                max_tokens=1000
-            )
-            ordered_operations_str = response.choices[0].message.content.strip()
-            print(f"[INFO] Operaciones ordenadas: {ordered_operations_str}")
+            data = request.get_json() or {}
+            multitask_data = data.get("multitask_data", {})
+            if not email:
+                email = data.get("email") or request.args.get("email")
+        except Exception:
+            return {"message": "¡Ey! No me diste datos válidos para procesar una solicitud múltiple, ¿qué quieres hacer? 🤔"}, 400
 
-            # Parseamos el JSON de las operaciones ordenadas
-            ordered_operations = json.loads(ordered_operations_str)
+    if not email:
+        return {"message": "¡Órale! Necesito tu email pa’ trabajar, ¿me lo pasas? 😅"}, 400
+    if not multitask_data:
+        return {"message": "¡Ey! No me diste datos de la solicitud múltiple, ¿qué quieres que haga? 🤷"}, 400
 
-            # Procesamos las operaciones según las APIs involucradas
-            for operation in ordered_operations:
-                api = operation.get("api")
-                intention = operation.get("intention")
-                op_type = operation.get("type")
+    # Obtenemos el usuario con tokens refrescados
+    user = get_user_with_refreshed_tokens(email)
+    if not user:
+        return {"message": "No encontré a este usuario, ¿seguro que está registrado? 😕"}, 404
 
-                if api == "gmail":
-                    print(f"[GMAIL] {op_type}: {intention}")
-                elif api == "outlook":
-                    print(f"[OUTLOOK] {op_type}: {intention}")
-                elif api == "clickup":
-                    print(f"[CLICKUP] {op_type}: {intention}")
-                elif api == "asana":
-                    print(f"[ASANA] {op_type}: {intention}")
-                elif api == "notion":
-                    print(f"[NOTION] {op_type}: {intention}")
-                elif api == "hubspot":
-                    print(f"[HUBSPOT] {op_type}: {intention}")
-                elif api == "slack":
-                    print(f"[SLACK] {op_type}: {intention}")
-                elif api == "teams":
-                    print(f"[TEAMS] {op_type}: {intention}")
-                elif api == "googledrive":
-                    print(f"[GOOGLEDRIVE] {op_type}: {intention}")
-                elif api == "onedrive":
-                    print(f"[ONEDRIVE] {op_type}: {intention}")
-                elif api == "dropbox":
-                    print(f"[DROPBOX] {op_type}: {intention}")
-                elif op_type == "error":
-                    print(f"[ERROR] {api}: {intention} - {operation.get('message')}")
+    try:
+        response = openai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt_multi},
+                {"role": "user", "content": json.dumps(multitask_data)}
+            ],
+            max_tokens=1000
+        )
+        ordered_operations_str = response.choices[0].message.content.strip()
+        print(f"[INFO] Operaciones ordenadas: {ordered_operations_str}")
 
-            # Respuesta temporal
-            ia_response = {
-                "message": "Solicitud múltiple procesada",
-                "operations": ordered_operations
-            }
+        # Parseamos el JSON de las operaciones ordenadas
+        ordered_operations = json.loads(ordered_operations_str)
 
-        except Exception as e:
-            print(f"[ERROR] Error al procesar solicitud múltiple: {str(e)}")
-            ia_response = {"error": f"Error al procesar solicitud múltiple: {str(e)}"}
+        # Procesamos las operaciones según las APIs involucradas (solo logging por ahora)
+        for operation in ordered_operations:
+            api = operation.get("api")
+            intention = operation.get("intention")
+            op_type = operation.get("type")
 
-        return jsonify(ia_response)
+            if api == "gmail":
+                print(f"[GMAIL] {op_type}: {intention}")
+            elif api == "outlook":
+                print(f"[OUTLOOK] {op_type}: {intention}")
+            elif api == "clickup":
+                print(f"[CLICKUP] {op_type}: {intention}")
+            elif api == "asana":
+                print(f"[ASANA] {op_type}: {intention}")
+            elif api == "notion":
+                print(f"[NOTION] {op_type}: {intention}")
+            elif api == "hubspot":
+                print(f"[HUBSPOT] {op_type}: {intention}")
+            elif api == "slack":
+                print(f"[SLACK] {op_type}: {intention}")
+            elif api == "teams":
+                print(f"[TEAMS] {op_type}: {intention}")
+            elif api == "googledrive":
+                print(f"[GOOGLEDRIVE] {op_type}: {intention}")
+            elif api == "onedrive":
+                print(f"[ONEDRIVE] {op_type}: {intention}")
+            elif api == "dropbox":
+                print(f"[DROPBOX] {op_type}: {intention}")
+            elif op_type == "error":
+                print(f"[ERROR] {api}: {intention} - {operation.get('message')}")
+
+        # Respuesta amigable
+        ia_response = {
+            "message": "¡Listo! Procesé tu solicitud múltiple sin problemas 😊",
+            "operations": ordered_operations
+        }
+        status = 200
+
+    except Exception as e:
+        print(f"[ERROR] Error al procesar solicitud múltiple: {str(e)}")
+        ia_response = {"message": f"¡Uy! Algo salió mal al procesar tu solicitud múltiple: {str(e)} 😓"}
+        status = 500
+
+    return ia_response, status
+
+def setup_multitask_chat(app, mongo, cache, refresh_functions):
+    """Register multitask chat route."""
+    cache = Cache(app)  # Ensure cache is initialized
+
+    @app.route("/api/multitask", methods=["POST"])
+    def chatMultitask():
+        data = request.get_json() or {}
+        email = data.get("email") or request.args.get("email")
+        multitask_data = data.get("multitask_data", {})
+        result, status = process_multitask(email, multitask_data, mongo, cache, refresh_functions)
+        return jsonify(result), status
+
+    return chatMultitask

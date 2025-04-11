@@ -187,10 +187,11 @@ def setup_reward_routes(app, mongo, cache):
         return jsonify({"message": "Recompensa eliminada correctamente"})
 
     # Canjear recompensa de tipo referido
-    @app.route('/rewards/<reward_id>/redeem', methods=['POST'])
+    @app.route('/rewards/redeem', methods=['POST'])
     def redeem_reward(reward_id):
         data = request.json
         user_id = data.get("id")
+        reward_id = data.get("reward_id")
 
         if not user_id:
             return jsonify({"error": "user_id requerido"}), 400

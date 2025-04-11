@@ -220,6 +220,7 @@ def setup_auth_routes(app, mongo, cache):
             "message": "Inicio de sesión exitoso",
             "user_id": session['user_id'],
             "user_name": name,
+            "email": usuario_actualizado["correo"],
             "user_img": img_base64,  # Enviamos la imagen en base64
             "code_referrals_uniq": usuario_actualizado.get("code_referrals_uniq", ""),
             "count_referrals": usuario_actualizado.get("count_referrals", 0),

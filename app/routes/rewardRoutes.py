@@ -188,7 +188,7 @@ def setup_reward_routes(app, mongo, cache):
 
     # Canjear recompensa de tipo referido
     @app.route('/rewards/redeem', methods=['POST'])
-    def redeem_reward(reward_id):
+    def redeem_reward():
         data = request.json
         user_id = data.get("id")
         reward_id = data.get("reward_id")

@@ -52,13 +52,14 @@ def setup_stripe_routes(app, mongo, cache):
         try:
             data = request.get_json()
             user_id = data.get('user_id')
-            plan = data.get('plan')
+            # plan = data.get('plan')
             email = data.get('email')
 
             if not user_id or not ObjectId.is_valid(user_id):
                 return jsonify({"error": "Valid user ID is required"}), 400
-            if plan not in ['basic', 'premium', 'enterprise']:
-                return jsonify({"error": "Valid plan is required"}), 400
+            # if plan not in ['basic', 'premium', 'enterprise']:
+            #     return jsonify({"error": "Valid plan is required"}), 400
+            plan = 'premium'
 
             price_id = os.getenv(f'STRIPE_PRICE_{plan.upper()}')
             if not price_id:
